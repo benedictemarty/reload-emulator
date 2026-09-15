@@ -6,6 +6,8 @@
 // Discs: drop a .ssd/.dsd file on the window (drive 0), or start with
 // `bbc disc=game.ssd`; hold SHIFT and press F12 (BREAK) to auto-boot.
 // `model=master` starts a Master 128 (MOS 3.20, roms/bbc_master_roms.h).
+// `tube=1` adds the 6502 second processor (roms/bbc_tube_rom.h);
+// `speed=N` runs N times faster than real time (0 = as fast as possible).
 // `joystick=mouse`: mouse position = joystick 1, left button = fire;
 // `joystick=keypad`: numeric keypad 8/2/4/6 (and diagonals) + keypad 0 / Insert = fire.
 // With `write=1` the image file is written back on exit (writes are
@@ -41,6 +43,10 @@
 #include <string.h>
 
 #include "roms/bbc_roms.h"
+#if __has_include("roms/bbc_tube_rom.h")
+#include "roms/bbc_tube_rom.h"
+#define HAVE_TUBE_ROM 1
+#endif
 #if __has_include("roms/bbc_master_roms.h")
 #include "roms/bbc_master_roms.h"
 #define HAVE_MASTER_ROMS 1
@@ -111,6 +117,13 @@ bbc_desc_t bbc_desc(void) {
     static uint8_t swr[4 * 0x4000];
     desc.ram_banks = 0x00F0;
     desc.swr = (chips_range_t){.ptr = swr, .size = sizeof(swr)};
+#ifdef HAVE_TUBE_ROM
+    if (sargs_exists("tube") && sargs_boolean("tube")) {
+        static uint8_t tube_ram[0x10000];
+        desc.tube_rom = (chips_range_t){.ptr = bbc_tube_rom, .size = sizeof(bbc_tube_rom)};
+        desc.tube_ram = (chips_range_t){.ptr = tube_ram, .size = sizeof(tube_ram)};
+    }
+#endif
 #ifdef HAVE_MASTER_ROMS
     if (sargs_exists("model") && sargs_equals("model", "master")) {
         static uint8_t master_ram[0x8000];
@@ -131,6 +144,7 @@ bbc_desc_t bbc_desc(void) {
 }
 
 static int joystick_mode;   // 0 none, 1 mouse, 2 keypad
+static int speed = 1;       // Emulated microseconds per real microsecond (0 = unlimited: 200 ms per frame)
 
 // Unpacked framebuffer: one byte per pixel, 640x512 (lines doubled for a 5:4 aspect)
 #define BBC_OUT_HEIGHT (BBC_SCREEN_HEIGHT * 2)
@@ -223,6 +237,10 @@ void app_init(void) {
     if (sargs_exists("disc")) {
         load_disc(sargs_value("disc"));
     }
+    if (sargs_exists("speed")) {
+        speed = atoi(sargs_value("speed"));
+        if (speed < 0) speed = 1;
+    }
     if (sargs_exists("joystick")) {
         joystick_mode = sargs_equals("joystick", "mouse") ? 1 : sargs_equals("joystick", "keypad") ? 2 : 0;
     }
@@ -233,7 +251,9 @@ static void draw_status_bar(void);
 void app_frame(void) {
     state.frame_time_us = clock_frame_time();
     const uint64_t emu_start_time = stm_now();
-    state.ticks = bbc_exec(&state.bbc, state.frame_time_us);
+    uint32_t emu_us = speed > 0 ? state.frame_time_us * (uint32_t)speed : 200000;
+    if (emu_us > 400000) emu_us = 400000;
+    state.ticks = bbc_exec(&state.bbc, emu_us);
     state.emu_time_ms = stm_ms(stm_since(emu_start_time));
     draw_status_bar();
     bbc_update_frame_buffer(&state.bbc);
