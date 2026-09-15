@@ -48,6 +48,7 @@
 #include "chips/mos6522via.h"
 #include "chips/mem.h"
 #include "chips/clk.h"
+#include "devices/wd1770.h"
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
 

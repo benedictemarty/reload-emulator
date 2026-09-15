@@ -2,14 +2,18 @@
 //
 // Headless BBC Micro runner for automated tests: no window, no audio.
 //
-//   bbc_headless [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s]
+//   bbc_headless [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-0 disc.ssd] [-b]
 //
 //   -f N      run N frames of 20 ms (default 100)
-//   -t TEXT   type TEXT after 1 s (\n = RETURN), one key per 2 frames
+//   -t TEXT   type TEXT after -w frames (default 50; \n = RETURN), one key per 2 frames;
+//             a '~' in TEXT pauses typing for 50 frames
+//   -h N      hold each key N frames (default 3)
 //   -p FILE   write the 640x256 framebuffer as a binary PPM
 //   -r FILE   write the 32 KB RAM
 //   -s        print the 40x25 MODE 7 screen ($7C00) as ASCII
-//   -d        disable the DFS ROM (bank 15 empty)
+//   -d        disable the DFS ROM (bank 14 empty)
+//   -0 FILE   insert FILE (.ssd or .dsd) in drive 0
+//   -b        hold SHIFT during the first 40 frames (SHIFT+BREAK auto-boot)
 //
 // ## zlib/libpng license
 //
@@ -47,6 +51,7 @@
 #include "chips/mos6522via.h"
 #include "chips/mem.h"
 #include "chips/clk.h"
+#include "devices/wd1770.h"
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
 
@@ -92,6 +97,12 @@ int main(int argc, char** argv) {
     const char* ram = NULL;
     bool show = false;
     bool dfs = true;
+    const char* disc = NULL;
+    bool boot = false;
+    int wait_frames = 50;
+    int pause_until = 0;
+    int hold_frames = 3;
+    int held = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-f") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-t") && i + 1 < argc) text = argv[++i];
@@ -99,8 +110,12 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) ram = argv[++i];
         else if (!strcmp(argv[i], "-s")) show = true;
         else if (!strcmp(argv[i], "-d")) dfs = false;
+        else if (!strcmp(argv[i], "-0") && i + 1 < argc) disc = argv[++i];
+        else if (!strcmp(argv[i], "-b")) boot = true;
+        else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-h") && i + 1 < argc) hold_frames = atoi(argv[++i]);
         else {
-            fprintf(stderr, "usage: %s [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-d]\n", argv[0]);
+            fprintf(stderr, "usage: %s [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-d] [-0 disc.ssd] [-b]\n", argv[0]);
             return 2;
         }
     }
@@ -117,18 +132,44 @@ int main(int argc, char** argv) {
     bbc_init(&bbc, &desc);
     bbc_reset(&bbc);
 
+    static uint8_t disc_data[2 * 80 * 10 * 256];
+    if (disc) {
+        FILE* f = fopen(disc, "rb");
+        if (!f) {
+            perror(disc);
+            return 1;
+        }
+        size_t n = fread(disc_data, 1, sizeof(disc_data), f);
+        fclose(f);
+        size_t len = strlen(disc);
+        int sides = (len > 4 && !strcmp(disc + len - 4, ".dsd")) ? 2 : 1;
+        bbc_insert_disc(&bbc, 0, disc_data, n, sides, false);
+    }
+    if (boot) {
+        bbc_key_down(&bbc, BBC_KEY_SHIFT);
+    }
+
     // Key injection state: each character is held for one frame, released the next
     const char* tp = text;
     int pending_key = -1;
     bool pending_shift = false;
 
     for (int frame = 0; frame < frames; frame++) {
+        if (boot && frame == 40) {
+            bbc_key_up(&bbc, BBC_KEY_SHIFT);
+        }
         // One key event per frame: press on one frame, release on the next
-        if (frame >= 50 && tp) {
+        if (frame >= wait_frames && frame >= pause_until && tp) {
             if (pending_key >= 0) {
-                bbc_key_up(&bbc, (uint8_t)pending_key);
-                if (pending_shift) bbc_key_up(&bbc, BBC_KEY_SHIFT);
-                pending_key = -1;
+                if (++held >= hold_frames) {
+                    bbc_key_up(&bbc, (uint8_t)pending_key);
+                    if (pending_shift) bbc_key_up(&bbc, BBC_KEY_SHIFT);
+                    pending_key = -1;
+                    held = 0;
+                }
+            } else if (*tp == '~') {
+                tp++;
+                pause_until = frame + 50;
             } else if (*tp) {
                 int key = bbc_key_from_ascii((uint8_t)*tp, &pending_shift);
                 tp++;

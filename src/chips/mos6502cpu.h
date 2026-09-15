@@ -217,6 +217,8 @@ extern "C" {
 #define MOS6502CPU_GET_DATA(c)       ((c)->data)
 #define MOS6502CPU_SET_DATA(c, d)    ((c)->data = d)
 #define MOS6502CPU_SET_IRQ(c, state) ((c)->irq = state)
+// Level-driven NMI: the rising edge is reported once (nmi_triggered), call every tick
+#define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered = ((state) && !(c)->nmi), (c)->nmi = (state))
 #define MOS6510CPU_SET_PORT(c, p)    ((c)->port = p)
 #define MOS6510CPU_CHECK_IO(c)       (((c)->addr & 0xFFFEULL) == 0)
 
@@ -609,9 +611,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
     if (c->sync || c->irq || c->nmi || c->rdy || c->res) {
         // Interrupt detection also works in RDY phases, but only NMI is "sticky"
 
-        // NMI is edge-triggered
+        // NMI is edge-triggered: the edge is consumed here
         if (c->nmi_triggered) {
             c->nmi_pip |= 0x100;
+            c->nmi_triggered = false;
         }
         // IRQ test is level triggered
         if (c->irq && !c->iflag) {
@@ -7980,7 +7983,8 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
     }
     MOS6510CPU_SET_PORT(c, c->io_pins);
     c->irq_pip <<= 1;
-    c->nmi_pip <<= 1;
+    // A pending NMI edge must survive instructions longer than 6 cycles: keep bit 15 sticky
+    c->nmi_pip = (uint16_t)((c->nmi_pip << 1) | (c->nmi_pip & 0x8000));
 }
 #if defined(_MSC_VER)
 #pragma warning(pop)

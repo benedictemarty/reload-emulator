@@ -18,6 +18,7 @@
 // - chips/mos6522via.h
 // - chips/mem.h
 // - chips/clk.h
+// - devices/wd1770.h
 //
 // ## The BBC Micro Model B
 //
@@ -26,9 +27,9 @@
 //   SHEILA I/O page at $FE00-$FEFF.
 // - 6845 CRTC ($FE00/$FE01), Video ULA ($FE20 control / $FE21 palette),
 //   system VIA ($FE40-$FE5F: keyboard, IC32 addressable latch, SN76489,
-//   vsync on CA1, 100 Hz timers), user VIA ($FE60-$FE7F), 1770 FDC
-//   ($FE80-$FE87, not implemented yet), ADC ($FEC0, stub), Tube ($FEE0,
-//   absent).
+//   vsync on CA1, 100 Hz timers), user VIA ($FE60-$FE7F), Acorn 1770 FDC
+//   ($FE80 control, $FE84-$FE87 registers, DRQ/INTRQ on NMI, .ssd/.dsd
+//   images), ADC ($FEC0, stub), Tube ($FEE0, absent).
 //
 // Video is rendered one scanline at a time (at the start of every CRTC
 // scanline) into a 640x256 4-bit framebuffer, so hardware scrolling
@@ -158,6 +159,10 @@ typedef struct {
     // Sound
     bbc_sn76489_t sn;
 
+    // Floppy disc controller
+    wd1770_t fdc;
+    bool nmi;
+
     // Framebuffer, 4 bits per pixel, 640x256
     uint8_t fb[BBC_FRAMEBUFFER_SIZE];
 
@@ -177,6 +182,8 @@ uint32_t bbc_exec(bbc_t* sys, uint32_t micro_seconds);
 // Press / release a key, key = BBC internal key number (row << 4 | column), e.g. 0x41 = A
 void bbc_key_down(bbc_t* sys, uint8_t key);
 void bbc_key_up(bbc_t* sys, uint8_t key);
+// Insert a disc image (bytes stay owned by the caller and are modified by writes)
+void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int sides, bool write_protected);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -216,6 +223,7 @@ void bbc_key_up(bbc_t* sys, uint8_t key);
 static uint8_t _bbc_empty_bank[0x4000];
 
 static void _bbc_init_memorymap(bbc_t* sys);
+static void _bbc_update_keyboard(bbc_t* sys, bool advance);
 static void _bbc_render_scanline(bbc_t* sys);
 static void _bbc_crtc_tick(bbc_t* sys);
 static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value);
@@ -244,6 +252,7 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
     MOS6502CPU_INIT(&sys->cpu, &(MOS6502CPU_DESC_T){0});
     mos6522via_init(&sys->sysvia);
     mos6522via_init(&sys->uservia);
+    wd1770_init(&sys->fdc);
 
     // Sound: one sample every (2 MHz / sample_rate) ticks, in 1/256 tick units
     int sample_rate = desc->audio.sample_rate > 0 ? desc->audio.sample_rate : 22050;
@@ -269,6 +278,7 @@ void bbc_reset(bbc_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     mos6522via_reset(&sys->sysvia);
     mos6522via_reset(&sys->uservia);
+    wd1770_reset(&sys->fdc);
     sys->romsel = 0;
     sys->ic32 = 0xFF;
     _bbc_init_memorymap(sys);
@@ -286,17 +296,19 @@ static void _bbc_set_romsel(bbc_t* sys, uint8_t bank) {
 }
 
 // System VIA port A: keyboard (out: column/row select, in: PA7 key state), SN76489 data
-static void _bbc_update_keyboard(bbc_t* sys) {
+static void _bbc_update_keyboard(bbc_t* sys, bool advance) {
     // CA2 is high when a key is pressed in the scanned column (rows 1-7,
     // row 0 = SHIFT/CTRL/links never raises the interrupt).
     bool ca2 = false;
     uint8_t pa = mos6522via_get_pa(&sys->sysvia);
     if (sys->ic32 & 0x08) {
-        // Auto-scan: hardware cycles through the columns
+        // Auto-scan: hardware cycles through the columns (one per 1 MHz tick)
         if (sys->key_cols[sys->key_scan_column] & 0xFE) {
             ca2 = true;
         }
-        sys->key_scan_column = (sys->key_scan_column + 1) & 0x0F;
+        if (advance) {
+            sys->key_scan_column = (sys->key_scan_column + 1) & 0x0F;
+        }
         mos6522via_set_pa(&sys->sysvia, pa | 0x80);
     } else {
         // Manual scan: MOS writes column (PA0-3) and row (PA4-6), reads PA7
@@ -312,6 +324,10 @@ static void _bbc_update_keyboard(bbc_t* sys) {
         }
     }
     mos6522via_set_ca2(&sys->sysvia, ca2);
+    if (!advance) {
+        // Called from a VIA access: latch the CA2 edge into the IFR right away
+        _mos6522via_update_cab(&sys->sysvia);
+    }
 }
 
 // System VIA port B: IC32 addressable latch (PB0-2 = bit, PB3 = value), joystick buttons (PB4-5 in)
@@ -391,14 +407,20 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                     }
                 }
                 break;
-            case 0x40:
-                // System VIA
+            case 0x40: {
+                // System VIA. The keyboard answer (PA7, CA2) must be valid on the
+                // very next access after the column/row was written on port A.
+                uint8_t reg = addr & 0x0F;
+                bool port_a = (reg == 1) || (reg == 15) || (reg == 3);
                 if (rw) {
-                    data = mos6522via_read(&sys->sysvia, addr & 0x0F);
+                    if (port_a) _bbc_update_keyboard(sys, false);
+                    data = mos6522via_read(&sys->sysvia, reg);
                 } else {
-                    mos6522via_write(&sys->sysvia, addr & 0x0F, MOS6502CPU_GET_DATA(&sys->cpu));
+                    mos6522via_write(&sys->sysvia, reg, MOS6502CPU_GET_DATA(&sys->cpu));
+                    if (port_a) _bbc_update_keyboard(sys, false);
                 }
                 break;
+            }
             case 0x60:
                 // User VIA
                 if (rw) {
@@ -408,9 +430,19 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 }
                 break;
             case 0x80:
-                // 1770 FDC ($FE80 control, $FE84-$FE87 registers): not present yet
-                if (rw) {
-                    data = 0xFE;
+                // Acorn 1770 interface: $FE80-$FE83 control latch, $FE84-$FE87 WD1770
+                if (addr & 0x04) {
+                    if (rw) {
+                        data = wd1770_read(&sys->fdc, addr & 3);
+                    } else {
+                        wd1770_write(&sys->fdc, addr & 3, MOS6502CPU_GET_DATA(&sys->cpu));
+                    }
+                } else {
+                    if (rw) {
+                        data = wd1770_read_control(&sys->fdc);
+                    } else {
+                        wd1770_write_control(&sys->fdc, MOS6502CPU_GET_DATA(&sys->cpu));
+                    }
                 }
                 break;
             case 0xA0:
@@ -464,12 +496,15 @@ void bbc_tick(bbc_t* sys) {
 
     // 1 MHz bus: VIAs, keyboard, latch, sound
     if (sys->system_ticks & 1) {
-        _bbc_update_keyboard(sys);
+        _bbc_update_keyboard(sys, true);
         _bbc_update_ic32(sys);
         mos6522via_set_ca1(&sys->sysvia, sys->vsync);
         bool irq = mos6522via_tick(&sys->sysvia, 1);
         irq |= mos6522via_tick(&sys->uservia, 1);
         MOS6502CPU_SET_IRQ(&sys->cpu, irq);
+        wd1770_tick(&sys->fdc);
+        sys->nmi = wd1770_nmi(&sys->fdc);
+        MOS6502CPU_SET_NMI(&sys->cpu, sys->nmi);
     }
 
     _bbc_sn_tick(sys);
@@ -506,6 +541,10 @@ void bbc_key_up(bbc_t* sys, uint8_t key) {
         return;
     }
     sys->key_cols[key & 0x0F] &= (uint8_t)~(1 << ((key >> 4) & 7));
+}
+
+void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int sides, bool write_protected) {
+    wd1770_insert(&sys->fdc, drive, data, size, sides, write_protected);
 }
 
 static void _bbc_init_memorymap(bbc_t* sys) {

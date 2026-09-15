@@ -43,6 +43,7 @@ typedef struct {
 #define MOS6502CPU_GET_DATA(c)       wdc65C02cpu_get_data()
 #define MOS6502CPU_SET_DATA(c, data) wdc65C02cpu_set_data(data)
 #define MOS6502CPU_SET_IRQ(c, state) wdc65C02cpu_set_irq(state)
+#define MOS6502CPU_SET_NMI(c, state) wdc65C02cpu_set_nmi(state)
 
 // Initialize cpu
 void wdc65C02cpu_init();
@@ -61,6 +62,9 @@ uint8_t wdc65C02cpu_get_data();
 void wdc65C02cpu_set_data(uint8_t data);
 
 void wdc65C02cpu_set_irq(bool state);
+
+// Drive the NMI pin level (true = asserted); no-op on boards without an NMI pin
+void wdc65C02cpu_set_nmi(bool state);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -238,5 +242,13 @@ void wdc65C02cpu_set_data(uint8_t data) {
 }
 
 void wdc65C02cpu_set_irq(bool state) { gpio_put(_IRQ_PIN, state ? 0 : 1); }
+
+void wdc65C02cpu_set_nmi(bool state) {
+#ifdef OLIMEX_NEO6502
+    gpio_put(_NMI_PIN, state ? 0 : 1);
+#else
+    (void)state;
+#endif
+}
 
 #endif  // CHIPS_IMPL
