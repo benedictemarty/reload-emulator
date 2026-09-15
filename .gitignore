@@ -3,3 +3,4 @@ src/roms/*.h
 **/.DS_Store
 **/.vscode
 **/build
+platforms/rp2040/build_mb/

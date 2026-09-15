@@ -1,1 +1,0 @@
-/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/elf2uf2.dir/link.d CMakeFiles/elf2uf2.dir/main.cpp.o -o elf2uf2

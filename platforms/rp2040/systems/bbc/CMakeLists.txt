@@ -45,6 +45,7 @@ target_compile_definitions(bbc_master PRIVATE
 )
 target_link_libraries(bbc_master pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
 pico_add_extra_outputs(bbc_master)
+neo_multiboot_slot(bbc_master "${NEO_SLOT_BBC_MASTER}")
 pico_enable_stdio_usb(bbc_master 0)
 pico_enable_stdio_uart(bbc_master 1)
 endif()
