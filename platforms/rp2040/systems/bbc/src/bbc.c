@@ -215,7 +215,9 @@ static int bbc_key_from_hid(uint8_t k) {
 void hid_raw_key_down(uint8_t keycode) {
     if (keycode == HID_KEY_F11) {
         // Next disc image
-        if (BBC_NUM_IMAGES > 0) insert_image((current_image + 1) % BBC_NUM_IMAGES);
+#if BBC_NUM_IMAGES > 0
+        insert_image((current_image + 1) % BBC_NUM_IMAGES);
+#endif
         return;
     }
     int key = bbc_key_from_hid(keycode);
