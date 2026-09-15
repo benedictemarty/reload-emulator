@@ -77,11 +77,17 @@ typedef enum {
     WD1770_END,              // Command complete: INTRQ
 } wd1770_state_t;
 
+// Sector reader for images that do not fit in memory (e.g. a file on a USB
+// drive): fills buf with the 256 bytes at byte offset `offset` of the image.
+typedef bool (*wd1770_read_sector_t)(void* ctx, uint32_t offset, uint8_t* buf);
+
 typedef struct {
-    uint8_t* data;           // Image bytes (writable copy) or 0 when no disc
+    uint8_t* data;           // Image bytes (writable copy), or 0 when no disc / streamed
     size_t size;
     int sides;               // 1 (.ssd) or 2 (.dsd)
     bool write_protected;
+    wd1770_read_sector_t read_sector;  // Optional streamed access (always write-protected)
+    void* ctx;
 } wd1770_disc_t;
 
 typedef struct {
@@ -112,6 +118,8 @@ typedef struct {
     bool multiple;
     bool type2_write;
     uint32_t sector_offset;  // Byte offset of the current sector in the image
+    const uint8_t* cur;      // Current sector bytes (image or sector_buf)
+    uint8_t sector_buf[WD1770_SECTOR_SIZE];
     // Discs
     wd1770_disc_t disc[2];
 } wd1770_t;
@@ -120,6 +128,8 @@ void wd1770_init(wd1770_t* fdc);
 void wd1770_reset(wd1770_t* fdc);
 // Insert an image; data must stay valid; sides = 1 (.ssd) or 2 (.dsd)
 void wd1770_insert(wd1770_t* fdc, int drive, uint8_t* data, size_t size, int sides, bool write_protected);
+// Insert a streamed (read-only) image accessed sector by sector through `read_sector`
+void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd1770_read_sector_t read_sector, void* ctx);
 void wd1770_eject(wd1770_t* fdc, int drive);
 // Registers at $FE84-$FE87 (addr & 3), control at $FE80
 uint8_t wd1770_read(wd1770_t* fdc, uint8_t reg);
@@ -169,10 +179,22 @@ void wd1770_insert(wd1770_t* fdc, int drive, uint8_t* data, size_t size, int sid
     fdc->disc[drive].write_protected = write_protected;
 }
 
+void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd1770_read_sector_t read_sector, void* ctx) {
+    if (drive < 0 || drive > 1) return;
+    fdc->disc[drive].data = 0;
+    fdc->disc[drive].size = size;
+    fdc->disc[drive].sides = sides ? sides : 1;
+    fdc->disc[drive].write_protected = true;
+    fdc->disc[drive].read_sector = read_sector;
+    fdc->disc[drive].ctx = ctx;
+}
+
 void wd1770_eject(wd1770_t* fdc, int drive) {
     if (drive < 0 || drive > 1) return;
     memset(&fdc->disc[drive], 0, sizeof(wd1770_disc_t));
 }
+
+static bool _wd1770_disc_present(const wd1770_disc_t* d) { return d->data || d->read_sector; }
 
 static void _wd1770_set_drq(wd1770_t* fdc, bool on) {
     fdc->drq = on;
@@ -203,7 +225,7 @@ static void _wd1770_end(wd1770_t* fdc) {
 static bool _wd1770_find_sector(wd1770_t* fdc) {
     if (fdc->drive < 0) return false;
     wd1770_disc_t* d = &fdc->disc[fdc->drive];
-    if (!d->data) return false;
+    if (!_wd1770_disc_present(d)) return false;
     uint8_t phys = fdc->phys_track[fdc->drive];
     if (phys != fdc->track) return false;                  // ID field track mismatch
     if (fdc->sector >= WD1770_SECTORS) return false;
@@ -213,6 +235,12 @@ static bool _wd1770_find_sector(wd1770_t* fdc) {
     uint32_t off = (track_index * WD1770_SECTORS + fdc->sector) * WD1770_SECTOR_SIZE;
     if (off + WD1770_SECTOR_SIZE > d->size) return false;
     fdc->sector_offset = off;
+    if (d->data) {
+        fdc->cur = d->data + off;
+    } else {
+        if (!d->read_sector(d->ctx, off, fdc->sector_buf)) return false;
+        fdc->cur = fdc->sector_buf;
+    }
     return true;
 }
 
@@ -296,7 +324,7 @@ static void _wd1770_command(wd1770_t* fdc, uint8_t cmd) {
     if (type == 0xC) {
         // Read address: 6 ID bytes of the next sector on the track
         fdc->offset = 0;
-        if (fdc->drive < 0 || !fdc->disc[fdc->drive].data) {
+        if (fdc->drive < 0 || !_wd1770_disc_present(&fdc->disc[fdc->drive])) {
             fdc->status |= WD1770_ST_RNF;
             _wd1770_wait(fdc, delay + 2000, WD1770_END);
             return;
@@ -394,7 +422,7 @@ void wd1770_tick(wd1770_t* fdc) {
             }
             if (fdc->command & 0x04) {
                 // Verify: the track must exist on the disc
-                if (fdc->drive < 0 || !fdc->disc[fdc->drive].data || phys != fdc->track) {
+                if (fdc->drive < 0 || !_wd1770_disc_present(&fdc->disc[fdc->drive]) || phys != fdc->track) {
                     fdc->status |= WD1770_ST_RNF;
                 }
             }
@@ -403,14 +431,13 @@ void wd1770_tick(wd1770_t* fdc) {
         }
 
         case WD1770_READ_BYTE: {
-            const uint8_t* d = fdc->disc[fdc->drive].data;
             if (fdc->drq) {
                 fdc->status |= WD1770_ST_LOST_TRK0;    // Lost data: CPU too slow
 #ifdef WD1770_TRACE
                 fprintf(stderr, "wd1770: lost data at offset %u\n", (unsigned)fdc->offset);
 #endif
             }
-            fdc->data = d[fdc->sector_offset + fdc->offset];
+            fdc->data = fdc->cur[fdc->offset];
             fdc->offset++;
             _wd1770_set_drq(fdc, true);
             _wd1770_wait(fdc, WD1770_US_PER_BYTE, fdc->offset < WD1770_SECTOR_SIZE ? WD1770_READ_BYTE : WD1770_SECTOR_DONE);

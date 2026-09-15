@@ -3,6 +3,7 @@ add_executable(bbc
 	${CMAKE_CURRENT_SOURCE_DIR}/src/hid_app_bbc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../oric/src/utils.S
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 )
 
 target_compile_options(bbc PRIVATE -Wall)
@@ -17,6 +18,7 @@ target_link_libraries(bbc
 	pico_util
 	libdvi
 	tinyusb_host
+	fatfs
 )
 
 # create map/bin/hex file etc.

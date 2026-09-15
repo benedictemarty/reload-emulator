@@ -4,7 +4,9 @@
 // the RP2040 emulates memory, 6845/ULA video, VIAs, keyboard and SN76489.
 //
 // Core 0: CPU bus (bit-banged, 2 MHz target), USB host.
-// Discs: images compiled in flash (src/images/bbc_images.h), F11 = next image.
+// Discs: .ssd/.dsd files in the root of a USB drive (FAT, sectors read on
+// demand through FatFs) or images compiled in flash (src/images/bbc_images.h);
+// F11 = next image (USB files first, then flash images).
 // Core 1: DVI 800x480 @ 60 Hz, BBC 640x256 framebuffer centred, lines
 //         BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP+239 doubled (256 lines do not
 //         fit twice in 480; policy: crop 8 lines top and bottom).
@@ -77,6 +79,7 @@
 
 #include "tusb.h"
 #include "class/hid/hid.h"
+#include "ff.h"
 
 typedef struct {
     bbc_t bbc;
@@ -109,26 +112,101 @@ bbc_desc_t bbc_desc(void) {
     return desc;
 }
 
-static int current_image __attribute__((unused)) = -1;
+/*-- Disc images: USB drive files, then flash images -------------------------*/
 
-// Insert flash image `index` (read-only) in drive 0
+#define USB_MAX_FILES 32
+static char usb_files[USB_MAX_FILES][13];   // 8.3 names of .ssd/.dsd files in the root
+static int usb_num_files = 0;
+static bool usb_scanned = false;
+static FIL usb_fil;
+static bool usb_fil_open = false;
+static int current_image = -1;               // 0.. usb files, then flash images
+
+extern bool msc_inquiry_complete;
+
+static bool has_ext(const char* name, const char* ext) {
+    size_t n = strlen(name), e = strlen(ext);
+    if (n < e) return false;
+    for (size_t i = 0; i < e; i++) {
+        char c = name[n - e + i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        if (c != ext[i]) return false;
+    }
+    return true;
+}
+
+// Sector reader for the WD1770: 256 bytes at `offset` of the open USB file
+static bool usb_read_sector(void* ctx, uint32_t offset, uint8_t* buf) {
+    (void)ctx;
+    UINT n = 0;
+    if (!usb_fil_open) return false;
+    if (f_lseek(&usb_fil, offset) != FR_OK) return false;
+    if (f_read(&usb_fil, buf, 256, &n) != FR_OK) return false;
+    return n == 256;
+}
+
+static void usb_scan(void) {
+    DIR dir;
+    FILINFO fno;
+    usb_num_files = 0;
+    if (f_opendir(&dir, "/") != FR_OK) return;
+    while (usb_num_files < USB_MAX_FILES && f_readdir(&dir, &fno) == FR_OK && fno.fname[0]) {
+        if (fno.fattrib & AM_DIR) continue;
+        if (has_ext(fno.fname, ".ssd") || has_ext(fno.fname, ".dsd")) {
+            strncpy(usb_files[usb_num_files], fno.fname, 12);
+            usb_files[usb_num_files][12] = 0;
+            usb_num_files++;
+        }
+    }
+    f_closedir(&dir);
+    printf("USB: %d disc image(s)\n", usb_num_files);
+}
+
+static int num_images(void) { return usb_num_files + BBC_NUM_IMAGES; }
+
+// Insert image `index` (read-only) in drive 0: USB file or flash image
 static void insert_image(int index) {
+    if (index < 0 || index >= num_images()) return;
+    if (usb_fil_open) {
+        f_close(&usb_fil);
+        usb_fil_open = false;
+    }
+    if (index < usb_num_files) {
+        const char* name = usb_files[index];
+        if (f_open(&usb_fil, name, FA_READ) != FR_OK) {
+            printf("USB: cannot open %s\n", name);
+            return;
+        }
+        usb_fil_open = true;
+        wd1770_insert_streamed(&state.bbc.fdc, 0, f_size(&usb_fil), has_ext(name, ".dsd") ? 2 : 1, usb_read_sector, 0);
+        printf("Disc inserted: %s (%u bytes)\n", name, (unsigned)f_size(&usb_fil));
+    } else {
 #if BBC_NUM_IMAGES > 0
-    if (index < 0 || index >= BBC_NUM_IMAGES) return;
-    const bbc_disc_image_t* im = &bbc_disc_images[index];
-    bbc_insert_disc(&state.bbc, 0, (uint8_t*)im->data, im->size, im->sides, true);
-    current_image = index;
-    printf("Disc %d inserted (%u bytes)\n", index, (unsigned)im->size);
-#else
-    (void)index;
+        const bbc_disc_image_t* im = &bbc_disc_images[index - usb_num_files];
+        bbc_insert_disc(&state.bbc, 0, (uint8_t*)im->data, im->size, im->sides, true);
+        printf("Flash disc %d inserted (%u bytes)\n", index - usb_num_files, (unsigned)im->size);
 #endif
+    }
+    current_image = index;
+}
+
+// Called every frame: once the USB drive is mounted, list its images and insert the first one
+static void usb_poll(void) {
+    if (usb_scanned || !msc_inquiry_complete) return;
+    usb_scanned = true;
+    usb_scan();
+    if (usb_num_files > 0) {
+        insert_image(0);
+    }
 }
 
 void app_init(void) {
     bbc_desc_t desc = bbc_desc();
     bbc_init(&state.bbc, &desc);
     bbc_reset(&state.bbc);
-    insert_image(0);
+#if BBC_NUM_IMAGES > 0
+    insert_image(0);   // Flash image until a USB drive shows up
+#endif
 }
 
 // TMDS bit clock 295.2 MHz, DVDD 1.2V (Neo6502 timing shared with the Oric build)
@@ -215,9 +293,7 @@ static int bbc_key_from_hid(uint8_t k) {
 void hid_raw_key_down(uint8_t keycode) {
     if (keycode == HID_KEY_F11) {
         // Next disc image
-#if BBC_NUM_IMAGES > 0
-        insert_image((current_image + 1) % BBC_NUM_IMAGES);
-#endif
+        if (num_images() > 0) insert_image((current_image + 1) % num_images());
         return;
     }
     int key = bbc_key_from_hid(keycode);
@@ -319,6 +395,7 @@ int main() {
         }
 
         tuh_task();
+        usb_poll();
 
         uint32_t execution_time = time_us_32() - start_time_in_micros;
         state.frame_time_us = execution_time;
