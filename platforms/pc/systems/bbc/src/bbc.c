@@ -5,6 +5,8 @@
 // Keys: positional PC -> BBC mapping, F12 = BREAK, F10 = BBC f0, F1-F9 = f1-f9.
 // Discs: drop a .ssd/.dsd file on the window (drive 0), or start with
 // `bbc disc=game.ssd`; hold SHIFT and press F12 (BREAK) to auto-boot.
+// With `write=1` the image file is written back on exit (writes are
+// otherwise kept in memory only).
 //
 // ## zlib/libpng license
 //
@@ -137,6 +139,8 @@ chips_display_info_t bbc_display_info(bbc_t* sys) {
 
 // Disc image in RAM (writable), 2 sides x 80 tracks x 10 sectors x 256 bytes
 static uint8_t disc_data[2 * 80 * 10 * 256];
+static size_t disc_size;
+static char disc_path[1024];
 
 static bool load_disc(const char* path) {
     FILE* f = fopen(path, "rb");
@@ -148,6 +152,8 @@ static bool load_disc(const char* path) {
     fclose(f);
     size_t len = strlen(path);
     int sides = (len > 4 && !strcmp(path + len - 4, ".dsd")) ? 2 : 1;
+    disc_size = n;
+    strncpy(disc_path, path, sizeof(disc_path) - 1);
     bbc_insert_disc(&state.bbc, 0, disc_data, n, sides, false);
     printf("Disc inserted: %s (%u bytes, %d side%s)\n", path, (unsigned)n, sides, sides > 1 ? "s" : "");
     fflush(stdout);
@@ -296,6 +302,14 @@ void app_input(const sapp_event* event) {
 }
 
 void app_cleanup(void) {
+    if (disc_size && sargs_exists("write") && sargs_boolean("write")) {
+        FILE* f = fopen(disc_path, "wb");
+        if (f) {
+            fwrite(disc_data, 1, disc_size, f);
+            fclose(f);
+            printf("Disc written: %s\n", disc_path);
+        }
+    }
     bbc_discard(&state.bbc);
     saudio_shutdown();
     gfx_shutdown();

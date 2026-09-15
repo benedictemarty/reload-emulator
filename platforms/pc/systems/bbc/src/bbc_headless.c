@@ -14,6 +14,7 @@
 //   -d        disable the DFS ROM (bank 14 empty)
 //   -a FILE   write the sound output as a 22050 Hz 8-bit mono WAV
 //   -0 FILE   insert FILE (.ssd or .dsd) in drive 0
+//   -W FILE   write the (possibly modified) drive 0 image to FILE at the end
 //   -b        hold SHIFT during the first 40 frames (SHIFT+BREAK auto-boot)
 //
 // ## zlib/libpng license
@@ -119,6 +120,7 @@ int main(int argc, char** argv) {
     bool show = false;
     bool dfs = true;
     const char* disc = NULL;
+    const char* disc_out = NULL;
     bool boot = false;
     const char* wav_path = NULL;
     int wait_frames = 50;
@@ -133,6 +135,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-s")) show = true;
         else if (!strcmp(argv[i], "-d")) dfs = false;
         else if (!strcmp(argv[i], "-0") && i + 1 < argc) disc = argv[++i];
+        else if (!strcmp(argv[i], "-W") && i + 1 < argc) disc_out = argv[++i];
         else if (!strcmp(argv[i], "-b")) boot = true;
         else if (!strcmp(argv[i], "-a") && i + 1 < argc) wav_path = argv[++i];
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
@@ -161,6 +164,7 @@ int main(int argc, char** argv) {
     bbc_reset(&bbc);
 
     static uint8_t disc_data[2 * 80 * 10 * 256];
+    size_t disc_size = 0;
     if (disc) {
         FILE* f = fopen(disc, "rb");
         if (!f) {
@@ -169,6 +173,7 @@ int main(int argc, char** argv) {
         }
         size_t n = fread(disc_data, 1, sizeof(disc_data), f);
         fclose(f);
+        disc_size = n;
         size_t len = strlen(disc);
         int sides = (len > 4 && !strcmp(disc + len - 4, ".dsd")) ? 2 : 1;
         bbc_insert_disc(&bbc, 0, disc_data, n, sides, false);
@@ -213,6 +218,13 @@ int main(int argc, char** argv) {
         bbc_exec(&bbc, 20000);
     }
 
+    if (disc_out && disc_size) {
+        FILE* f = fopen(disc_out, "wb");
+        if (f) {
+            fwrite(disc_data, 1, disc_size, f);
+            fclose(f);
+        }
+    }
     if (wav) {
         wav_header(wav, wav_samples);
         fclose(wav);
