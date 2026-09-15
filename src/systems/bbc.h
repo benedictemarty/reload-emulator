@@ -31,10 +31,9 @@
 //   ($FE80 control, $FE84-$FE87 registers, DRQ/INTRQ on NMI, .ssd/.dsd
 //   images), ADC ($FEC0, stub), Tube ($FEE0, absent).
 //
-// Video is rendered one scanline at a time (at the start of every CRTC
-// scanline) into a 640x256 4-bit framebuffer, so hardware scrolling
-// (R12/R13) and palette changes between lines are honoured; changes
-// inside a line are not.
+// Video is rendered one scanline at a time (at the end of every CRTC
+// scanline) into a 640x256 4-bit framebuffer; Video ULA writes made during
+// the line are replayed at their character position (raster effects).
 //
 // MODE 7 uses the SAA5050 English glyphs (bbc_teletext_font.h, from the
 // public-domain Bedstead bitmaps) with the SAA5050 character rounding;
@@ -177,6 +176,12 @@ typedef struct {
     int display_y;             // Output scanline (0 = first displayed row)
     bool frame_done;           // Set at the end of each vsync
     uint32_t field_count;      // Fields since power-up (teletext flash: 48 on / 16 off)
+
+    // Video ULA writes during the current line (rendered by segments at the end of the line)
+    struct { uint8_t hcc, reg, value; } ula_events[16];
+    uint8_t ula_event_count;
+    uint8_t ula_ctrl_start;    // ULA state at the start of the line
+    uint8_t ula_pal_start[16];
 
     // Video ULA
     bool ula_dirty;            // Palette or control changed: rebuild the byte -> pixels table
@@ -562,6 +567,12 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                             sys->ula_ctrl = v;
                         }
                         sys->ula_dirty = true;
+                        if (sys->ula_event_count < 16) {
+                            sys->ula_events[sys->ula_event_count].hcc = sys->hcc;
+                            sys->ula_events[sys->ula_event_count].reg = (uint8_t)(addr & 1);
+                            sys->ula_events[sys->ula_event_count].value = v;
+                            sys->ula_event_count++;
+                        }
                     } else {
                         data = 0xFE;
                     }
@@ -836,8 +847,10 @@ static void _bbc_crtc_tick(bbc_t* sys) {
     bool interlace = (r[CRTC_R8_INTERLACE] & 3) == 3;
 
     if (sys->hcc == 0) {
-        // Start of a scanline: render it, then handle vsync
-        _bbc_render_scanline(sys);
+        // Start of a scanline: remember the ULA state, handle vsync
+        sys->ula_ctrl_start = sys->ula_ctrl;
+        memcpy(sys->ula_pal_start, sys->ula_pal, sizeof(sys->ula_pal));
+        sys->ula_event_count = 0;
         if (sys->vsync_count) {
             sys->vsync_count--;
             if (sys->vsync_count == 0) {
@@ -846,6 +859,11 @@ static void _bbc_crtc_tick(bbc_t* sys) {
                 sys->field_count++;
             }
         }
+    }
+
+    if (sys->hcc == r[CRTC_R0_HTOTAL]) {
+        // Last character of the scanline: render it (ULA writes made during the line are applied by segments)
+        _bbc_render_scanline(sys);
     }
 
     sys->ma++;
@@ -1119,16 +1137,33 @@ static void _bbc_render_scanline(bbc_t* sys) {
         int raster = (sys->rc >> 1) % 10;
         _bbc_render_teletext_line(sys, line, chars, sys->ma_row_start, raster);
     } else {
-        // Bitmap modes: one table lookup per screen byte (see _bbc_ula_build_lut)
-        if (sys->ula_dirty) {
-            _bbc_ula_build_lut(sys);
+        // Bitmap modes: one table lookup per screen byte (see _bbc_ula_build_lut).
+        // ULA writes made during the line: replay them from the start-of-line state
+        // at the character position where they happened (US-48).
+        uint8_t end_ctrl = sys->ula_ctrl;
+        uint8_t end_pal[16];
+        int ev = 0, nev = sys->ula_event_count;
+        if (nev) {
+            memcpy(end_pal, sys->ula_pal, sizeof(end_pal));
+            sys->ula_ctrl = sys->ula_ctrl_start;
+            memcpy(sys->ula_pal, sys->ula_pal_start, sizeof(sys->ula_pal));
+            sys->ula_dirty = true;
         }
-        bool fast = sys->ula_ctrl & 0x10;
-        int out_bytes = fast ? 4 : 8;       // Packed bytes per screen byte (8 or 16 pixels)
         uint8_t raster = sys->rc;
         uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2)];
         int x = 0;
+        int out_bytes = (sys->ula_ctrl & 0x10) ? 4 : 8;
         for (int c = 0; c < chars && x + out_bytes <= BBC_SCREEN_WIDTH / 2; c++) {
+            while (ev < nev && sys->ula_events[ev].hcc <= c) {
+                if (sys->ula_events[ev].reg) sys->ula_pal[sys->ula_events[ev].value >> 4] = (uint8_t)((sys->ula_events[ev].value & 0x0F) ^ 7);
+                else sys->ula_ctrl = sys->ula_events[ev].value;
+                sys->ula_dirty = true;
+                ev++;
+            }
+            if (sys->ula_dirty) {
+                _bbc_ula_build_lut(sys);
+                out_bytes = (sys->ula_ctrl & 0x10) ? 4 : 8;   // Packed bytes per screen byte (8 or 16 pixels)
+            }
             uint16_t ma = (uint16_t)((sys->ma_row_start + c) & 0x3FFF);
             uint16_t addr;
             if (ma & 0x1000) {
@@ -1143,6 +1178,12 @@ static void _bbc_render_scanline(bbc_t* sys) {
         }
         if (x < BBC_SCREEN_WIDTH / 2) {
             memset(dst + x, 0, (size_t)(BBC_SCREEN_WIDTH / 2 - x));
+        }
+        if (nev) {
+            // Back to the current (end-of-line) state
+            sys->ula_ctrl = end_ctrl;
+            memcpy(sys->ula_pal, end_pal, sizeof(end_pal));
+            sys->ula_dirty = true;
         }
         _bbc_draw_cursor(sys, y, out_bytes);
         return;

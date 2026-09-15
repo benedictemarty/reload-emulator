@@ -238,10 +238,12 @@ static void write_ppm(const char* path) {
 }
 
 static void print_mode7(void) {
+    // Rows in display order: the MOS scrolls MODE 7 by moving the CRTC start address
+    uint16_t start = (uint16_t)(((bbc.crtc_reg[12] << 8) | bbc.crtc_reg[13]) & 0x3FF);
     for (int row = 0; row < 25; row++) {
         char line[41];
         for (int col = 0; col < 40; col++) {
-            uint16_t a = (uint16_t)(0x7C00 + row * 40 + col);
+            uint16_t a = (uint16_t)(0x7C00 + ((start + row * 40 + col) & 0x3FF));
             uint8_t c = ((bbc.model == BBC_MODEL_MASTER && (bbc.acccon & 1)) ? bbc.lynne[a - 0x3000] : bbc.ram[a]) & 0x7F;
             line[col] = (c >= 0x20 && c < 0x7F) ? (char)c : '.';
         }
@@ -389,7 +391,11 @@ int main(int argc, char** argv) {
                 int key = bbc_key_from_ascii((uint8_t)*tp, &pending_shift);
                 tp++;
                 if (key >= 0) {
-                    if (pending_shift) bbc_key_down(&bbc, BBC_KEY_SHIFT);
+                    if (pending_shift) {
+                        // SHIFT goes down one frame before the key, as on a real keyboard
+                        bbc_key_down(&bbc, BBC_KEY_SHIFT);
+                        bbc_exec(&bbc, 20000);
+                    }
                     bbc_key_down(&bbc, (uint8_t)key);
                     pending_key = key;
                 }
