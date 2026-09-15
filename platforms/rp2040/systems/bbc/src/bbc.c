@@ -109,7 +109,7 @@ bbc_desc_t bbc_desc(void) {
     return desc;
 }
 
-static int current_image = -1;
+static int current_image __attribute__((unused)) = -1;
 
 // Insert flash image `index` (read-only) in drive 0
 static void insert_image(int index) {
