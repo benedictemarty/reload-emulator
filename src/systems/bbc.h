@@ -109,7 +109,6 @@ typedef struct {
     uint8_t mask[4];        // Current output level of each channel (0 or 0xFF)
     bool noise_toggle;
     uint16_t noise_seed;
-    uint8_t prescale;       // 2 MHz -> 250 kHz
     int32_t sample_accum;   // Sample generation accumulator
     int32_t sample_period;
 } bbc_sn76489_t;
@@ -505,20 +504,25 @@ void bbc_tick(bbc_t* sys) {
         _bbc_crtc_tick(sys);
     }
 
-    // 1 MHz bus: VIAs, keyboard, latch, sound
-    if (sys->system_ticks & 1) {
+    // 1 MHz bus (VIAs, keyboard, latch, FDC): serviced every 2 us by 2 cycles,
+    // which keeps the cost per CPU cycle low for the RP2040 (timers count in us)
+    if ((sys->system_ticks & 3) == 3) {
         _bbc_update_keyboard(sys, true);
         _bbc_update_ic32(sys);
         mos6522via_set_ca1(&sys->sysvia, sys->vsync);
-        bool irq = mos6522via_tick(&sys->sysvia, 1);
-        irq |= mos6522via_tick(&sys->uservia, 1);
+        bool irq = mos6522via_tick(&sys->sysvia, 2);
+        irq |= mos6522via_tick(&sys->uservia, 2);
         MOS6502CPU_SET_IRQ(&sys->cpu, irq);
+        wd1770_tick(&sys->fdc);
         wd1770_tick(&sys->fdc);
         sys->nmi = wd1770_nmi(&sys->fdc);
         MOS6502CPU_SET_NMI(&sys->cpu, sys->nmi);
     }
 
-    _bbc_sn_tick(sys);
+    // Sound chip clock: 250 kHz
+    if ((sys->system_ticks & 7) == 7) {
+        _bbc_sn_tick(sys);
+    }
 
     sys->system_ticks++;
 }
@@ -910,10 +914,8 @@ static const uint8_t _bbc_sn_volume[16] = {0, 1, 1, 2, 2, 3, 4, 5, 6, 8, 10, 13,
 static void _bbc_sn_tick(bbc_t* sys) {
     bbc_sn76489_t* sn = &sys->sn;
 
-    // 250 kHz chip clock
-    sn->prescale++;
-    if (sn->prescale == 8) {
-        sn->prescale = 0;
+    // Called at 250 kHz
+    {
         for (int i = 0; i < 3; i++) {
             if (sn->counter[i] > 0) {
                 sn->counter[i]--;
@@ -951,8 +953,8 @@ static void _bbc_sn_tick(bbc_t* sys) {
         }
     }
 
-    // Output sample
-    sn->sample_accum += 256;
+    // Output sample (sample_period is in 1/256 CPU cycles; 8 cycles per call)
+    sn->sample_accum += 8 * 256;
     if (sn->sample_accum >= sn->sample_period) {
         sn->sample_accum -= sn->sample_period;
         int level = 0;
