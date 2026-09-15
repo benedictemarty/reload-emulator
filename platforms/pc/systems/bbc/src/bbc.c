@@ -7,7 +7,7 @@
 // `bbc disc=game.ssd`; hold SHIFT and press F12 (BREAK) to auto-boot.
 // `model=master` starts a Master 128 (MOS 3.20, roms/bbc_master_roms.h).
 // `tube=1` adds the 6502 second processor (roms/bbc_tube_rom.h);
-// `speed=N` runs N times faster than real time (0 = as fast as possible).
+// `speed=N` runs N times real time (0.5 = half speed, 0 = as fast as possible).
 // `joystick=mouse`: mouse position = joystick 1, left button = fire;
 // `joystick=keypad`: numeric keypad 8/2/4/6 (and diagonals) + keypad 0 / Insert = fire.
 // With `write=1` the image file is written back on exit (writes are
@@ -144,7 +144,7 @@ bbc_desc_t bbc_desc(void) {
 }
 
 static int joystick_mode;   // 0 none, 1 mouse, 2 keypad
-static int speed = 1;       // Emulated microseconds per real microsecond (0 = unlimited: 200 ms per frame)
+static double speed = 1.0;  // Emulated seconds per real second (0 = unlimited: 200 ms per frame)
 
 // Unpacked framebuffer: one byte per pixel, 640x512 (lines doubled for a 5:4 aspect)
 #define BBC_OUT_HEIGHT (BBC_SCREEN_HEIGHT * 2)
@@ -238,8 +238,8 @@ void app_init(void) {
         load_disc(sargs_value("disc"));
     }
     if (sargs_exists("speed")) {
-        speed = atoi(sargs_value("speed"));
-        if (speed < 0) speed = 1;
+        speed = atof(sargs_value("speed"));
+        if (speed < 0) speed = 1.0;
     }
     if (sargs_exists("joystick")) {
         joystick_mode = sargs_equals("joystick", "mouse") ? 1 : sargs_equals("joystick", "keypad") ? 2 : 0;
@@ -251,9 +251,20 @@ static void draw_status_bar(void);
 void app_frame(void) {
     state.frame_time_us = clock_frame_time();
     const uint64_t emu_start_time = stm_now();
-    uint32_t emu_us = speed > 0 ? state.frame_time_us * (uint32_t)speed : 200000;
+    uint32_t emu_us = speed > 0 ? (uint32_t)(state.frame_time_us * speed) : 200000;
     if (emu_us > 400000) emu_us = 400000;
     state.ticks = bbc_exec(&state.bbc, emu_us);
+    if (getenv("BBC_SPEEDCHECK")) {
+        static uint64_t t0; static uint32_t emu_total; static int n;
+        if (!t0) t0 = stm_now();
+        emu_total += emu_us;
+        if (++n == 120) {
+            double real = stm_sec(stm_since(t0));
+            printf("vitesse : %.3f x (emule %.2f s en %.2f s reels, trame %.1f ms)\n", emu_total / 1e6 / real, emu_total / 1e6, real, sapp_frame_duration() * 1000.0);
+            fflush(stdout);
+            n = 0; emu_total = 0; t0 = stm_now();
+        }
+    }
     state.emu_time_ms = stm_ms(stm_since(emu_start_time));
     draw_status_bar();
     bbc_update_frame_buffer(&state.bbc);
