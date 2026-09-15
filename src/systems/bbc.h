@@ -875,6 +875,9 @@ static void _bbc_render_scanline(bbc_t* sys) {
 /*-- SN76489 -----------------------------------------------------------------*/
 
 static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value) {
+#ifdef BBC_SN_TRACE
+    fprintf(stderr, "sn76489: write %02X\n", value);
+#endif
     if (value & 0x80) {
         sn->reg = (value >> 4) & 7;
         uint8_t v = value & 0x0F;

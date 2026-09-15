@@ -12,6 +12,7 @@
 //   -r FILE   write the 32 KB RAM
 //   -s        print the 40x25 MODE 7 screen ($7C00) as ASCII
 //   -d        disable the DFS ROM (bank 14 empty)
+//   -a FILE   write the sound output as a 22050 Hz 8-bit mono WAV
 //   -0 FILE   insert FILE (.ssd or .dsd) in drive 0
 //   -b        hold SHIFT during the first 40 frames (SHIFT+BREAK auto-boot)
 //
@@ -57,6 +58,26 @@
 
 static bbc_t bbc;
 
+static FILE* wav;
+static uint32_t wav_samples;
+
+static void audio_callback(const uint8_t sample, void* user_data) {
+    (void)user_data;
+    if (wav) {
+        fputc(sample, wav);
+        wav_samples++;
+    }
+}
+
+static void wav_header(FILE* f, uint32_t n) {
+    uint32_t rate = 22050, bytes = n;
+    uint8_t h[44] = {'R','I','F','F', 0,0,0,0, 'W','A','V','E', 'f','m','t',' ', 16,0,0,0, 1,0, 1,0, 0,0,0,0, 0,0,0,0, 1,0, 8,0, 'd','a','t','a', 0,0,0,0};
+    uint32_t riff = 36 + bytes;
+    memcpy(h + 4, &riff, 4); memcpy(h + 24, &rate, 4); memcpy(h + 28, &rate, 4); memcpy(h + 40, &bytes, 4);
+    fseek(f, 0, SEEK_SET);
+    fwrite(h, 1, 44, f);
+}
+
 static void write_ppm(const char* path) {
     FILE* f = fopen(path, "wb");
     if (!f) {
@@ -99,6 +120,7 @@ int main(int argc, char** argv) {
     bool dfs = true;
     const char* disc = NULL;
     bool boot = false;
+    const char* wav_path = NULL;
     int wait_frames = 50;
     int pause_until = 0;
     int hold_frames = 3;
@@ -112,6 +134,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-d")) dfs = false;
         else if (!strcmp(argv[i], "-0") && i + 1 < argc) disc = argv[++i];
         else if (!strcmp(argv[i], "-b")) boot = true;
+        else if (!strcmp(argv[i], "-a") && i + 1 < argc) wav_path = argv[++i];
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") && i + 1 < argc) hold_frames = atoi(argv[++i]);
         else {
@@ -121,10 +144,15 @@ int main(int argc, char** argv) {
     }
 
     bbc_desc_t desc = {
+        .audio = {.callback = {.func = audio_callback}, .sample_rate = 22050},
         .roms = {
             .os = {.ptr = bbc_os_rom, .size = sizeof(bbc_os_rom)},
         },
     };
+    if (wav_path) {
+        wav = fopen(wav_path, "wb");
+        if (wav) fseek(wav, 44, SEEK_SET);
+    }
     desc.roms.banks[15] = (chips_range_t){.ptr = bbc_basic_rom, .size = sizeof(bbc_basic_rom)};
     if (dfs) {
         desc.roms.banks[14] = (chips_range_t){.ptr = bbc_dfs_rom, .size = sizeof(bbc_dfs_rom)};
@@ -185,6 +213,10 @@ int main(int argc, char** argv) {
         bbc_exec(&bbc, 20000);
     }
 
+    if (wav) {
+        wav_header(wav, wav_samples);
+        fclose(wav);
+    }
     if (show) print_mode7();
     if (ppm) write_ppm(ppm);
     if (ram) {
