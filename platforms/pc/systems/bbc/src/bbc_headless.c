@@ -15,6 +15,7 @@
 //   -a FILE   write the sound output as a 22050 Hz 8-bit mono WAV
 //   -M        print a summary of the MOS entry points called (OSBYTE/OSWORD by A, VDU codes)
 //   -T FILE   log every MOS call (entry, A, X, Y, PC of caller) to FILE
+//   -H        count direct SHEILA accesses ($FE00-$FEFF) made by code running from RAM (< $8000)
 //   -0 FILE   insert FILE (.ssd or .dsd) in drive 0
 //   -W FILE   write the (possibly modified) drive 0 image to FILE at the end
 //   -b        hold SHIFT during the first 40 frames (SHIFT+BREAK auto-boot)
@@ -70,6 +71,9 @@ static uint32_t osbyte_calls[0x100];
 static uint32_t osword_calls[0x100];
 static uint32_t vdu_calls[0x100];
 static uint32_t oscli_calls;
+static bool hw_summary;
+static uint32_t hw_access[256][2];       // [$FExx][read/write] from RAM code
+static uint16_t last_sync_pc;
 
 static const char* mos_name(uint8_t lo) {
     switch (lo) {
@@ -84,8 +88,12 @@ static const char* mos_name(uint8_t lo) {
 
 static void mos_debug_cb(void* user_data, uint64_t pins) {
     (void)user_data; (void)pins;
+    if (hw_summary && (bbc.cpu.addr & 0xFF00) == 0xFE00 && last_sync_pc < 0x8000) {
+        hw_access[bbc.cpu.addr & 0xFF][bbc.cpu.rw ? 0 : 1]++;
+    }
     if (!bbc.cpu.sync) return;
     uint16_t pc = bbc.cpu.PC;
+    last_sync_pc = pc;
     if (pc < 0xFFB9 || pc > 0xFFF7) return;
     const char* name = mos_name((uint8_t)pc);
     if (!name) return;
@@ -107,6 +115,13 @@ static void mos_debug_cb(void* user_data, uint64_t pins) {
             fputc('"', mos_log);
         }
         fputc('\n', mos_log);
+    }
+}
+
+static void hw_print_summary(void) {
+    printf("--- accès SHEILA directs depuis la RAM (lectures/écritures) ---\n");
+    for (int a = 0; a < 256; a++) {
+        if (hw_access[a][0] || hw_access[a][1]) printf("  $FE%02X : %u / %u\n", a, hw_access[a][0], hw_access[a][1]);
     }
 }
 
@@ -205,6 +220,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-b")) boot = true;
         else if (!strcmp(argv[i], "-a") && i + 1 < argc) wav_path = argv[++i];
         else if (!strcmp(argv[i], "-M")) mos_summary = true;
+        else if (!strcmp(argv[i], "-H")) hw_summary = true;
         else if (!strcmp(argv[i], "-T") && i + 1 < argc) mos_log_path = argv[++i];
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") && i + 1 < argc) hold_frames = atoi(argv[++i]);
@@ -223,7 +239,7 @@ int main(int argc, char** argv) {
     if (mos_log_path) {
         mos_log = fopen(mos_log_path, "w");
     }
-    if (mos_summary || mos_log) {
+    if (mos_summary || mos_log || hw_summary) {
         desc.debug.callback.func = mos_debug_cb;
         desc.debug.stopped = &mos_stop;
     }
@@ -310,6 +326,7 @@ int main(int argc, char** argv) {
     }
     if (mos_log) fclose(mos_log);
     if (mos_summary) mos_print_summary();
+    if (hw_summary) hw_print_summary();
     if (show) print_mode7();
     if (ppm) write_ppm(ppm);
     if (ram) {
