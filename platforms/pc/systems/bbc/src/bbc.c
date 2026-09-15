@@ -90,6 +90,10 @@ bbc_desc_t bbc_desc(void) {
     };
     desc.roms.banks[15] = (chips_range_t){.ptr = bbc_basic_rom, .size = sizeof(bbc_basic_rom)};
     desc.roms.banks[14] = (chips_range_t){.ptr = bbc_dfs_rom, .size = sizeof(bbc_dfs_rom)};
+    // Sideways RAM in banks 4.. (4 x 16 KB)
+    static uint8_t swr[4 * 0x4000];
+    desc.ram_banks = 0x00F0;
+    desc.swr = (chips_range_t){.ptr = swr, .size = sizeof(swr)};
     return desc;
 }
 

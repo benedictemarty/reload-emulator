@@ -160,6 +160,10 @@ int main(int argc, char** argv) {
     if (dfs) {
         desc.roms.banks[14] = (chips_range_t){.ptr = bbc_dfs_rom, .size = sizeof(bbc_dfs_rom)};
     }
+    // Sideways RAM in banks 4-7 (4 x 16 KB)
+    static uint8_t swr[4 * 0x4000];
+    desc.ram_banks = 0x00F0;
+    desc.swr = (chips_range_t){.ptr = swr, .size = sizeof(swr)};
     bbc_init(&bbc, &desc);
     bbc_reset(&bbc);
 

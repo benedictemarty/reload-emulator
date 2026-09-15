@@ -98,6 +98,10 @@ typedef struct {
         chips_range_t os;                       // 16 KB MOS
         chips_range_t banks[BBC_NUM_ROM_BANKS]; // Sideways ROMs (16 KB each), .ptr == 0 for empty banks
     } roms;
+    // Sideways RAM: bit n of `ram_banks` makes bank n writable RAM; `swr` provides
+    // 16 KB per selected bank (in bank order), owned by the caller
+    uint16_t ram_banks;
+    chips_range_t swr;
 } bbc_desc_t;
 
 // SN76489 sound generator state
@@ -127,6 +131,7 @@ typedef struct {
     uint8_t ram[0x8000];
     const uint8_t* os;
     const uint8_t* banks[BBC_NUM_ROM_BANKS];
+    uint8_t* ram_bank[BBC_NUM_ROM_BANKS];   // Sideways RAM storage per bank, or 0
     uint8_t romsel;
 
     // System VIA peripherals
@@ -261,6 +266,17 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
             sys->banks[i] = desc->roms.banks[i].ptr;
         }
     }
+    if (desc->ram_banks && desc->swr.ptr) {
+        uint8_t* p = desc->swr.ptr;
+        size_t left = desc->swr.size;
+        for (int i = 0; i < BBC_NUM_ROM_BANKS; i++) {
+            if ((desc->ram_banks & (1 << i)) && left >= 0x4000) {
+                sys->ram_bank[i] = p;
+                p += 0x4000;
+                left -= 0x4000;
+            }
+        }
+    }
 
     MOS6502CPU_INIT(&sys->cpu, &(MOS6502CPU_DESC_T){0});
     mos6522via_init(&sys->sysvia);
@@ -305,7 +321,9 @@ void bbc_reset(bbc_t* sys) {
 // ROMSEL: select the sideways bank at $8000-$BFFF
 static void _bbc_set_romsel(bbc_t* sys, uint8_t bank) {
     sys->romsel = bank & 0x0F;
-    if (sys->banks[sys->romsel]) {
+    if (sys->ram_bank[sys->romsel]) {
+        mem_map_ram(&sys->mem, 0, 0x8000, 0x4000, sys->ram_bank[sys->romsel]);
+    } else if (sys->banks[sys->romsel]) {
         mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, sys->banks[sys->romsel]);
     } else {
         mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, _bbc_empty_bank);
