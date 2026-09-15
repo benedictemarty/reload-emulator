@@ -181,6 +181,7 @@ void app_init(void) {
             .bottom = BORDER_BOTTOM,
         },
         .display_info = bbc_display_info(&state.bbc),
+        .pixel_aspect = {.width = 16, .height = 15},   // 640x512 shown as 4:3, like a TV
     });
     clock_init();
     prof_init();
