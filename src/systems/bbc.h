@@ -873,6 +873,30 @@ static void _bbc_ula_build_lut(bbc_t* sys) {
     sys->ula_dirty = false;
 }
 
+// 6845 hardware cursor: R14/R15 address, rasters R10 (bits 0-4) to R11, blink
+// from R10 bits 5-6 (00 steady, 01 off, 10 = 16 fields, 11 = 32 fields). The
+// ULA inverts the colours of the cell (width: one character, ULA control bits
+// 5-7 select 1 or 2 characters in the 2 MHz modes).
+static void _bbc_draw_cursor(bbc_t* sys, int y, int cell_bytes) {
+    const uint8_t* r = sys->crtc_reg;
+    uint8_t mode = (r[CRTC_R10_CURSOR_START] >> 5) & 3;
+    if (mode == 1) return;
+    if (mode == 2 && (sys->field_count & 16)) return;
+    if (mode == 3 && (sys->field_count & 32)) return;
+    uint8_t start = r[CRTC_R10_CURSOR_START] & 0x1F, end = r[CRTC_R11_CURSOR_END] & 0x1F;
+    // Interlaced video: the line shows rasters rc (even field) and rc + 1 (odd field)
+    uint8_t r0 = sys->rc, r1 = (r[CRTC_R8_INTERLACE] & 3) == 3 ? (uint8_t)(sys->rc + 1) : sys->rc;
+    if (!((r0 >= start && r0 <= end) || (r1 >= start && r1 <= end))) return;
+    uint16_t cursor = (uint16_t)(((r[CRTC_R14_CURSOR_H] << 8) | r[CRTC_R15_CURSOR_L]) & 0x3FFF);
+    int col = (int)((cursor - sys->ma_row_start) & 0x3FFF);
+    if (col < 0 || col >= r[CRTC_R1_HDISPLAYED]) return;
+    int width = ((sys->ula_ctrl & 0xA0) == 0xA0 && (sys->ula_ctrl & 0x10)) ? 2 : 1;   // Large cursor (MODE 0-2)
+    uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2) + col * cell_bytes];
+    for (int i = 0; i < width * cell_bytes && col * cell_bytes + i < BBC_SCREEN_WIDTH / 2; i++) {
+        dst[i] ^= 0x77;
+    }
+}
+
 static void _bbc_render_scanline(bbc_t* sys) {
     const uint8_t* r = sys->crtc_reg;
     int y = sys->display_y;
@@ -916,6 +940,7 @@ static void _bbc_render_scanline(bbc_t* sys) {
         if (x < BBC_SCREEN_WIDTH / 2) {
             memset(dst + x, 0, (size_t)(BBC_SCREEN_WIDTH / 2 - x));
         }
+        _bbc_draw_cursor(sys, y, out_bytes);
         return;
     }
 
@@ -923,6 +948,9 @@ static void _bbc_render_scanline(bbc_t* sys) {
     uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2)];
     for (int x = 0; x < BBC_SCREEN_WIDTH; x += 2) {
         *dst++ = (uint8_t)((line[x] << 4) | (line[x + 1] & 0x0F));
+    }
+    if (displayed && chars) {
+        _bbc_draw_cursor(sys, y, teletext ? 8 : ((sys->ula_ctrl & 0x10) ? 4 : 8));
     }
 }
 
