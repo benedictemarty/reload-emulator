@@ -3,7 +3,7 @@
 // BBC Micro Model B on the Olimex Neo6502: the real 65C02 executes the MOS,
 // the RP2040 emulates memory, 6845/ULA video, VIAs, keyboard and SN76489.
 //
-// Core 0: CPU bus (bit-banged, 2 MHz target), USB host.
+// Core 0: CPU bus (bit-banged, 2 MHz target), USB host (keyboard, gamepad = joystick 1).
 // Discs: .ssd/.dsd files in the root of a USB drive (FAT, sectors read on
 // demand through FatFs, writes go back to the file) or images compiled in
 // flash (src/images/bbc_images.h, read-only);
@@ -348,6 +348,30 @@ static int bbc_key_from_hid(uint8_t k) {
         case HID_KEY_KEYPAD_COMMA: return BBC_KEY_KeypadComma;
         default: return -1;
     }
+}
+
+bool hid_raw_keys_enabled(void) { return true; }
+
+// The ASCII keyboard callbacks of hid_app.c are not used (raw keys instead)
+void kbd_raw_key_down(int code) { (void)code; }
+void kbd_raw_key_up(int code) { (void)code; }
+
+// USB gamepad -> BBC analogue joystick 1: d-pad = extremes, button A = fire
+void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_state) {
+    if (index != 0) return;
+    uint16_t x = 0x8000, y = 0x8000;
+    switch (hat_state) {
+        case GAMEPAD_HAT_UP: y = 0xFFFF; break;
+        case GAMEPAD_HAT_UP_RIGHT: y = 0xFFFF; x = 0; break;
+        case GAMEPAD_HAT_RIGHT: x = 0; break;
+        case GAMEPAD_HAT_DOWN_RIGHT: y = 0; x = 0; break;
+        case GAMEPAD_HAT_DOWN: y = 0; break;
+        case GAMEPAD_HAT_DOWN_LEFT: y = 0; x = 0xFFFF; break;
+        case GAMEPAD_HAT_LEFT: x = 0xFFFF; break;
+        case GAMEPAD_HAT_UP_LEFT: y = 0xFFFF; x = 0xFFFF; break;
+        default: break;
+    }
+    bbc_set_joystick(&state.bbc, 0, x, y, (button_state & GAMEPAD_BUTTON_A) != 0);
 }
 
 void hid_raw_key_down(uint8_t keycode) {

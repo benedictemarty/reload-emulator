@@ -191,10 +191,14 @@ typedef struct {
     wd1770_t fdc;
     bool nmi;
 
-    // uPD7002 ADC (analogue joysticks, centred): status, 16-bit result, conversion timer in us
+    // uPD7002 ADC: status, 16-bit result, conversion timer in us, the 4 analogue
+    // channels (joystick 1 = channels 0/1, joystick 2 = 2/3 ; left/up = $FFFF,
+    // right/down = 0, centre $8000) and the fire buttons (bit 0/1 -> PB4/PB5)
     uint8_t adc_status;
     uint16_t adc_value;
     uint32_t adc_timer;
+    uint16_t adc_channel[4];
+    uint8_t joystick_fire;
 
     // Teletext glyphs, 12x20 after SAA5050 rounding (bits 11..0)
     uint16_t tt_glyphs[96][20];
@@ -219,6 +223,8 @@ uint32_t bbc_exec(bbc_t* sys, uint32_t micro_seconds);
 // Press / release a key, key = BBC internal key number (row << 4 | column), e.g. 0x41 = A
 void bbc_key_down(bbc_t* sys, uint8_t key);
 void bbc_key_up(bbc_t* sys, uint8_t key);
+// Analogue joystick n (0 or 1): x/y 0..$FFFF (left/up = $FFFF), fire button
+void bbc_set_joystick(bbc_t* sys, int n, uint16_t x, uint16_t y, bool fire);
 // Insert a disc image (bytes stay owned by the caller and are modified by writes)
 void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int sides, bool write_protected);
 
@@ -340,6 +346,7 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
     sys->ula_dirty = true;
     sys->adc_status = 0xC0;   // Not busy, no conversion
     sys->adc_value = 0x8000;
+    for (int i = 0; i < 4; i++) sys->adc_channel[i] = 0x8000;
     memset(_bbc_empty_bank, 0xFF, sizeof(_bbc_empty_bank));
 
     _bbc_init_memorymap(sys);
@@ -500,8 +507,9 @@ static void _bbc_update_ic32(bbc_t* sys) {
         }
         sys->sysvia_pb_old = pb;
     }
-    // Joystick fire buttons not pressed, speech chip absent (PB6 = 1, PB7 = 1)
-    mos6522via_set_pb(&sys->sysvia, pb | 0xF0);
+    // Joystick fire buttons (PB4/PB5, active low), speech chip absent (PB6 = 1, PB7 = 1)
+    uint8_t fire = (uint8_t)(((sys->joystick_fire & 1) ? 0 : 0x10) | ((sys->joystick_fire & 2) ? 0 : 0x20));
+    mos6522via_set_pb(&sys->sysvia, (uint8_t)((pb & 0x0F) | 0xC0 | fire));
 
     if (sys->model == BBC_MODEL_MASTER) {
         _bbc_update_rtc(sys, old);
@@ -725,7 +733,8 @@ void bbc_tick(bbc_t* sys) {
         if (sys->adc_timer) {
             sys->adc_timer = sys->adc_timer > 2 ? sys->adc_timer - 2 : 0;
             if (sys->adc_timer == 0) {
-                sys->adc_value = 0x8000;                                  // Joystick centred
+                sys->adc_value = sys->adc_channel[sys->adc_status & 3];
+                if (!(sys->adc_status & 0x08)) sys->adc_value &= 0xFF00;  // 8-bit conversion
                 sys->adc_status = (uint8_t)((sys->adc_status & 0x0F) | 0x40 | ((sys->adc_value >> 10) & 0x30));
             }
         }
@@ -776,6 +785,13 @@ void bbc_key_up(bbc_t* sys, uint8_t key) {
         return;
     }
     sys->key_cols[key & 0x0F] &= (uint8_t)~(1 << ((key >> 4) & 7));
+}
+
+void bbc_set_joystick(bbc_t* sys, int n, uint16_t x, uint16_t y, bool fire) {
+    if (n < 0 || n > 1) return;
+    sys->adc_channel[n * 2] = x;
+    sys->adc_channel[n * 2 + 1] = y;
+    if (fire) sys->joystick_fire |= (uint8_t)(1 << n); else sys->joystick_fire &= (uint8_t)~(1 << n);
 }
 
 void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int sides, bool write_protected) {

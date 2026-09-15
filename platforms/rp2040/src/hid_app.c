@@ -22,6 +22,33 @@ extern void kbd_raw_key_down(int code);
 extern void kbd_raw_key_up(int code);
 extern void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_state);
 
+// Optional raw HID hooks (positional keyboards): when a system defines them, key
+// usage codes and modifier keys are reported as-is instead of ASCII codes.
+__attribute__((weak)) void hid_raw_key_down(uint8_t keycode) { (void)keycode; }
+__attribute__((weak)) void hid_raw_key_up(uint8_t keycode) { (void)keycode; }
+__attribute__((weak)) bool hid_raw_keys_enabled(void) { return false; }
+
+static void process_kbd_report_raw(hid_keyboard_report_t const* r1, hid_keyboard_report_t const* r2,
+                                   void (*cb)(uint8_t keycode)) {
+    static const uint8_t modifier_keys[8] = {HID_KEY_CONTROL_LEFT, HID_KEY_SHIFT_LEFT, HID_KEY_ALT_LEFT,
+                                             HID_KEY_GUI_LEFT,     HID_KEY_CONTROL_RIGHT, HID_KEY_SHIFT_RIGHT,
+                                             HID_KEY_ALT_RIGHT,    HID_KEY_GUI_RIGHT};
+    for (int b = 0; b < 8; b++) {
+        if ((r1->modifier & (1 << b)) && !(r2->modifier & (1 << b))) {
+            cb(modifier_keys[b]);
+        }
+    }
+    for (int i = 0; i < 6; i++) {
+        if (r1->keycode[i]) {
+            bool found = false;
+            for (int j = 0; j < 6; j++) {
+                if (r2->keycode[j] == r1->keycode[i]) found = true;
+            }
+            if (!found) cb(r1->keycode[i]);
+        }
+    }
+}
+
 static inline bool find_key_in_report(hid_keyboard_report_t const* report, uint8_t keycode) {
     for (uint8_t i = 0; i < 6; i++) {
         if (report->keycode[i] == keycode) {
@@ -63,11 +90,19 @@ static void process_kbd_report(hid_keyboard_report_t const* r1, hid_keyboard_rep
 }
 
 static void find_pressed_keys(hid_keyboard_report_t const* report) {
-    process_kbd_report(report, &prev_report, &kbd_raw_key_down);
+    if (hid_raw_keys_enabled()) {
+        process_kbd_report_raw(report, &prev_report, &hid_raw_key_down);
+    } else {
+        process_kbd_report(report, &prev_report, &kbd_raw_key_down);
+    }
 }
 
 static void find_released_keys(hid_keyboard_report_t const* report) {
-    process_kbd_report(&prev_report, report, &kbd_raw_key_up);
+    if (hid_raw_keys_enabled()) {
+        process_kbd_report_raw(&prev_report, report, &hid_raw_key_up);
+    } else {
+        process_kbd_report(&prev_report, report, &kbd_raw_key_up);
+    }
 }
 
 static gamepad_t* find_gamepad(uint16_t id) {

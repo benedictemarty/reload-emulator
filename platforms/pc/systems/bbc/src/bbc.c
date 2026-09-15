@@ -6,6 +6,8 @@
 // Discs: drop a .ssd/.dsd file on the window (drive 0), or start with
 // `bbc disc=game.ssd`; hold SHIFT and press F12 (BREAK) to auto-boot.
 // `model=master` starts a Master 128 (MOS 3.20, roms/bbc_master_roms.h).
+// `joystick=mouse`: mouse position = joystick 1, left button = fire;
+// `joystick=keypad`: numeric keypad 8/2/4/6 (and diagonals) + keypad 0 / Insert = fire.
 // With `write=1` the image file is written back on exit (writes are
 // otherwise kept in memory only).
 //
@@ -123,6 +125,8 @@ bbc_desc_t bbc_desc(void) {
     return desc;
 }
 
+static int joystick_mode;   // 0 none, 1 mouse, 2 keypad
+
 // Unpacked framebuffer: one byte per pixel, 640x512 (lines doubled for a 5:4 aspect)
 #define BBC_OUT_HEIGHT (BBC_SCREEN_HEIGHT * 2)
 static uint8_t bbc_frame_buffer[BBC_SCREEN_WIDTH * BBC_OUT_HEIGHT];
@@ -213,6 +217,9 @@ void app_init(void) {
     prof_init();
     if (sargs_exists("disc")) {
         load_disc(sargs_value("disc"));
+    }
+    if (sargs_exists("joystick")) {
+        joystick_mode = sargs_equals("joystick", "mouse") ? 1 : sargs_equals("joystick", "keypad") ? 2 : 0;
     }
 }
 
@@ -325,7 +332,60 @@ static int bbc_key_from_keycode(sapp_keycode k) {
     }
 }
 
+static uint8_t keypad_dirs;  // bit 0 up, 1 down, 2 left, 3 right
+static bool keypad_fire;
+
+static void keypad_joystick_update(void) {
+    uint16_t x = 0x8000, y = 0x8000;
+    if (keypad_dirs & 4) x = 0xFFFF; else if (keypad_dirs & 8) x = 0;
+    if (keypad_dirs & 1) y = 0xFFFF; else if (keypad_dirs & 2) y = 0;
+    bbc_set_joystick(&state.bbc, 0, x, y, keypad_fire);
+}
+
+// Keypad keys as joystick directions: returns the direction mask or 0
+static uint8_t keypad_dir(sapp_keycode k) {
+    switch (k) {
+        case SAPP_KEYCODE_KP_8: return 1;
+        case SAPP_KEYCODE_KP_2: return 2;
+        case SAPP_KEYCODE_KP_4: return 4;
+        case SAPP_KEYCODE_KP_6: return 8;
+        case SAPP_KEYCODE_KP_7: return 5;
+        case SAPP_KEYCODE_KP_9: return 9;
+        case SAPP_KEYCODE_KP_1: return 6;
+        case SAPP_KEYCODE_KP_3: return 10;
+        default: return 0;
+    }
+}
+
 void app_input(const sapp_event* event) {
+    if (joystick_mode == 1) {
+        if (event->type == SAPP_EVENTTYPE_MOUSE_MOVE || event->type == SAPP_EVENTTYPE_MOUSE_DOWN ||
+            event->type == SAPP_EVENTTYPE_MOUSE_UP) {
+            float w = sapp_widthf(), h = sapp_heightf();
+            float fx = w > 0 ? event->mouse_x / w : 0.5f, fy = h > 0 ? event->mouse_y / h : 0.5f;
+            if (fx < 0) fx = 0;
+            if (fx > 1) fx = 1;
+            if (fy < 0) fy = 0;
+            if (fy > 1) fy = 1;
+            static bool fire;
+            if (event->type == SAPP_EVENTTYPE_MOUSE_DOWN && event->mouse_button == SAPP_MOUSEBUTTON_LEFT) fire = true;
+            if (event->type == SAPP_EVENTTYPE_MOUSE_UP && event->mouse_button == SAPP_MOUSEBUTTON_LEFT) fire = false;
+            bbc_set_joystick(&state.bbc, 0, (uint16_t)((1.0f - fx) * 65535.0f), (uint16_t)((1.0f - fy) * 65535.0f), fire);
+        }
+    } else if (joystick_mode == 2 && (event->type == SAPP_EVENTTYPE_KEY_DOWN || event->type == SAPP_EVENTTYPE_KEY_UP)) {
+        uint8_t d = keypad_dir(event->key_code);
+        bool down = event->type == SAPP_EVENTTYPE_KEY_DOWN;
+        if (d) {
+            if (down) keypad_dirs |= d; else keypad_dirs &= (uint8_t)~d;
+            keypad_joystick_update();
+            return;
+        }
+        if (event->key_code == SAPP_KEYCODE_KP_0 || event->key_code == SAPP_KEYCODE_INSERT) {
+            keypad_fire = down;
+            keypad_joystick_update();
+            return;
+        }
+    }
     switch (event->type) {
         case SAPP_EVENTTYPE_KEY_DOWN:
         case SAPP_EVENTTYPE_KEY_UP: {

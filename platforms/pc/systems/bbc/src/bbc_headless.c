@@ -13,6 +13,7 @@
 //   -s        print the 40x25 MODE 7 screen ($7C00) as ASCII
 //   -d        disable the DFS ROM (bank 14 empty)
 //   -m        BBC Master 128 (MOS 3.20, roms/bbc_master_roms.h)
+//   -J X,Y,F  joystick 1 fixed at X,Y (0..65535) with fire F (0/1)
 //   -a FILE   write the sound output as a 22050 Hz 8-bit mono WAV
 //   -M        print a summary of the MOS entry points called (OSBYTE/OSWORD by A, VDU codes)
 //   -T FILE   log every MOS call (entry, A, X, Y, PC of caller) to FILE
@@ -257,6 +258,7 @@ int main(int argc, char** argv) {
     bool show = false;
     bool dfs = true;
     bool master = false;
+    const char* joy = NULL;
     const char* disc = NULL;
     const char* disc_out = NULL;
     bool boot = false;
@@ -274,6 +276,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-s")) show = true;
         else if (!strcmp(argv[i], "-d")) dfs = false;
         else if (!strcmp(argv[i], "-m")) master = true;
+        else if (!strcmp(argv[i], "-J") && i + 1 < argc) joy = argv[++i];
         else if (!strcmp(argv[i], "-0") && i + 1 < argc) disc = argv[++i];
         else if (!strcmp(argv[i], "-W") && i + 1 < argc) disc_out = argv[++i];
         else if (!strcmp(argv[i], "-b")) boot = true;
@@ -336,6 +339,11 @@ int main(int argc, char** argv) {
     desc.swr = (chips_range_t){.ptr = swr, .size = sizeof(swr)};
     bbc_init(&bbc, &desc);
     bbc_reset(&bbc);
+    if (joy) {
+        unsigned jx = 32768, jy = 32768, jf = 0;
+        sscanf(joy, "%u,%u,%u", &jx, &jy, &jf);
+        bbc_set_joystick(&bbc, 0, (uint16_t)jx, (uint16_t)jy, jf != 0);
+    }
 
     static uint8_t disc_data[2 * 80 * 10 * 256];
     size_t disc_size = 0;
