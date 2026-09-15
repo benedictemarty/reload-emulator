@@ -182,6 +182,7 @@ typedef struct {
     uint8_t fb[BBC_FRAMEBUFFER_SIZE];
 
     uint32_t system_ticks;
+    uint8_t stall;             // Remaining cycles during which the CPU clock is held (1 MHz bus access)
 } bbc_t;
 
 // Initialize a new BBC instance
@@ -529,10 +530,29 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
     }
 }
 
-void bbc_tick(bbc_t* sys) {
-    MOS6502CPU_TICK(&sys->cpu);
+// 1 MHz bus devices: FRED/JIM ($FC00-$FDFF), CRTC/ACIA/SERPROC ($FE00-$FE1F),
+// VIAs ($FE40-$FE7F), FDC/Econet ($FE80-$FE9F), ADC ($FEC0-$FEDF)
+static inline bool _bbc_is_1mhz(uint16_t addr) {
+    if ((addr & 0xFE00) == 0xFC00) return true;
+    if ((addr & 0xFF00) != 0xFE00) return false;
+    uint8_t lo = (uint8_t)addr;
+    return lo < 0x20 || (lo >= 0x40 && lo < 0xA0) || (lo >= 0xC0 && lo < 0xE0);
+}
 
-    _bbc_mem_rw(sys, MOS6502CPU_GET_ADDR(&sys->cpu), sys->cpu.rw);
+void bbc_tick(bbc_t* sys) {
+    if (sys->stall) {
+        // CPU clock held: the access to a 1 MHz device is being stretched
+        sys->stall--;
+    } else {
+        MOS6502CPU_TICK(&sys->cpu);
+        uint16_t a = MOS6502CPU_GET_ADDR(&sys->cpu);
+        if (_bbc_is_1mhz(a)) {
+            // Stretched to the next 1 MHz edge, then one full 1 MHz cycle: 1 or 2 extra cycles
+            sys->stall = (uint8_t)((sys->system_ticks & 1) ? 1 : 2);
+        }
+
+        _bbc_mem_rw(sys, a, sys->cpu.rw);
+    }
 
     // CRTC: 2 MHz character clock in modes 0-3, 1 MHz otherwise
     if ((sys->ula_ctrl & 0x10) || (sys->system_ticks & 1)) {
