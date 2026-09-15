@@ -46,6 +46,12 @@ enum {
     BBC_KEY_Comma = 0x66, BBC_KEY_Stop = 0x67, BBC_KEY_Slash = 0x68, BBC_KEY_Copy = 0x69,
     BBC_KEY_Escape = 0x70, BBC_KEY_f1 = 0x71, BBC_KEY_f2 = 0x72, BBC_KEY_f3 = 0x73, BBC_KEY_f5 = 0x74, BBC_KEY_f6 = 0x75,
     BBC_KEY_f8 = 0x76, BBC_KEY_f9 = 0x77, BBC_KEY_Backslash = 0x78, BBC_KEY_Right = 0x79,
+    // Master 128 numeric keypad (columns 10-12)
+    BBC_KEY_Keypad4 = 0x7A, BBC_KEY_Keypad5 = 0x7B, BBC_KEY_Keypad2 = 0x7C, BBC_KEY_Keypad0 = 0x6A, BBC_KEY_Keypad1 = 0x6B,
+    BBC_KEY_Keypad3 = 0x6C, BBC_KEY_KeypadHash = 0x5A, BBC_KEY_KeypadStar = 0x5B, BBC_KEY_KeypadComma = 0x5C,
+    BBC_KEY_KeypadSlash = 0x4A, BBC_KEY_KeypadDelete = 0x4B, BBC_KEY_KeypadStop = 0x4C, BBC_KEY_KeypadPlus = 0x3A,
+    BBC_KEY_KeypadMinus = 0x3B, BBC_KEY_KeypadReturn = 0x3C, BBC_KEY_Keypad8 = 0x2A, BBC_KEY_Keypad9 = 0x2B,
+    BBC_KEY_Keypad6 = 0x1A, BBC_KEY_Keypad7 = 0x1B,
     BBC_KEY_Break = 0xFF,
 };
 

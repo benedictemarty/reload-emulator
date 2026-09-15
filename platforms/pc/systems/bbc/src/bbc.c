@@ -304,6 +304,23 @@ static int bbc_key_from_keycode(sapp_keycode k) {
         case SAPP_KEYCODE_F9: return BBC_KEY_f9;
         case SAPP_KEYCODE_F10: return BBC_KEY_f0;
         case SAPP_KEYCODE_F12: return BBC_KEY_Break;
+        // Master 128 keypad
+        case SAPP_KEYCODE_KP_0: return BBC_KEY_Keypad0;
+        case SAPP_KEYCODE_KP_1: return BBC_KEY_Keypad1;
+        case SAPP_KEYCODE_KP_2: return BBC_KEY_Keypad2;
+        case SAPP_KEYCODE_KP_3: return BBC_KEY_Keypad3;
+        case SAPP_KEYCODE_KP_4: return BBC_KEY_Keypad4;
+        case SAPP_KEYCODE_KP_5: return BBC_KEY_Keypad5;
+        case SAPP_KEYCODE_KP_6: return BBC_KEY_Keypad6;
+        case SAPP_KEYCODE_KP_7: return BBC_KEY_Keypad7;
+        case SAPP_KEYCODE_KP_8: return BBC_KEY_Keypad8;
+        case SAPP_KEYCODE_KP_9: return BBC_KEY_Keypad9;
+        case SAPP_KEYCODE_KP_ADD: return BBC_KEY_KeypadPlus;
+        case SAPP_KEYCODE_KP_SUBTRACT: return BBC_KEY_KeypadMinus;
+        case SAPP_KEYCODE_KP_MULTIPLY: return BBC_KEY_KeypadStar;
+        case SAPP_KEYCODE_KP_DIVIDE: return BBC_KEY_KeypadSlash;
+        case SAPP_KEYCODE_KP_ENTER: return BBC_KEY_KeypadReturn;
+        case SAPP_KEYCODE_KP_DECIMAL: return BBC_KEY_KeypadStop;
         default: return -1;
     }
 }

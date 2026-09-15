@@ -41,7 +41,21 @@
 #include <pico/platform.h>
 #include "pico/stdlib.h"
 
+// ROMs: in SRAM by default (fastest bus service); BBC_ROMS_IN_FLASH keeps them in
+// XIP flash (cached) to free 48 KB of SRAM — required for the Master 128 build.
+#ifdef BBC_ROMS_IN_FLASH
+#pragma push_macro("__not_in_flash")
+#undef __not_in_flash
+#define __not_in_flash() __in_flash("bbcroms")
+#endif
+#ifdef BBC_MASTER
+#include "roms/bbc_master_roms.h"
+#else
 #include "roms/bbc_roms.h"
+#endif
+#ifdef BBC_ROMS_IN_FLASH
+#pragma pop_macro("__not_in_flash")
+#endif
 #if __has_include("images/bbc_images.h")
 #include "images/bbc_images.h"
 #define BBC_NUM_IMAGES ((int)(sizeof(bbc_disc_images) / sizeof(bbc_disc_images[0])))
@@ -104,17 +118,29 @@ bbc_desc_t bbc_desc(void) {
                 .callback = {.func = audio_callback},
                 .sample_rate = 22050,
             },
-        .roms =
-            {
-                .os = {.ptr = bbc_os_rom, .size = sizeof(bbc_os_rom)},
-            },
     };
+#ifdef BBC_MASTER
+    // Master 128: MOS 3.20 in flash, 32 KB of LYNNE/ANDY/HAZEL, no sideways RAM (SRAM budget)
+    static uint8_t master_ram[0x8000];
+    desc.model = BBC_MODEL_MASTER;
+    desc.roms.os = (chips_range_t){.ptr = bbc_master_mos_rom, .size = sizeof(bbc_master_mos_rom)};
+    desc.roms.banks[9] = (chips_range_t){.ptr = bbc_master_dfs_rom, .size = 0x4000};
+    desc.roms.banks[10] = (chips_range_t){.ptr = bbc_master_viewsht_rom, .size = 0x4000};
+    desc.roms.banks[11] = (chips_range_t){.ptr = bbc_master_edit_rom, .size = 0x4000};
+    desc.roms.banks[12] = (chips_range_t){.ptr = bbc_master_basic4_rom, .size = 0x4000};
+    desc.roms.banks[13] = (chips_range_t){.ptr = bbc_master_adfs_rom, .size = 0x4000};
+    desc.roms.banks[14] = (chips_range_t){.ptr = bbc_master_view_rom, .size = 0x4000};
+    desc.roms.banks[15] = (chips_range_t){.ptr = bbc_master_terminal_rom, .size = 0x4000};
+    desc.master_ram = (chips_range_t){.ptr = master_ram, .size = sizeof(master_ram)};
+#else
+    desc.roms.os = (chips_range_t){.ptr = bbc_os_rom, .size = sizeof(bbc_os_rom)};
     desc.roms.banks[15] = (chips_range_t){.ptr = bbc_basic_rom, .size = sizeof(bbc_basic_rom)};
     desc.roms.banks[14] = (chips_range_t){.ptr = bbc_dfs_rom, .size = sizeof(bbc_dfs_rom)};
     // Sideways RAM in banks 4.. (1 x 16 KB)
     static uint8_t swr[1 * 0x4000];
     desc.ram_banks = 0x0010;
     desc.swr = (chips_range_t){.ptr = swr, .size = sizeof(swr)};
+#endif
     return desc;
 }
 
@@ -302,6 +328,24 @@ static int bbc_key_from_hid(uint8_t k) {
         case HID_KEY_SHIFT_LEFT: case HID_KEY_SHIFT_RIGHT: return BBC_KEY_Shift;
         case HID_KEY_CONTROL_LEFT: case HID_KEY_CONTROL_RIGHT: return BBC_KEY_Ctrl;
         case HID_KEY_ALT_RIGHT: return BBC_KEY_ShiftLock;
+        // Master 128 keypad
+        case HID_KEY_KEYPAD_0: return BBC_KEY_Keypad0;
+        case HID_KEY_KEYPAD_1: return BBC_KEY_Keypad1;
+        case HID_KEY_KEYPAD_2: return BBC_KEY_Keypad2;
+        case HID_KEY_KEYPAD_3: return BBC_KEY_Keypad3;
+        case HID_KEY_KEYPAD_4: return BBC_KEY_Keypad4;
+        case HID_KEY_KEYPAD_5: return BBC_KEY_Keypad5;
+        case HID_KEY_KEYPAD_6: return BBC_KEY_Keypad6;
+        case HID_KEY_KEYPAD_7: return BBC_KEY_Keypad7;
+        case HID_KEY_KEYPAD_8: return BBC_KEY_Keypad8;
+        case HID_KEY_KEYPAD_9: return BBC_KEY_Keypad9;
+        case HID_KEY_KEYPAD_ADD: return BBC_KEY_KeypadPlus;
+        case HID_KEY_KEYPAD_SUBTRACT: return BBC_KEY_KeypadMinus;
+        case HID_KEY_KEYPAD_MULTIPLY: return BBC_KEY_KeypadStar;
+        case HID_KEY_KEYPAD_DIVIDE: return BBC_KEY_KeypadSlash;
+        case HID_KEY_KEYPAD_ENTER: return BBC_KEY_KeypadReturn;
+        case HID_KEY_KEYPAD_DECIMAL: return BBC_KEY_KeypadStop;
+        case HID_KEY_KEYPAD_COMMA: return BBC_KEY_KeypadComma;
         default: return -1;
     }
 }
@@ -383,7 +427,11 @@ int main() {
     stdio_init_all();
     tusb_init();
 
+#ifdef BBC_MASTER
+    printf("BBC Master 128 on Neo6502: configuring DVI\n");
+#else
     printf("BBC Micro on Neo6502: configuring DVI\n");
+#endif
 
     dvi0.timing = &DVI_TIMING;
     dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
