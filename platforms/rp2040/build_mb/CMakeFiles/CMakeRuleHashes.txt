@@ -1,0 +1,27 @@
+# Hashes of file build rules.
+72144e3299e82d99c705370dd023d492 lib/PicoDVI/software/libdvi/CMakeFiles/PioasmBuild
+4c44a47798a3ac3122f867c0f3c42068 lib/PicoDVI/software/libdvi/CMakeFiles/PioasmBuild-complete
+72144e3299e82d99c705370dd023d492 lib/PicoDVI/software/libdvi/CMakeFiles/libdvi_dvi_serialiser_pio_h
+72144e3299e82d99c705370dd023d492 lib/PicoDVI/software/libdvi/CMakeFiles/libdvi_tmds_encode_1bpp_pio_h
+45c23dd51ec17fc502302b6149aaf621 lib/PicoDVI/software/libdvi/dvi_serialiser.pio.h
+b912a98dabc5c2ccf635273779cec445 lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-build
+90f9e2ef56d04d0b0c71a084b265828c lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-configure
+d4b23f1ff22010dfb49df4b367606118 lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-download
+b78f85b3270cb592e2b4a082959482a8 lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-install
+c9abd28afd84dea8827c71fbd71e1a62 lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-mkdir
+498831bbaadfe87affa60226ef04619d lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-patch
+1234aba29805ad2b0f59f605a1636feb lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-update
+9612b61770d8aaad88fd4451b71585f9 lib/PicoDVI/software/libdvi/tmds_encode_1bpp.pio.h
+dd9225abecb1299eeb2ad6e483b3d883 pico-sdk/src/rp2_common/boot_stage2/CMakeFiles/bs2_default_bin
+dd9225abecb1299eeb2ad6e483b3d883 pico-sdk/src/rp2_common/boot_stage2/CMakeFiles/bs2_default_padded_checksummed_asm
+d0645c86988cdb38c1ab0bf21dbf3c18 pico-sdk/src/rp2_common/boot_stage2/bs2_default.bin
+2d56473b2c37a3352143056337364ba2 pico-sdk/src/rp2_common/boot_stage2/bs2_default_padded_checksummed.S
+df1a696434d4376d58d94604b9bdc975 systems/apple2/CMakeFiles/ELF2UF2Build
+1eda555ec2417f823a6f04e5238b9bc9 systems/apple2/CMakeFiles/ELF2UF2Build-complete
+faeb0fb6799f6bda2157c621c78f438f systems/apple2/elf2uf2/src/ELF2UF2Build-stamp/ELF2UF2Build-build
+f333388704d590eb1e69ab86af30cc49 systems/apple2/elf2uf2/src/ELF2UF2Build-stamp/ELF2UF2Build-configure
+2efe97ca63e91d98e5e34a76cdbe0747 systems/apple2/elf2uf2/src/ELF2UF2Build-stamp/ELF2UF2Build-download
+427b74e14fa3a7eae0138a373cd6f25e systems/apple2/elf2uf2/src/ELF2UF2Build-stamp/ELF2UF2Build-install
+2bde2a91ecf526afc3f3b08b3859d162 systems/apple2/elf2uf2/src/ELF2UF2Build-stamp/ELF2UF2Build-mkdir
+298114f8e7f012e9907fbe0372335228 systems/apple2/elf2uf2/src/ELF2UF2Build-stamp/ELF2UF2Build-patch
+294f34b6cbaf0c96d7de92b68bfb4ba0 systems/apple2/elf2uf2/src/ELF2UF2Build-stamp/ELF2UF2Build-update

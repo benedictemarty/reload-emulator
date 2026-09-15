@@ -23,6 +23,7 @@ target_link_libraries(bbc
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(bbc)
+neo_multiboot_slot(bbc "${NEO_SLOT_BBC}")
 
 pico_enable_stdio_usb(bbc 0)
 pico_enable_stdio_uart(bbc 1)

@@ -28,6 +28,7 @@ target_link_libraries(oric
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(oric)
+neo_multiboot_slot(oric "${NEO_SLOT_ORIC}")
 
 pico_enable_stdio_usb(oric 0)
 pico_enable_stdio_uart(oric 1)

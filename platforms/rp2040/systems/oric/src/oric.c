@@ -68,6 +68,7 @@
 #include "audio.h"
 
 #include "tusb.h"
+#include "neo_multiboot.h"
 
 typedef struct {
     uint32_t version;
@@ -138,6 +139,7 @@ struct dvi_inst dvi0;
 void tmds_palette_init() { tmds_setup_palette24_symbols(oric_palette, tmds_palette, PALETTE_SIZE); }
 
 void kbd_raw_key_down(int code) {
+    if (code == (NEO_MULTIBOOT_RETURN_KEY | 0x100)) neo_multiboot_return();  // Pause (code HID | 0x100 : pas d'ASCII) : retour au firmware Neo6502
     if (isascii(code)) {
         if (isupper(code)) {
             code = tolower(code);

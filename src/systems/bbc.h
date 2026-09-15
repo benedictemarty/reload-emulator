@@ -39,7 +39,7 @@
 // MODE 7 uses the SAA5050 English glyphs (bbc_teletext_font.h, from the
 // public-domain Bedstead bitmaps) with the SAA5050 character rounding;
 // colour, graphics (contiguous/separated, hold), double height and
-// background codes are honoured; flashing and conceal are not.
+// background, flash (48 fields on / 16 off) and conceal codes are honoured.
 //
 // ## zlib/libpng license
 //
@@ -150,6 +150,7 @@ typedef struct {
     bool field;                // Interlace field (odd/even)
     int display_y;             // Output scanline (0 = first displayed row)
     bool frame_done;           // Set at the end of each vsync
+    uint32_t field_count;      // Fields since power-up (teletext flash: 48 on / 16 off)
 
     // Video ULA
     bool ula_dirty;            // Palette or control changed: rebuild the byte -> pixels table
@@ -163,6 +164,11 @@ typedef struct {
     // Floppy disc controller
     wd1770_t fdc;
     bool nmi;
+
+    // uPD7002 ADC (analogue joysticks, centred): status, 16-bit result, conversion timer in us
+    uint8_t adc_status;
+    uint16_t adc_value;
+    uint32_t adc_timer;
 
     // Teletext glyphs, 12x20 after SAA5050 rounding (bits 11..0)
     uint16_t tt_glyphs[96][20];
@@ -272,6 +278,8 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
     sys->ic32 = 0xFF;  // Sound write and keyboard write disabled, screen base 3
     memset(sys->ula_pal, 0, sizeof(sys->ula_pal));
     sys->ula_dirty = true;
+    sys->adc_status = 0xC0;   // Not busy, no conversion
+    sys->adc_value = 0x8000;
     memset(_bbc_empty_bank, 0xFF, sizeof(_bbc_empty_bank));
 
     _bbc_init_memorymap(sys);
@@ -462,9 +470,18 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 }
                 break;
             case 0xC0:
-                // ADC uPD7002: conversion never completes
+                // ADC uPD7002: bits 0-1 channel, 2 flag, 3 10-bit, 4-5 result MSBs,
+                // 6 not busy, 7 not end of conversion; conversion 4 ms (8 bit) / 10 ms
                 if (rw) {
-                    data = (addr & 3) == 0 ? 0x40 : 0x00;
+                    switch (addr & 3) {
+                        case 0: data = sys->adc_status; break;
+                        case 1: sys->adc_status |= 0x80; data = (uint8_t)(sys->adc_value >> 8); break;
+                        default: data = (uint8_t)sys->adc_value; break;
+                    }
+                } else if ((addr & 3) == 0) {
+                    uint8_t cmd = MOS6502CPU_GET_DATA(&sys->cpu);
+                    sys->adc_status = (uint8_t)((cmd & 0x0F) | 0x80);   // busy, not complete
+                    sys->adc_timer = (cmd & 0x08) ? 10000 : 4000;
                 }
                 break;
             case 0xE0:
@@ -510,6 +527,14 @@ void bbc_tick(bbc_t* sys) {
         _bbc_update_keyboard(sys, true);
         _bbc_update_ic32(sys);
         mos6522via_set_ca1(&sys->sysvia, sys->vsync);
+        if (sys->adc_timer) {
+            sys->adc_timer = sys->adc_timer > 2 ? sys->adc_timer - 2 : 0;
+            if (sys->adc_timer == 0) {
+                sys->adc_value = 0x8000;                                  // Joystick centred
+                sys->adc_status = (uint8_t)((sys->adc_status & 0x0F) | 0x40 | ((sys->adc_value >> 10) & 0x30));
+            }
+        }
+        mos6522via_set_cb1(&sys->sysvia, (sys->adc_status & 0x80) != 0);   // CB1 = not end of conversion
         bool irq = mos6522via_tick(&sys->sysvia, 2);
         irq |= mos6522via_tick(&sys->uservia, 2);
         MOS6502CPU_SET_IRQ(&sys->cpu, irq);
@@ -596,6 +621,7 @@ static void _bbc_crtc_tick(bbc_t* sys) {
             if (sys->vsync_count == 0) {
                 sys->vsync = false;
                 sys->frame_done = true;
+                sys->field_count++;
             }
         }
     }
@@ -668,8 +694,7 @@ static inline uint8_t _bbc_ula_index(uint8_t byte) {
 // 5x9 in a 6x10 cell, doubled to 12x20 with the SAA5050 character rounding
 // (an off pixel gets a quadrant filled when its two orthogonal neighbours
 // towards that quadrant are on and the diagonal one is off). One frame line
-// = two of the 20 rows (the two interlaced fields merged). Not emulated:
-// flashing (0x08/0x09), conceal (0x18).
+// = two of the 20 rows (the two interlaced fields merged).
 static void _bbc_teletext_init(bbc_t* sys) {
     for (int ch = 0; ch < 96; ch++) {
         const uint8_t* g = bbc_teletext_font[ch];
@@ -699,7 +724,7 @@ static void _bbc_teletext_init(bbc_t* sys) {
 
 typedef struct {
     uint8_t fg, bg;
-    bool graphics, separated, double_height, hold;
+    bool graphics, separated, double_height, hold, flash, conceal;
     uint8_t held;
     bool held_separated;
 } _bbc_tt_state_t;
@@ -714,6 +739,7 @@ static inline void _bbc_tt_put(uint8_t* p, uint16_t bits, uint8_t fg, uint8_t bg
 
 static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint16_t ma, int raster) {
     _bbc_tt_state_t st = {.fg = 7, .bg = 0};
+    bool flash_off = (sys->field_count & 63) >= 48;
     // A row following a row that used double height shows the bottom halves
     bool bottom_row = false;
     if (sys->vcc > 0) {
@@ -738,11 +764,14 @@ static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint
             // Control codes: set-after, except background which applies at once
             switch (ch) {
                 case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07:
-                    st.fg = ch; st.graphics = false; break;
+                    st.fg = ch; st.graphics = false; st.conceal = false; break;
+                case 0x08: st.flash = true; break;
+                case 0x09: st.flash = false; break;
                 case 0x0C: st.double_height = false; break;
                 case 0x0D: st.double_height = true; break;
                 case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16: case 0x17:
-                    st.fg = ch - 0x10; st.graphics = true; break;
+                    st.fg = ch - 0x10; st.graphics = true; st.conceal = false; break;
+                case 0x18: st.conceal = true; break;
                 case 0x19: st.separated = false; break;
                 case 0x1A: st.separated = true; break;
                 case 0x1C: st.bg = 0; bg = 0; break;
@@ -789,6 +818,9 @@ static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint
                 if (gap_line) { lmask = 0; rmask = 0; }
             }
             bits = (uint16_t)((left ? lmask : 0) | (right ? rmask : 0));
+        }
+        if (st.conceal || (st.flash && flash_off)) {
+            bits = 0;
         }
         _bbc_tt_put(p, bits, fg, bg);
     }

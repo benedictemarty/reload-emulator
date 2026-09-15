@@ -79,6 +79,7 @@
 
 #include "tusb.h"
 #include "class/hid/hid.h"
+#include "neo_multiboot.h"
 #include "ff.h"
 
 typedef struct {
@@ -291,6 +292,7 @@ static int bbc_key_from_hid(uint8_t k) {
 }
 
 void hid_raw_key_down(uint8_t keycode) {
+    if (keycode == NEO_MULTIBOOT_RETURN_KEY) neo_multiboot_return();  // Pause : back to the Neo6502 firmware (multi-boot)
     if (keycode == HID_KEY_F11) {
         // Next disc image
         if (num_images() > 0) insert_image((current_image + 1) % num_images());

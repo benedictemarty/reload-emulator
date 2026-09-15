@@ -1,0 +1,3 @@
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/pioasm/CMakeFiles/pioasm.dir
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/pioasm/CMakeFiles/edit_cache.dir
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/pioasm/CMakeFiles/rebuild_cache.dir

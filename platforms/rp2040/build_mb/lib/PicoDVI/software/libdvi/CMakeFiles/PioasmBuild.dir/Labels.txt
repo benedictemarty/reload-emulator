@@ -1,0 +1,13 @@
+# Target labels
+ PioasmBuild
+# Source files and their labels
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/CMakeFiles/PioasmBuild
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/CMakeFiles/PioasmBuild.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/CMakeFiles/PioasmBuild-complete.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-build.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-configure.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-download.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-install.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-mkdir.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-patch.rule
+/home/bmarty/reload-emulator/platforms/rp2040/build_mb/lib/PicoDVI/software/libdvi/pioasm/src/PioasmBuild-stamp/PioasmBuild-update.rule
