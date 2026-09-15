@@ -16,6 +16,7 @@
 //   -M        print a summary of the MOS entry points called (OSBYTE/OSWORD by A, VDU codes)
 //   -T FILE   log every MOS call (entry, A, X, Y, PC of caller) to FILE
 //   -H        count direct SHEILA accesses ($FE00-$FEFF) made by code running from RAM (< $8000)
+//   -C        65C02 compatibility check: undocumented NMOS opcodes executed, JMP ($xxFF), decimal ADC/SBC
 //   -0 FILE   insert FILE (.ssd or .dsd) in drive 0
 //   -W FILE   write the (possibly modified) drive 0 image to FILE at the end
 //   -b        hold SHIFT during the first 40 frames (SHIFT+BREAK auto-boot)
@@ -72,6 +73,22 @@ static uint32_t osword_calls[0x100];
 static uint32_t vdu_calls[0x100];
 static uint32_t oscli_calls;
 static bool hw_summary;
+static bool c02_check;
+static uint32_t c02_illegal[256];
+static uint16_t c02_illegal_pc[256];
+static uint32_t c02_jmp_ff, c02_decimal;
+
+// Documented NMOS 6502 opcodes (151)
+static const uint8_t nmos_legal[256] = {
+    1,1,0,0,0,1,1,0,1,1,1,0,0,1,1,0, 1,1,0,0,0,1,1,0,1,1,0,0,0,1,1,0,
+    1,1,0,0,1,1,1,0,1,1,1,0,1,1,1,0, 1,1,0,0,0,1,1,0,1,1,0,0,0,1,1,0,
+    1,1,0,0,0,1,1,0,1,1,1,0,1,1,1,0, 1,1,0,0,0,1,1,0,1,1,0,0,0,1,1,0,
+    1,1,0,0,0,1,1,0,1,1,1,0,1,1,1,0, 1,1,0,0,0,1,1,0,1,1,0,0,0,1,1,0,
+    0,1,0,0,1,1,1,0,1,0,1,0,1,1,1,0, 1,1,0,0,1,1,1,0,1,1,1,0,0,1,0,0,
+    1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0, 1,1,0,0,1,1,1,0,1,1,1,0,1,1,1,0,
+    1,1,0,0,1,1,1,0,1,1,1,0,1,1,1,0, 1,1,0,0,0,1,1,0,1,1,0,0,0,1,1,0,
+    1,1,0,0,1,1,1,0,1,1,1,0,1,1,1,0, 1,1,0,0,0,1,1,0,1,1,0,0,0,1,1,0,
+};
 static uint32_t hw_access[256][2];       // [$FExx][read/write] from RAM code
 static uint16_t last_sync_pc;
 
@@ -94,6 +111,18 @@ static void mos_debug_cb(void* user_data, uint64_t pins) {
     if (!bbc.cpu.sync) return;
     uint16_t pc = bbc.cpu.PC;
     last_sync_pc = pc;
+    if (c02_check) {
+        uint8_t op = mem_rd(&bbc.mem, pc);
+        if (!nmos_legal[op]) {
+            if (!c02_illegal[op]) c02_illegal_pc[op] = pc;
+            c02_illegal[op]++;
+        } else if (op == 0x6C && mem_rd(&bbc.mem, (uint16_t)(pc + 1)) == 0xFF) {
+            c02_jmp_ff++;
+        } else if ((op == 0x61 || op == 0x65 || op == 0x69 || op == 0x6D || op == 0x71 || op == 0x75 || op == 0x79 || op == 0x7D ||
+                    op == 0xE1 || op == 0xE5 || op == 0xE9 || op == 0xED || op == 0xF1 || op == 0xF5 || op == 0xF9 || op == 0xFD) && bbc.cpu.df) {
+            c02_decimal++;
+        }
+    }
     if (pc < 0xFFB9 || pc > 0xFFF7) return;
     const char* name = mos_name((uint8_t)pc);
     if (!name) return;
@@ -116,6 +145,18 @@ static void mos_debug_cb(void* user_data, uint64_t pins) {
         }
         fputc('\n', mos_log);
     }
+}
+
+static void c02_print_summary(void) {
+    printf("--- compatibilité 65C02 ---\n");
+    uint32_t total = 0;
+    for (int op = 0; op < 256; op++) {
+        if (c02_illegal[op]) {
+            printf("  opcode NMOS non documenté %02X : %u fois (1er à %04X)\n", op, c02_illegal[op], c02_illegal_pc[op]);
+            total += c02_illegal[op];
+        }
+    }
+    printf("  opcodes non documentés : %u ; JMP ($xxFF) : %u ; ADC/SBC décimal : %u\n", total, c02_jmp_ff, c02_decimal);
 }
 
 static void hw_print_summary(void) {
@@ -221,6 +262,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-a") && i + 1 < argc) wav_path = argv[++i];
         else if (!strcmp(argv[i], "-M")) mos_summary = true;
         else if (!strcmp(argv[i], "-H")) hw_summary = true;
+        else if (!strcmp(argv[i], "-C")) c02_check = true;
         else if (!strcmp(argv[i], "-T") && i + 1 < argc) mos_log_path = argv[++i];
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") && i + 1 < argc) hold_frames = atoi(argv[++i]);
@@ -239,7 +281,7 @@ int main(int argc, char** argv) {
     if (mos_log_path) {
         mos_log = fopen(mos_log_path, "w");
     }
-    if (mos_summary || mos_log || hw_summary) {
+    if (mos_summary || mos_log || hw_summary || c02_check) {
         desc.debug.callback.func = mos_debug_cb;
         desc.debug.stopped = &mos_stop;
     }
@@ -327,6 +369,7 @@ int main(int argc, char** argv) {
     if (mos_log) fclose(mos_log);
     if (mos_summary) mos_print_summary();
     if (hw_summary) hw_print_summary();
+    if (c02_check) c02_print_summary();
     if (show) print_mode7();
     if (ppm) write_ppm(ppm);
     if (ram) {
