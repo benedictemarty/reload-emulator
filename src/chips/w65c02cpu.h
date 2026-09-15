@@ -89,6 +89,8 @@ typedef struct {
 #define MOS6502CPU_SET_DATA(c, d)    ((c)->data = d)
 #define MOS6502CPU_SET_IRQ(c, state) ((c)->irq = state)
 #define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered = ((state) && !(c)->nmi), (c)->nmi = (state))
+// True during an opcode fetch cycle (not available from the real CPU: no SYNC pin on the board)
+#define MOS6502CPU_SYNC(c)           ((c)->sync)
 
 void w65c02cpu_init(w65c02cpu_t* c);
 void w65c02cpu_tick(w65c02cpu_t* c);

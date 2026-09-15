@@ -702,7 +702,7 @@ void bbc_tick(bbc_t* sys) {
     } else {
         MOS6502CPU_TICK(&sys->cpu);
         uint16_t a = MOS6502CPU_GET_ADDR(&sys->cpu);
-        if (sys->cpu.sync) sys->last_pc = a;
+        if (MOS6502CPU_SYNC(&sys->cpu)) sys->last_pc = a;
         if (_bbc_is_1mhz(a)) {
             // Stretched to the next 1 MHz edge, then one full 1 MHz cycle: 1 or 2 extra cycles
             sys->stall = (uint8_t)((sys->system_ticks & 1) ? 1 : 2);

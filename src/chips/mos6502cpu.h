@@ -219,6 +219,8 @@ extern "C" {
 #define MOS6502CPU_SET_IRQ(c, state) ((c)->irq = state)
 // Level-driven NMI: the rising edge is reported once (nmi_triggered), call every tick
 #define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered = ((state) && !(c)->nmi), (c)->nmi = (state))
+// True during an opcode fetch cycle (not available from the real CPU: no SYNC pin on the board)
+#define MOS6502CPU_SYNC(c)           ((c)->sync)
 #define MOS6510CPU_SET_PORT(c, p)    ((c)->port = p)
 #define MOS6510CPU_CHECK_IO(c)       (((c)->addr & 0xFFFEULL) == 0)
 
