@@ -13,6 +13,8 @@
 //   -s        print the 40x25 MODE 7 screen ($7C00) as ASCII
 //   -d        disable the DFS ROM (bank 14 empty)
 //   -a FILE   write the sound output as a 22050 Hz 8-bit mono WAV
+//   -M        print a summary of the MOS entry points called (OSBYTE/OSWORD by A, VDU codes)
+//   -T FILE   log every MOS call (entry, A, X, Y, PC of caller) to FILE
 //   -0 FILE   insert FILE (.ssd or .dsd) in drive 0
 //   -W FILE   write the (possibly modified) drive 0 image to FILE at the end
 //   -b        hold SHIFT during the first 40 frames (SHIFT+BREAK auto-boot)
@@ -58,6 +60,69 @@
 #include "systems/bbc_keys.h"
 
 static bbc_t bbc;
+
+/*-- MOS call tracing (US-01: which MOS services a program uses) ------------*/
+static bool mos_summary;
+static FILE* mos_log;
+static bool mos_stop;
+static uint32_t mos_calls[0x100];       // Per entry point low byte ($B9..$F7)
+static uint32_t osbyte_calls[0x100];
+static uint32_t osword_calls[0x100];
+static uint32_t vdu_calls[0x100];
+static uint32_t oscli_calls;
+
+static const char* mos_name(uint8_t lo) {
+    switch (lo) {
+        case 0xB9: return "OSRDRM"; case 0xBF: return "OSEVEN"; case 0xC2: return "GSINIT"; case 0xC5: return "GSREAD";
+        case 0xC8: return "NVRDCH"; case 0xCB: return "NVWRCH"; case 0xCE: return "OSFIND"; case 0xD1: return "OSGBPB";
+        case 0xD4: return "OSBPUT"; case 0xD7: return "OSBGET"; case 0xDA: return "OSARGS"; case 0xDD: return "OSFILE";
+        case 0xE0: return "OSRDCH"; case 0xE3: return "OSASCI"; case 0xE7: return "OSNEWL"; case 0xEE: return "OSWRCH";
+        case 0xF1: return "OSWORD"; case 0xF4: return "OSBYTE"; case 0xF7: return "OSCLI";
+        default: return 0;
+    }
+}
+
+static void mos_debug_cb(void* user_data, uint64_t pins) {
+    (void)user_data; (void)pins;
+    if (!bbc.cpu.sync) return;
+    uint16_t pc = bbc.cpu.PC;
+    if (pc < 0xFFB9 || pc > 0xFFF7) return;
+    const char* name = mos_name((uint8_t)pc);
+    if (!name) return;
+    uint8_t a = bbc.cpu.A, x = bbc.cpu.X, y = bbc.cpu.Y;
+    mos_calls[(uint8_t)pc]++;
+    if (pc == 0xFFF4) osbyte_calls[a]++;
+    else if (pc == 0xFFF1) osword_calls[a]++;
+    else if (pc == 0xFFEE || pc == 0xFFE3) vdu_calls[a]++;
+    else if (pc == 0xFFF7) oscli_calls++;
+    if (mos_log) {
+        // Caller: return address on the stack (JSR pushes PC-1)
+        uint16_t sp = (uint16_t)(0x100 | ((bbc.cpu.S + 1) & 0xFF));
+        uint16_t ret = (uint16_t)((bbc.ram[sp] | (bbc.ram[(uint16_t)(sp + 1)] << 8)) + 1);
+        fprintf(mos_log, "%10u %s A=%02X X=%02X Y=%02X from %04X", bbc.system_ticks, name, a, x, y, (uint16_t)(ret - 3));
+        if (pc == 0xFFF7) {
+            uint16_t p = (uint16_t)(x | (y << 8));
+            fputs("  \"", mos_log);
+            for (int i = 0; i < 40 && bbc.ram[(uint16_t)(p + i)] != 13; i++) fputc(bbc.ram[(uint16_t)(p + i)], mos_log);
+            fputc('"', mos_log);
+        }
+        fputc('\n', mos_log);
+    }
+}
+
+static void mos_print_summary(void) {
+    printf("--- appels MOS ---\n");
+    for (int lo = 0xB9; lo <= 0xF7; lo++) {
+        if (mos_calls[lo]) printf("  %-7s $FF%02X : %u\n", mos_name((uint8_t)lo), lo, mos_calls[lo]);
+    }
+    printf("  OSBYTE :");
+    for (int a = 0; a < 256; a++) if (osbyte_calls[a]) printf(" &%02X(%u)", a, osbyte_calls[a]);
+    printf("\n  OSWORD :");
+    for (int a = 0; a < 256; a++) if (osword_calls[a]) printf(" &%02X(%u)", a, osword_calls[a]);
+    printf("\n  VDU    :");
+    for (int a = 0; a < 32; a++) if (vdu_calls[a]) printf(" %d(%u)", a, vdu_calls[a]);
+    printf("  (>=32 : %u)\n", (unsigned)({ uint32_t t = 0; for (int a = 32; a < 256; a++) t += vdu_calls[a]; t; }));
+}
 
 static FILE* wav;
 static uint32_t wav_samples;
@@ -123,6 +188,7 @@ int main(int argc, char** argv) {
     const char* disc_out = NULL;
     bool boot = false;
     const char* wav_path = NULL;
+    const char* mos_log_path = NULL;
     int wait_frames = 50;
     int pause_until = 0;
     int hold_frames = 3;
@@ -138,6 +204,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-W") && i + 1 < argc) disc_out = argv[++i];
         else if (!strcmp(argv[i], "-b")) boot = true;
         else if (!strcmp(argv[i], "-a") && i + 1 < argc) wav_path = argv[++i];
+        else if (!strcmp(argv[i], "-M")) mos_summary = true;
+        else if (!strcmp(argv[i], "-T") && i + 1 < argc) mos_log_path = argv[++i];
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") && i + 1 < argc) hold_frames = atoi(argv[++i]);
         else {
@@ -152,6 +220,13 @@ int main(int argc, char** argv) {
             .os = {.ptr = bbc_os_rom, .size = sizeof(bbc_os_rom)},
         },
     };
+    if (mos_log_path) {
+        mos_log = fopen(mos_log_path, "w");
+    }
+    if (mos_summary || mos_log) {
+        desc.debug.callback.func = mos_debug_cb;
+        desc.debug.stopped = &mos_stop;
+    }
     if (wav_path) {
         wav = fopen(wav_path, "wb");
         if (wav) fseek(wav, 44, SEEK_SET);
@@ -233,6 +308,8 @@ int main(int argc, char** argv) {
         wav_header(wav, wav_samples);
         fclose(wav);
     }
+    if (mos_log) fclose(mos_log);
+    if (mos_summary) mos_print_summary();
     if (show) print_mode7();
     if (ppm) write_ppm(ppm);
     if (ram) {
