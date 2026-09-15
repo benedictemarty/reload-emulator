@@ -41,7 +41,12 @@
 
 #include "chips/chips_common.h"
 #include "common.h"
+// CPU core: W65C02S (as on the Neo6502 board) by default, -DBBC_CPU_NMOS for the NMOS 6502
+#ifdef BBC_CPU_NMOS
 #include "chips/mos6502cpu.h"
+#else
+#include "chips/w65c02cpu.h"
+#endif
 #include "chips/mos6522via.h"
 #include "chips/mem.h"
 #include "chips/clk.h"
