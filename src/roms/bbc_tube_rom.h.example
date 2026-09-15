@@ -1,0 +1,6 @@
+#pragma once
+#include <stdint.h>
+// Acorn 6502 second processor Tube OS 1.10 (2048 bytes), tools/bin2hdr
+uint8_t __not_in_flash() bbc_tube_rom[] = {
+    // MD5 (TUBE110.rom) = a77c7946128ca0b2c5e5a66b17c99dae
+};

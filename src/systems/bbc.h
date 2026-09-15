@@ -19,6 +19,7 @@
 // - chips/mem.h
 // - chips/clk.h
 // - devices/wd1770.h
+// - devices/tube.h, chips/w65c02cpu.h (with W65C02_NO_MACROS when the host CPU is another core)
 //
 // ## The BBC Micro Model B
 //
@@ -111,6 +112,10 @@ typedef struct {
     chips_range_t master_ram;
     // Master 128 CMOS RAM contents (50 bytes) or .ptr == 0 for the defaults
     chips_range_t nvram;
+    // Tube 6502 second processor (3 MHz, 64 KB): enabled when tube_rom.ptr != 0 (2 KB ROM)
+    // and tube_ram provides 64 KB owned by the caller
+    chips_range_t tube_rom;
+    chips_range_t tube_ram;
 } bbc_desc_t;
 
 // SN76489 sound generator state
@@ -213,6 +218,15 @@ typedef struct {
 
     uint32_t system_ticks;
     uint8_t stall;             // Remaining cycles during which the CPU clock is held (1 MHz bus access)
+
+    // Tube second processor
+    bool tube_enabled;
+    tube_t tube;
+    w65c02cpu_t para;          // Parasite 6502 (65C02) at 3 MHz
+    uint8_t* para_ram;         // 64 KB
+    const uint8_t* para_rom;   // 2 KB boot ROM at $F000-$FFFF (mirrored) while in boot mode
+    bool para_boot;
+    uint8_t para_acc;          // 3 parasite cycles per 2 host cycles
 } bbc_t;
 
 // Initialize a new BBC instance
@@ -332,6 +346,15 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
         }
     }
 
+    if (desc->tube_rom.ptr && desc->tube_ram.ptr && desc->tube_ram.size >= 0x10000) {
+        sys->tube_enabled = true;
+        sys->para_rom = desc->tube_rom.ptr;
+        sys->para_ram = desc->tube_ram.ptr;
+        tube_init(&sys->tube);
+        w65c02cpu_init(&sys->para);
+        sys->para_boot = true;
+    }
+
     MOS6502CPU_INIT(&sys->cpu, &(MOS6502CPU_DESC_T){0});
     mos6522via_init(&sys->sysvia);
     mos6522via_init(&sys->uservia);
@@ -368,6 +391,11 @@ void bbc_reset(bbc_t* sys) {
     mos6522via_reset(&sys->sysvia);
     mos6522via_reset(&sys->uservia);
     wd1770_reset(&sys->fdc);
+    if (sys->tube_enabled) {
+        tube_reset(&sys->tube);
+        sys->para.res = true;
+        sys->para_boot = true;
+    }
     sys->romsel = 0;
     sys->acccon = 0;
     sys->ic32 = 0xFF;
@@ -671,8 +699,11 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 }
                 break;
             case 0xE0:
-                // Tube: absent
-                if (rw) {
+                // Tube ULA host registers ($FEE0-$FEE7, mirrored)
+                if (sys->tube_enabled) {
+                    if (rw) data = tube_host_read(&sys->tube, addr & 7);
+                    else tube_host_write(&sys->tube, addr & 7, MOS6502CPU_GET_DATA(&sys->cpu));
+                } else if (rw) {
                     data = 0xFE;
                 }
                 break;
@@ -714,6 +745,36 @@ static inline bool _bbc_is_1mhz(uint16_t addr) {
     return lo < 0x20 || (lo >= 0x40 && lo < 0xA0) || (lo >= 0xC0 && lo < 0xE0);
 }
 
+// One cycle of the Tube 6502 second processor
+static void _bbc_parasite_tick(bbc_t* sys) {
+    tube_t* t = &sys->tube;
+    if (t->status & TUBE_ST_T) {
+        tube_reset(t);
+        t->status &= (uint8_t)~TUBE_ST_T;
+    }
+    if (t->status & TUBE_ST_P) {
+        // Parasite held in reset while P is set
+        sys->para.res = true;
+        sys->para_boot = true;
+        return;
+    }
+    sys->para.irq = t->pirq;
+    sys->para.nmi_triggered = t->pnmi && !sys->para.nmi;
+    sys->para.nmi = t->pnmi;
+    w65c02cpu_tick(&sys->para);
+    uint16_t a = sys->para.addr;
+    if ((a & 0xFFF8) == 0xFEF8) {
+        if (sys->para.rw) sys->para.data = tube_parasite_read(t, a & 7);
+        else tube_parasite_write(t, a & 7, sys->para.data);
+        sys->para_boot = false;                       // First register access ends boot mode
+    } else if (sys->para.rw) {
+        if (sys->para_boot && a >= 0xF000) sys->para.data = sys->para_rom[a & 0x7FF];
+        else sys->para.data = sys->para_ram[a];
+    } else {
+        sys->para_ram[a] = sys->para.data;
+    }
+}
+
 void bbc_tick(bbc_t* sys) {
     if (sys->stall) {
         // CPU clock held: the access to a 1 MHz device is being stretched
@@ -752,6 +813,7 @@ void bbc_tick(bbc_t* sys) {
         mos6522via_set_cb1(&sys->sysvia, (sys->adc_status & 0x80) != 0);   // CB1 = not end of conversion
         bool irq = mos6522via_tick(&sys->sysvia, 2);
         irq |= mos6522via_tick(&sys->uservia, 2);
+        if (sys->tube_enabled) irq |= sys->tube.hirq;
         MOS6502CPU_SET_IRQ(&sys->cpu, irq);
         wd1770_tick(&sys->fdc);
         wd1770_tick(&sys->fdc);
@@ -762,6 +824,15 @@ void bbc_tick(bbc_t* sys) {
     // Sound chip clock: 250 kHz
     if ((sys->system_ticks & 7) == 7) {
         _bbc_sn_tick(sys);
+    }
+
+    // Tube second processor: 3 cycles per 2 host cycles
+    if (sys->tube_enabled) {
+        sys->para_acc += 3;
+        while (sys->para_acc >= 2) {
+            sys->para_acc -= 2;
+            _bbc_parasite_tick(sys);
+        }
     }
 
     sys->system_ticks++;

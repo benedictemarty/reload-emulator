@@ -13,6 +13,7 @@
 //   -s        print the 40x25 MODE 7 screen ($7C00) as ASCII
 //   -d        disable the DFS ROM (bank 14 empty)
 //   -m        BBC Master 128 (MOS 3.20, roms/bbc_master_roms.h)
+//   -2        6502 second processor on the Tube (roms/bbc_tube_rom.h)
 //   -J X,Y,F  joystick 1 fixed at X,Y (0..65535) with fire F (0/1)
 //   -a FILE   write the sound output as a 22050 Hz 8-bit mono WAV
 //   -M        print a summary of the MOS entry points called (OSBYTE/OSWORD by A, VDU codes)
@@ -53,6 +54,10 @@
 #include <string.h>
 
 #include "roms/bbc_roms.h"
+#if __has_include("roms/bbc_tube_rom.h")
+#include "roms/bbc_tube_rom.h"
+#define HAVE_TUBE_ROM 1
+#endif
 #if __has_include("roms/bbc_master_roms.h")
 #include "roms/bbc_master_roms.h"
 #define HAVE_MASTER_ROMS 1
@@ -69,6 +74,11 @@
 #include "chips/mem.h"
 #include "chips/clk.h"
 #include "devices/wd1770.h"
+#include "devices/tube.h"
+#ifdef BBC_CPU_NMOS
+#define W65C02_NO_MACROS
+#include "chips/w65c02cpu.h"
+#endif
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
 
@@ -260,6 +270,7 @@ int main(int argc, char** argv) {
     bool show = false;
     bool dfs = true;
     bool master = false;
+    bool tube = false;
     const char* joy = NULL;
     const char* disc = NULL;
     const char* disc_out = NULL;
@@ -278,6 +289,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-s")) show = true;
         else if (!strcmp(argv[i], "-d")) dfs = false;
         else if (!strcmp(argv[i], "-m")) master = true;
+        else if (!strcmp(argv[i], "-2")) tube = true;
         else if (!strcmp(argv[i], "-J") && i + 1 < argc) joy = argv[++i];
         else if (!strcmp(argv[i], "-0") && i + 1 < argc) disc = argv[++i];
         else if (!strcmp(argv[i], "-W") && i + 1 < argc) disc_out = argv[++i];
@@ -315,6 +327,16 @@ int main(int argc, char** argv) {
     desc.roms.banks[15] = (chips_range_t){.ptr = bbc_basic_rom, .size = sizeof(bbc_basic_rom)};
     if (dfs) {
         desc.roms.banks[14] = (chips_range_t){.ptr = bbc_dfs_rom, .size = sizeof(bbc_dfs_rom)};
+    }
+    static uint8_t tube_ram[0x10000];
+    if (tube) {
+#ifdef HAVE_TUBE_ROM
+        desc.tube_rom = (chips_range_t){.ptr = bbc_tube_rom, .size = sizeof(bbc_tube_rom)};
+        desc.tube_ram = (chips_range_t){.ptr = tube_ram, .size = sizeof(tube_ram)};
+#else
+        fprintf(stderr, "roms/bbc_tube_rom.h absent\n");
+        return 2;
+#endif
     }
     static uint8_t master_ram[0x8000];
     if (master) {

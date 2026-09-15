@@ -78,6 +78,9 @@ typedef struct {
     uint16_t irq_pip, nmi_pip;   // Interface compatibility (unused)
 } w65c02cpu_t;
 
+// Define W65C02_NO_MACROS to use this core as a second CPU next to another
+// MOS6502CPU_* provider (e.g. the Tube second processor beside the real CPU driver).
+#ifndef W65C02_NO_MACROS
 #define MOS6502CPU_T                 w65c02cpu_t
 #define MOS6502CPU_DESC_T            w65c02cpu_desc_t
 #define MOS6502CPU_INIT(c, desc)     w65c02cpu_init(c)
@@ -91,6 +94,7 @@ typedef struct {
 #define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered = ((state) && !(c)->nmi), (c)->nmi = (state))
 // True during an opcode fetch cycle (not available from the real CPU: no SYNC pin on the board)
 #define MOS6502CPU_SYNC(c)           ((c)->sync)
+#endif  // W65C02_NO_MACROS
 
 void w65c02cpu_init(w65c02cpu_t* c);
 void w65c02cpu_tick(w65c02cpu_t* c);

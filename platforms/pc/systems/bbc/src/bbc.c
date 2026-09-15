@@ -58,6 +58,11 @@
 #include "chips/mem.h"
 #include "chips/clk.h"
 #include "devices/wd1770.h"
+#include "devices/tube.h"
+#ifdef BBC_CPU_NMOS
+#define W65C02_NO_MACROS
+#include "chips/w65c02cpu.h"
+#endif
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
 
