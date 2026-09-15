@@ -80,13 +80,15 @@ typedef enum {
 // Sector reader for images that do not fit in memory (e.g. a file on a USB
 // drive): fills buf with the 256 bytes at byte offset `offset` of the image.
 typedef bool (*wd1770_read_sector_t)(void* ctx, uint32_t offset, uint8_t* buf);
+typedef bool (*wd1770_write_sector_t)(void* ctx, uint32_t offset, const uint8_t* buf);
 
 typedef struct {
     uint8_t* data;           // Image bytes (writable copy), or 0 when no disc / streamed
     size_t size;
     int sides;               // 1 (.ssd) or 2 (.dsd)
     bool write_protected;
-    wd1770_read_sector_t read_sector;  // Optional streamed access (always write-protected)
+    wd1770_read_sector_t read_sector;  // Optional streamed access
+    wd1770_write_sector_t write_sector;  // Optional; streamed images without it are write-protected
     void* ctx;
 } wd1770_disc_t;
 
@@ -129,7 +131,8 @@ void wd1770_reset(wd1770_t* fdc);
 // Insert an image; data must stay valid; sides = 1 (.ssd) or 2 (.dsd)
 void wd1770_insert(wd1770_t* fdc, int drive, uint8_t* data, size_t size, int sides, bool write_protected);
 // Insert a streamed (read-only) image accessed sector by sector through `read_sector`
-void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd1770_read_sector_t read_sector, void* ctx);
+void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd1770_read_sector_t read_sector,
+                            wd1770_write_sector_t write_sector, void* ctx);
 void wd1770_eject(wd1770_t* fdc, int drive);
 // Registers at $FE84-$FE87 (addr & 3), control at $FE80
 uint8_t wd1770_read(wd1770_t* fdc, uint8_t reg);
@@ -179,13 +182,15 @@ void wd1770_insert(wd1770_t* fdc, int drive, uint8_t* data, size_t size, int sid
     fdc->disc[drive].write_protected = write_protected;
 }
 
-void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd1770_read_sector_t read_sector, void* ctx) {
+void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd1770_read_sector_t read_sector,
+                            wd1770_write_sector_t write_sector, void* ctx) {
     if (drive < 0 || drive > 1) return;
     fdc->disc[drive].data = 0;
     fdc->disc[drive].size = size;
     fdc->disc[drive].sides = sides ? sides : 1;
-    fdc->disc[drive].write_protected = true;
+    fdc->disc[drive].write_protected = (write_sector == 0);
     fdc->disc[drive].read_sector = read_sector;
+    fdc->disc[drive].write_sector = write_sector;
     fdc->disc[drive].ctx = ctx;
 }
 
@@ -450,18 +455,24 @@ void wd1770_tick(wd1770_t* fdc) {
             break;
 
         case WD1770_WRITE_BYTE: {
-            uint8_t* d = fdc->disc[fdc->drive].data;
+            wd1770_disc_t* disc = &fdc->disc[fdc->drive];
+            uint8_t* d = disc->data ? disc->data + fdc->sector_offset : fdc->sector_buf;
             if (fdc->drq) {
                 // The CPU did not supply the byte in time
                 fdc->status |= WD1770_ST_LOST_TRK0;
                 fdc->data = 0;
             }
-            d[fdc->sector_offset + fdc->offset] = fdc->data;
+            d[fdc->offset] = fdc->data;
             fdc->offset++;
             if (fdc->offset < WD1770_SECTOR_SIZE) {
                 _wd1770_set_drq(fdc, true);
                 _wd1770_wait(fdc, WD1770_US_PER_BYTE, WD1770_WRITE_BYTE);
             } else {
+                if (!disc->data && disc->write_sector) {
+                    if (!disc->write_sector(disc->ctx, fdc->sector_offset, fdc->sector_buf)) {
+                        fdc->status |= WD1770_ST_WPROT;   // Reported as a write fault
+                    }
+                }
                 _wd1770_wait(fdc, WD1770_US_PER_BYTE, WD1770_SECTOR_DONE);
             }
             break;

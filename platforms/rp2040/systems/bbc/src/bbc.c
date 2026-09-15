@@ -5,7 +5,8 @@
 //
 // Core 0: CPU bus (bit-banged, 2 MHz target), USB host.
 // Discs: .ssd/.dsd files in the root of a USB drive (FAT, sectors read on
-// demand through FatFs) or images compiled in flash (src/images/bbc_images.h);
+// demand through FatFs, writes go back to the file) or images compiled in
+// flash (src/images/bbc_images.h, read-only);
 // F11 = next image (USB files first, then flash images).
 // Core 1: DVI 800x480 @ 60 Hz, BBC 640x256 framebuffer centred, lines
 //         BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP+239 doubled (256 lines do not
@@ -150,6 +151,15 @@ static bool usb_read_sector(void* ctx, uint32_t offset, uint8_t* buf) {
     return n == 256;
 }
 
+static bool usb_write_sector(void* ctx, uint32_t offset, const uint8_t* buf) {
+    (void)ctx;
+    UINT n = 0;
+    if (!usb_fil_open) return false;
+    if (f_lseek(&usb_fil, offset) != FR_OK) return false;
+    if (f_write(&usb_fil, buf, 256, &n) != FR_OK || n != 256) return false;
+    return f_sync(&usb_fil) == FR_OK;
+}
+
 static void usb_scan(void) {
     DIR dir;
     FILINFO fno;
@@ -178,12 +188,13 @@ static void insert_image(int index) {
     }
     if (index < usb_num_files) {
         const char* name = usb_files[index];
-        if (f_open(&usb_fil, name, FA_READ) != FR_OK) {
+        if (f_open(&usb_fil, name, FA_READ | FA_WRITE) != FR_OK) {
             printf("USB: cannot open %s\n", name);
             return;
         }
         usb_fil_open = true;
-        wd1770_insert_streamed(&state.bbc.fdc, 0, f_size(&usb_fil), has_ext(name, ".dsd") ? 2 : 1, usb_read_sector, 0);
+        wd1770_insert_streamed(&state.bbc.fdc, 0, f_size(&usb_fil), has_ext(name, ".dsd") ? 2 : 1, usb_read_sector,
+                               usb_write_sector, 0);
         printf("Disc inserted: %s (%u bytes)\n", name, (unsigned)f_size(&usb_fil));
     } else {
 #if BBC_NUM_IMAGES > 0
