@@ -1,0 +1,16 @@
+#pragma once
+#include <stdint.h>
+
+// clang-format off
+uint8_t __not_in_flash() bbc_os_rom[] = {
+    // Put the content of the MOS ROM here (16384 bytes)
+    //
+    // MD5 (OS12.ROM) = 0a59a5ba15fe8557b5f7fee32bbd393a
+};
+uint8_t __not_in_flash() bbc_basic_rom[] = {
+    // MD5 (BASIC2.ROM) = 2cc67be4624df4dc66617742571a8e3d
+};
+uint8_t __not_in_flash() bbc_dfs_rom[] = {
+    // MD5 (DFS-2.26.rom, Acorn 1770 DFS) = f083f49d6fe66344c650d7e74249cb96
+};
+// clang-format on

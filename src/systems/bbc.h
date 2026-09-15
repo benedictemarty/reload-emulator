@@ -1,0 +1,853 @@
+#pragma once
+
+// bbc.h
+//
+// BBC Micro Model B emulator in a C header, for the reload framework.
+//
+// Do this:
+// ~~~C
+// #define CHIPS_IMPL
+// ~~~
+// before you include this file in *one* C or C++ file to create the
+// implementation.
+//
+// You need to include the following headers before including bbc.h:
+//
+// - chips/chips_common.h
+// - chips/wdc65C02cpu.h | chips/mos6502cpu.h
+// - chips/mos6522via.h
+// - chips/mem.h
+// - chips/clk.h
+//
+// ## The BBC Micro Model B
+//
+// - 6502 at 2 MHz, 32 KB RAM ($0000-$7FFF), 16 sideways ROM banks at
+//   $8000-$BFFF selected by ROMSEL ($FE30), MOS at $C000-$FFFF with the
+//   SHEILA I/O page at $FE00-$FEFF.
+// - 6845 CRTC ($FE00/$FE01), Video ULA ($FE20 control / $FE21 palette),
+//   system VIA ($FE40-$FE5F: keyboard, IC32 addressable latch, SN76489,
+//   vsync on CA1, 100 Hz timers), user VIA ($FE60-$FE7F), 1770 FDC
+//   ($FE80-$FE87, not implemented yet), ADC ($FEC0, stub), Tube ($FEE0,
+//   absent).
+//
+// Video is rendered one scanline at a time (at the start of every CRTC
+// scanline) into a 640x256 4-bit framebuffer, so hardware scrolling
+// (R12/R13) and palette changes between lines are honoured; changes
+// inside a line are not.
+//
+// MODE 7 is provisional: the SAA5050 alphanumerics are drawn with the MOS
+// 8x8 font (control codes for colour, graphics, double height and
+// background are honoured; contiguous/separated sixels are drawn from the
+// character code).
+//
+// ## zlib/libpng license
+//
+// Copyright (c) 2026 bmarty
+// This software is provided 'as-is', without any express or implied warranty.
+// In no event will the authors be held liable for any damages arising from the
+// use of this software.
+// Permission is granted to anyone to use this software for any purpose,
+// including commercial applications, and to alter it and redistribute it
+// freely, subject to the following restrictions:
+//     1. The origin of this software must not be misrepresented; you must not
+//     claim that you wrote the original software. If you use this software in a
+//     product, an acknowledgment in the product documentation would be
+//     appreciated but is not required.
+//     2. Altered source versions must be plainly marked as such, and must not
+//     be misrepresented as being the original software.
+//     3. This notice may not be removed or altered from any source
+//     distribution.
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define BBC_FREQUENCY (2000000)  // 2 MHz
+
+#define BBC_SCREEN_WIDTH      640
+#define BBC_SCREEN_HEIGHT     256
+#define BBC_FRAMEBUFFER_SIZE  ((BBC_SCREEN_WIDTH / 2) * BBC_SCREEN_HEIGHT)  // 4 bits per pixel
+
+#define BBC_PALETTE_BITS 3
+#define BBC_PALETTE_SIZE (1 << BBC_PALETTE_BITS)
+
+#define BBC_NUM_ROM_BANKS 16
+
+// Physical colours: bit 0 = red, bit 1 = green, bit 2 = blue
+static const uint32_t bbc_palette[BBC_PALETTE_SIZE] = {
+    RGBA8(0x00, 0x00, 0x00), /* black */
+    RGBA8(0xFF, 0x00, 0x00), /* red */
+    RGBA8(0x00, 0xFF, 0x00), /* green */
+    RGBA8(0xFF, 0xFF, 0x00), /* yellow */
+    RGBA8(0x00, 0x00, 0xFF), /* blue */
+    RGBA8(0xFF, 0x00, 0xFF), /* magenta */
+    RGBA8(0x00, 0xFF, 0xFF), /* cyan */
+    RGBA8(0xFF, 0xFF, 0xFF), /* white */
+};
+
+// Config parameters for bbc_init()
+typedef struct {
+    chips_debug_t debug;  // Optional debugging hook
+    chips_audio_desc_t audio;
+    struct {
+        chips_range_t os;                       // 16 KB MOS
+        chips_range_t banks[BBC_NUM_ROM_BANKS]; // Sideways ROMs (16 KB each), .ptr == 0 for empty banks
+    } roms;
+} bbc_desc_t;
+
+// SN76489 sound generator state
+typedef struct {
+    uint8_t reg;            // Latched register (channel << 1 | volume flag)
+    uint16_t freq[4];       // Tone periods (10 bits), noise control for channel 3
+    uint8_t vol[4];         // Volumes 0 (off) .. 15 (max)
+    int32_t counter[4];
+    uint8_t mask[4];        // Current output level of each channel (0 or 0xFF)
+    bool noise_toggle;
+    uint16_t noise_seed;
+    uint8_t prescale;       // 2 MHz -> 250 kHz
+    int32_t sample_accum;   // Sample generation accumulator
+    int32_t sample_period;
+} bbc_sn76489_t;
+
+// BBC Micro emulator state
+typedef struct {
+    MOS6502CPU_T cpu;
+    mos6522via_t sysvia;
+    mos6522via_t uservia;
+    mem_t mem;
+    bool valid;
+    chips_debug_t debug;
+
+    chips_audio_callback_t audio_callback;
+
+    uint8_t ram[0x8000];
+    const uint8_t* os;
+    const uint8_t* banks[BBC_NUM_ROM_BANKS];
+    uint8_t romsel;
+
+    // System VIA peripherals
+    uint8_t ic32;              // Addressable latch (bit 0: !sound write, bit 3: !keyboard write, bits 4-5: screen base, 6: caps LED, 7: shift LED)
+    uint8_t sysvia_pb_old;
+    uint8_t key_cols[16];      // Keyboard matrix: one byte per column, bit n = row n pressed
+    uint8_t key_scan_column;   // Hardware auto-scan column counter
+
+    // 6845 CRTC
+    uint8_t crtc_reg[18];
+    uint8_t crtc_addr;
+    uint8_t hcc;               // Horizontal character counter
+    uint8_t vcc;               // Vertical character row counter
+    uint8_t rc;                // Raster counter
+    uint8_t adjust;            // Vertical adjust line counter (0 = not in adjust)
+    bool in_adjust;
+    uint16_t ma;               // Current memory address
+    uint16_t ma_row_start;     // Memory address at the start of the current character row
+    uint8_t vsync_count;       // Remaining vsync scanlines (0 = no vsync)
+    bool vsync;
+    bool field;                // Interlace field (odd/even)
+    int display_y;             // Output scanline (0 = first displayed row)
+    bool frame_done;           // Set at the end of each vsync
+
+    // Video ULA
+    uint8_t ula_ctrl;          // bit 0 flash, bit 1 teletext, bits 2-3 chars per line, bit 4 2 MHz CRTC clock, bits 5-7 cursor
+    uint8_t ula_pal[16];       // Logical -> physical colour (0-15, 8-15 flashing)
+
+    // Sound
+    bbc_sn76489_t sn;
+
+    // Framebuffer, 4 bits per pixel, 640x256
+    uint8_t fb[BBC_FRAMEBUFFER_SIZE];
+
+    uint32_t system_ticks;
+} bbc_t;
+
+// Initialize a new BBC instance
+void bbc_init(bbc_t* sys, const bbc_desc_t* desc);
+// Discard BBC instance
+void bbc_discard(bbc_t* sys);
+// Reset a BBC instance (BREAK key)
+void bbc_reset(bbc_t* sys);
+// Tick BBC instance once (one 2 MHz CPU cycle)
+void bbc_tick(bbc_t* sys);
+// Tick BBC instance for a given number of microseconds, return number of executed ticks
+uint32_t bbc_exec(bbc_t* sys, uint32_t micro_seconds);
+// Press / release a key, key = BBC internal key number (row << 4 | column), e.g. 0x41 = A
+void bbc_key_down(bbc_t* sys, uint8_t key);
+void bbc_key_up(bbc_t* sys, uint8_t key);
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif
+
+/*-- IMPLEMENTATION ----------------------------------------------------------*/
+#ifdef CHIPS_IMPL
+#include <string.h> /* memcpy, memset */
+#ifndef CHIPS_ASSERT
+#include <assert.h>
+#define CHIPS_ASSERT(c) assert(c)
+#endif
+
+#define BBC_KEY_SHIFT 0x00
+#define BBC_KEY_CTRL  0x01
+#define BBC_KEY_BREAK 0xFF   // Not in the matrix: wired to the CPU reset line
+
+// CRTC registers
+#define CRTC_R0_HTOTAL      0
+#define CRTC_R1_HDISPLAYED  1
+#define CRTC_R2_HSYNC_POS   2
+#define CRTC_R3_SYNC_WIDTH  3
+#define CRTC_R4_VTOTAL      4
+#define CRTC_R5_VADJUST     5
+#define CRTC_R6_VDISPLAYED  6
+#define CRTC_R7_VSYNC_POS   7
+#define CRTC_R8_INTERLACE   8
+#define CRTC_R9_MAX_RASTER  9
+#define CRTC_R10_CURSOR_START 10
+#define CRTC_R11_CURSOR_END   11
+#define CRTC_R12_START_H    12
+#define CRTC_R13_START_L    13
+#define CRTC_R14_CURSOR_H   14
+#define CRTC_R15_CURSOR_L   15
+
+// Unpopulated sideways ROM sockets read as $FF
+static uint8_t _bbc_empty_bank[0x4000];
+
+static void _bbc_init_memorymap(bbc_t* sys);
+static void _bbc_render_scanline(bbc_t* sys);
+static void _bbc_crtc_tick(bbc_t* sys);
+static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value);
+static void _bbc_sn_tick(bbc_t* sys);
+
+void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
+    CHIPS_ASSERT(sys && desc);
+    if (desc->debug.callback.func) {
+        CHIPS_ASSERT(desc->debug.stopped);
+    }
+
+    memset(sys, 0, sizeof(bbc_t));
+    sys->valid = true;
+    sys->debug = desc->debug;
+    sys->audio_callback = desc->audio.callback;
+
+    CHIPS_ASSERT(desc->roms.os.ptr && (desc->roms.os.size == 0x4000));
+    sys->os = desc->roms.os.ptr;
+    for (int i = 0; i < BBC_NUM_ROM_BANKS; i++) {
+        if (desc->roms.banks[i].ptr) {
+            CHIPS_ASSERT(desc->roms.banks[i].size == 0x4000);
+            sys->banks[i] = desc->roms.banks[i].ptr;
+        }
+    }
+
+    MOS6502CPU_INIT(&sys->cpu, &(MOS6502CPU_DESC_T){0});
+    mos6522via_init(&sys->sysvia);
+    mos6522via_init(&sys->uservia);
+
+    // Sound: one sample every (2 MHz / sample_rate) ticks, in 1/256 tick units
+    int sample_rate = desc->audio.sample_rate > 0 ? desc->audio.sample_rate : 22050;
+    sys->sn.sample_period = (int32_t)(((int64_t)BBC_FREQUENCY << 8) / sample_rate);
+    sys->sn.noise_seed = 1 << 14;
+    for (int i = 0; i < 4; i++) {
+        sys->sn.vol[i] = 0;
+    }
+
+    sys->ic32 = 0xFF;  // Sound write and keyboard write disabled, screen base 3
+    memset(sys->ula_pal, 0, sizeof(sys->ula_pal));
+    memset(_bbc_empty_bank, 0xFF, sizeof(_bbc_empty_bank));
+
+    _bbc_init_memorymap(sys);
+}
+
+void bbc_discard(bbc_t* sys) {
+    CHIPS_ASSERT(sys && sys->valid);
+    sys->valid = false;
+}
+
+void bbc_reset(bbc_t* sys) {
+    CHIPS_ASSERT(sys && sys->valid);
+    mos6522via_reset(&sys->sysvia);
+    mos6522via_reset(&sys->uservia);
+    sys->romsel = 0;
+    sys->ic32 = 0xFF;
+    _bbc_init_memorymap(sys);
+    MOS6502CPU_RESET(&sys->cpu);
+}
+
+// ROMSEL: select the sideways bank at $8000-$BFFF
+static void _bbc_set_romsel(bbc_t* sys, uint8_t bank) {
+    sys->romsel = bank & 0x0F;
+    if (sys->banks[sys->romsel]) {
+        mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, sys->banks[sys->romsel]);
+    } else {
+        mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, _bbc_empty_bank);
+    }
+}
+
+// System VIA port A: keyboard (out: column/row select, in: PA7 key state), SN76489 data
+static void _bbc_update_keyboard(bbc_t* sys) {
+    // CA2 is high when a key is pressed in the scanned column (rows 1-7,
+    // row 0 = SHIFT/CTRL/links never raises the interrupt).
+    bool ca2 = false;
+    uint8_t pa = mos6522via_get_pa(&sys->sysvia);
+    if (sys->ic32 & 0x08) {
+        // Auto-scan: hardware cycles through the columns
+        if (sys->key_cols[sys->key_scan_column] & 0xFE) {
+            ca2 = true;
+        }
+        sys->key_scan_column = (sys->key_scan_column + 1) & 0x0F;
+        mos6522via_set_pa(&sys->sysvia, pa | 0x80);
+    } else {
+        // Manual scan: MOS writes column (PA0-3) and row (PA4-6), reads PA7
+        uint8_t col = pa & 0x0F;
+        uint8_t row = (pa >> 4) & 0x07;
+        if (sys->key_cols[col] & 0xFE) {
+            ca2 = true;
+        }
+        if (sys->key_cols[col] & (1 << row)) {
+            mos6522via_set_pa(&sys->sysvia, pa | 0x80);
+        } else {
+            mos6522via_set_pa(&sys->sysvia, pa & 0x7F);
+        }
+    }
+    mos6522via_set_ca2(&sys->sysvia, ca2);
+}
+
+// System VIA port B: IC32 addressable latch (PB0-2 = bit, PB3 = value), joystick buttons (PB4-5 in)
+static void _bbc_update_ic32(bbc_t* sys) {
+    uint8_t pb = mos6522via_get_pb(&sys->sysvia);
+    if (pb != sys->sysvia_pb_old) {
+        uint8_t mask = 1 << (pb & 7);
+        uint8_t old = sys->ic32;
+        if (pb & 0x08) {
+            sys->ic32 |= mask;
+        } else {
+            sys->ic32 &= ~mask;
+        }
+        if ((old & 0x01) && !(sys->ic32 & 0x01)) {
+            // Sound write enable went low: latch port A into the SN76489
+            _bbc_sn_write(&sys->sn, mos6522via_get_pa(&sys->sysvia));
+        }
+        sys->sysvia_pb_old = pb;
+    }
+    // Joystick fire buttons not pressed, speech chip absent (PB6 = 1, PB7 = 1)
+    mos6522via_set_pb(&sys->sysvia, pb | 0xF0);
+}
+
+static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
+    if ((addr & 0xFF00) == 0xFE00) {
+        // SHEILA
+        uint8_t data = 0xFF;
+        switch (addr & 0xE0) {
+            case 0x00:
+                if (addr < 0xFE08) {
+                    // 6845 CRTC
+                    if (rw) {
+                        if (addr & 1) {
+                            data = (sys->crtc_addr < 18) ? sys->crtc_reg[sys->crtc_addr] : 0;
+                            // R12/R13 are write-only on the 6845
+                            if (sys->crtc_addr == 12 || sys->crtc_addr == 13) {
+                                data = 0;
+                            }
+                        } else {
+                            data = 0;
+                        }
+                    } else {
+                        if (addr & 1) {
+                            if (sys->crtc_addr < 18) {
+                                sys->crtc_reg[sys->crtc_addr] = MOS6502CPU_GET_DATA(&sys->cpu);
+                            }
+                        } else {
+                            sys->crtc_addr = MOS6502CPU_GET_DATA(&sys->cpu) & 0x1F;
+                        }
+                    }
+                } else {
+                    // 6850 ACIA (cassette / RS423): no interrupt, nothing received
+                    if (rw) {
+                        data = (addr & 1) ? 0x00 : 0x02;  // Status: TDRE set
+                    }
+                }
+                break;
+            case 0x20:
+                if (addr < 0xFE30) {
+                    // Video ULA (write only)
+                    if (!rw) {
+                        uint8_t v = MOS6502CPU_GET_DATA(&sys->cpu);
+                        if (addr & 1) {
+                            sys->ula_pal[v >> 4] = (v & 0x0F) ^ 7;
+                        } else {
+                            sys->ula_ctrl = v;
+                        }
+                    } else {
+                        data = 0xFE;
+                    }
+                } else {
+                    // ROMSEL (write only)
+                    if (!rw) {
+                        _bbc_set_romsel(sys, MOS6502CPU_GET_DATA(&sys->cpu));
+                    } else {
+                        data = 0xFE;
+                    }
+                }
+                break;
+            case 0x40:
+                // System VIA
+                if (rw) {
+                    data = mos6522via_read(&sys->sysvia, addr & 0x0F);
+                } else {
+                    mos6522via_write(&sys->sysvia, addr & 0x0F, MOS6502CPU_GET_DATA(&sys->cpu));
+                }
+                break;
+            case 0x60:
+                // User VIA
+                if (rw) {
+                    data = mos6522via_read(&sys->uservia, addr & 0x0F);
+                } else {
+                    mos6522via_write(&sys->uservia, addr & 0x0F, MOS6502CPU_GET_DATA(&sys->cpu));
+                }
+                break;
+            case 0x80:
+                // 1770 FDC ($FE80 control, $FE84-$FE87 registers): not present yet
+                if (rw) {
+                    data = 0xFE;
+                }
+                break;
+            case 0xA0:
+                // Econet
+                if (rw) {
+                    data = 0xFE;
+                }
+                break;
+            case 0xC0:
+                // ADC uPD7002: conversion never completes
+                if (rw) {
+                    data = (addr & 3) == 0 ? 0x40 : 0x00;
+                }
+                break;
+            case 0xE0:
+                // Tube: absent
+                if (rw) {
+                    data = 0xFE;
+                }
+                break;
+            default:
+                break;
+        }
+        if (rw) {
+            MOS6502CPU_SET_DATA(&sys->cpu, data);
+        }
+    } else if ((addr & 0xFF00) == 0xFC00 || (addr & 0xFF00) == 0xFD00) {
+        // FRED / JIM: 1 MHz bus, nothing connected
+        if (rw) {
+            MOS6502CPU_SET_DATA(&sys->cpu, 0xFF);
+        }
+    } else {
+        // Regular memory access
+        if (rw) {
+            MOS6502CPU_SET_DATA(&sys->cpu, mem_rd(&sys->mem, addr));
+        } else {
+            mem_wr(&sys->mem, addr, MOS6502CPU_GET_DATA(&sys->cpu));
+        }
+    }
+}
+
+void bbc_tick(bbc_t* sys) {
+    MOS6502CPU_TICK(&sys->cpu);
+
+    _bbc_mem_rw(sys, MOS6502CPU_GET_ADDR(&sys->cpu), sys->cpu.rw);
+
+    // CRTC: 2 MHz character clock in modes 0-3, 1 MHz otherwise
+    if ((sys->ula_ctrl & 0x10) || (sys->system_ticks & 1)) {
+        _bbc_crtc_tick(sys);
+    }
+
+    // 1 MHz bus: VIAs, keyboard, latch, sound
+    if (sys->system_ticks & 1) {
+        _bbc_update_keyboard(sys);
+        _bbc_update_ic32(sys);
+        mos6522via_set_ca1(&sys->sysvia, sys->vsync);
+        bool irq = mos6522via_tick(&sys->sysvia, 1);
+        irq |= mos6522via_tick(&sys->uservia, 1);
+        MOS6502CPU_SET_IRQ(&sys->cpu, irq);
+    }
+
+    _bbc_sn_tick(sys);
+
+    sys->system_ticks++;
+}
+
+uint32_t bbc_exec(bbc_t* sys, uint32_t micro_seconds) {
+    CHIPS_ASSERT(sys && sys->valid);
+    uint32_t num_ticks = clk_us_to_ticks(BBC_FREQUENCY, micro_seconds);
+    if (0 == sys->debug.callback.func) {
+        for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
+            bbc_tick(sys);
+        }
+    } else {
+        for (uint32_t ticks = 0; (ticks < num_ticks) && !(*sys->debug.stopped); ticks++) {
+            bbc_tick(sys);
+            sys->debug.callback.func(sys->debug.callback.user_data, 0);
+        }
+    }
+    return num_ticks;
+}
+
+void bbc_key_down(bbc_t* sys, uint8_t key) {
+    if (key == BBC_KEY_BREAK) {
+        bbc_reset(sys);
+        return;
+    }
+    sys->key_cols[key & 0x0F] |= (uint8_t)(1 << ((key >> 4) & 7));
+}
+
+void bbc_key_up(bbc_t* sys, uint8_t key) {
+    if (key == BBC_KEY_BREAK) {
+        return;
+    }
+    sys->key_cols[key & 0x0F] &= (uint8_t)~(1 << ((key >> 4) & 7));
+}
+
+static void _bbc_init_memorymap(bbc_t* sys) {
+    mem_init(&sys->mem);
+    // RAM contents are undefined at power-up; the MOS clears what it needs
+    mem_map_ram(&sys->mem, 0, 0x0000, 0x8000, sys->ram);
+    _bbc_set_romsel(sys, sys->romsel);
+    mem_map_rom(&sys->mem, 0, 0xC000, 0x4000, sys->os);
+}
+
+/*-- 6845 CRTC ---------------------------------------------------------------*/
+
+// Screen address wrap-around per IC32 bits 4-5 (values in 8-byte units, MA is a byte/8 address)
+static const uint16_t _bbc_screen_wrap[4] = {0x4000 >> 3, 0x2000 >> 3, 0x5000 >> 3, 0x2800 >> 3};
+
+static void _bbc_crtc_new_frame(bbc_t* sys) {
+    sys->vcc = 0;
+    sys->rc = 0;
+    sys->in_adjust = false;
+    sys->ma_row_start = (uint16_t)(((sys->crtc_reg[CRTC_R12_START_H] << 8) | sys->crtc_reg[CRTC_R13_START_L]) & 0x3FFF);
+    sys->ma = sys->ma_row_start;
+    sys->display_y = 0;
+}
+
+static void _bbc_crtc_tick(bbc_t* sys) {
+    const uint8_t* r = sys->crtc_reg;
+    bool interlace = (r[CRTC_R8_INTERLACE] & 3) == 3;
+
+    if (sys->hcc == 0) {
+        // Start of a scanline: render it, then handle vsync
+        _bbc_render_scanline(sys);
+        if (sys->vsync_count) {
+            sys->vsync_count--;
+            if (sys->vsync_count == 0) {
+                sys->vsync = false;
+                sys->frame_done = true;
+            }
+        }
+    }
+
+    sys->ma++;
+    sys->hcc++;
+    if (sys->hcc > r[CRTC_R0_HTOTAL]) {
+        // End of scanline
+        sys->hcc = 0;
+        sys->display_y++;
+        uint8_t raster_step = interlace ? 2 : 1;
+        bool row_end;
+        if (sys->in_adjust) {
+            sys->adjust++;
+            row_end = false;
+            if (sys->adjust >= r[CRTC_R5_VADJUST]) {
+                sys->field = !sys->field;
+                _bbc_crtc_new_frame(sys);
+            } else {
+                sys->ma = sys->ma_row_start;
+            }
+        } else {
+            sys->rc += raster_step;
+            row_end = (sys->rc > r[CRTC_R9_MAX_RASTER]);
+            if (!row_end) {
+                sys->ma = sys->ma_row_start;
+            }
+        }
+        if (row_end) {
+            sys->rc = 0;
+            sys->ma_row_start = (uint16_t)((sys->ma_row_start + r[CRTC_R1_HDISPLAYED]) & 0x3FFF);
+            sys->ma = sys->ma_row_start;
+            sys->vcc++;
+            if (sys->vcc == r[CRTC_R7_VSYNC_POS] && !sys->vsync) {
+                uint8_t width = (r[CRTC_R3_SYNC_WIDTH] >> 4) & 0x0F;
+                sys->vsync_count = width ? width : 16;
+                sys->vsync = true;
+            }
+            if (sys->vcc > r[CRTC_R4_VTOTAL]) {
+                if (r[CRTC_R5_VADJUST]) {
+                    sys->in_adjust = true;
+                    sys->adjust = 0;
+                } else {
+                    sys->field = !sys->field;
+                    _bbc_crtc_new_frame(sys);
+                }
+            }
+        }
+    }
+}
+
+/*-- Video ULA rendering -----------------------------------------------------*/
+
+// Resolve a logical colour to a physical colour, honouring flashing colours
+static inline uint8_t _bbc_phys_colour(const bbc_t* sys, uint8_t logical) {
+    uint8_t p = sys->ula_pal[logical & 0x0F];
+    if (p & 8) {
+        return (sys->ula_ctrl & 1) ? ((p & 7) ^ 7) : (p & 7);
+    }
+    return p & 7;
+}
+
+// Bits of a bitmap byte for logical colour extraction (ULA shift register):
+// 2 colours: bit 7 of each shift; 4 colours: bits 7,3 ; 16 colours: bits 7,5,3,1
+static inline uint8_t _bbc_ula_index(uint8_t byte) {
+    return (uint8_t)(((byte >> 4) & 0x08) | ((byte >> 3) & 0x04) | ((byte >> 2) & 0x02) | ((byte >> 1) & 0x01));
+}
+
+// Teletext (MODE 7) provisional renderer: MOS 8x8 font, colour / graphics / double-height codes
+typedef struct {
+    uint8_t fg, bg;
+    bool graphics, separated, double_height, hold;
+    uint8_t held;
+} _bbc_tt_state_t;
+
+static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint16_t ma, int raster) {
+    _bbc_tt_state_t st = {.fg = 7, .bg = 0};
+    // 40 characters -> 16 pixels each, 10 rasters per row (0-9) ; font rows 0-7 then blank
+    int font_row = raster;
+    for (int c = 0; c < chars && c < 40; c++) {
+        uint16_t a = (uint16_t)((ma + c) & 0x3FF) | 0x7C00;
+        uint8_t ch = sys->ram[a] & 0x7F;
+        uint8_t fg = st.fg, bg = st.bg;
+        bool draw_graphics = false;
+        uint8_t glyph = 0;
+        if (ch < 0x20) {
+            // Control codes take effect from this cell (set-after) except background changes
+            switch (ch) {
+                case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07:
+                    st.fg = ch; st.graphics = false; st.hold = false; break;
+                case 0x0C: st.double_height = false; break;
+                case 0x0D: st.double_height = true; break;
+                case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16: case 0x17:
+                    st.fg = ch - 0x10; st.graphics = true; break;
+                case 0x19: st.separated = false; break;
+                case 0x1A: st.separated = true; break;
+                case 0x1C: st.bg = 0; bg = 0; break;
+                case 0x1D: st.bg = st.fg; bg = st.bg; break;
+                case 0x1E: st.hold = true; break;
+                case 0x1F: st.hold = false; break;
+                default: break;
+            }
+            if (st.hold && st.graphics) {
+                glyph = st.held;
+                draw_graphics = true;
+            }
+        } else if (st.graphics && (ch & 0x20)) {
+            // Sixel graphics: bits 0,1 / 2,3 / 4,6 = rows of 2 cells, 3 rows of (3,3,4) rasters
+            draw_graphics = true;
+            glyph = ch;
+            st.held = ch;
+        } else {
+            // Alphanumeric: MOS font at $C000 + (ch - 32) * 8, 8 rows
+            if (font_row < 8) {
+                int fr = font_row;
+                if (st.double_height) {
+                    // Double height: top row shows font rows 0-3, bottom row rows 4-7 (approximation)
+                    fr = (sys->rc >= 10 ? 4 : 0) + (font_row >> 1);
+                }
+                glyph = sys->os[(ch - 0x20) * 8 + fr];
+            } else {
+                glyph = 0;
+            }
+        }
+        uint8_t* p = line + c * 16;
+        if (draw_graphics) {
+            int band = raster < 3 ? 0 : (raster < 7 ? 1 : 2);
+            bool left, right;
+            switch (band) {
+                case 0: left = glyph & 0x01; right = glyph & 0x02; break;
+                case 1: left = glyph & 0x04; right = glyph & 0x08; break;
+                default: left = glyph & 0x10; right = glyph & 0x40; break;
+            }
+            bool gap = st.separated && ((band == 0 && raster == 2) || (band == 1 && raster == 6) || (band == 2 && raster == 9));
+            for (int x = 0; x < 16; x++) {
+                bool on = (x < 8) ? left : right;
+                if (st.separated && ((x & 7) < 2)) on = false;
+                if (gap) on = false;
+                p[x] = on ? fg : bg;
+            }
+        } else {
+            for (int x = 0; x < 8; x++) {
+                uint8_t col = (glyph & (0x80 >> x)) ? fg : bg;
+                p[x * 2] = col;
+                p[x * 2 + 1] = col;
+            }
+        }
+    }
+}
+
+static void _bbc_render_scanline(bbc_t* sys) {
+    const uint8_t* r = sys->crtc_reg;
+    int y = sys->display_y;
+    if (y < 0 || y >= BBC_SCREEN_HEIGHT) {
+        return;
+    }
+    uint8_t line[BBC_SCREEN_WIDTH];
+    bool displayed = (sys->vcc < r[CRTC_R6_VDISPLAYED]) && !sys->in_adjust;
+    int chars = r[CRTC_R1_HDISPLAYED];
+    bool teletext = sys->ula_ctrl & 0x02;
+
+    if (!displayed || chars == 0) {
+        memset(line, 0, sizeof(line));
+    } else if (teletext) {
+        memset(line, 0, sizeof(line));
+        int raster = (sys->rc >> 1) % 10;
+        _bbc_render_teletext_line(sys, line, chars, sys->ma_row_start, raster);
+    } else {
+        // Bitmap modes. ULA chars per line: 0 = 10, 1 = 20, 2 = 40, 3 = 80 -> pixels per byte
+        int cpl_sel = (sys->ula_ctrl >> 2) & 3;
+        int px_per_byte;      // Output pixels per byte on the 640 grid
+        int bpp;              // Bits per pixel
+        bool fast = sys->ula_ctrl & 0x10;
+        if (fast) {
+            // 2 MHz: 80 bytes per line
+            px_per_byte = 8;
+            bpp = (cpl_sel == 3) ? 1 : (cpl_sel == 2) ? 2 : 4;  // MODE 0/3: 1 bpp, MODE 1: 2 bpp, MODE 2: 4 bpp
+        } else {
+            // 1 MHz: 40 bytes per line
+            px_per_byte = 16;
+            bpp = (cpl_sel == 2) ? 1 : (cpl_sel == 1) ? 2 : 4;  // MODE 4/6: 1 bpp, MODE 5: 2 bpp
+        }
+        int pixels_per_byte = 8 / bpp;
+        int px_w = px_per_byte / pixels_per_byte;
+        uint8_t raster = sys->rc;
+        int x = 0;
+        for (int c = 0; c < chars && x < BBC_SCREEN_WIDTH; c++) {
+            uint16_t ma = (uint16_t)((sys->ma_row_start + c) & 0x3FFF);
+            uint16_t addr;
+            if (ma & 0x1000) {
+                addr = (uint16_t)((ma - _bbc_screen_wrap[(sys->ic32 >> 4) & 3]) & ~0x1000u);
+            } else {
+                addr = ma;
+            }
+            addr = (uint16_t)((addr << 3) | (raster & 7));
+            uint8_t byte = (raster < 8 && addr < 0x8000) ? sys->ram[addr] : 0;
+            for (int p = 0; p < pixels_per_byte; p++) {
+                uint8_t col = _bbc_phys_colour(sys, _bbc_ula_index(byte));
+                byte = (uint8_t)((byte << 1) | 1);
+                for (int k = 0; k < px_w && x < BBC_SCREEN_WIDTH; k++) {
+                    line[x++] = col;
+                }
+            }
+        }
+        while (x < BBC_SCREEN_WIDTH) {
+            line[x++] = 0;
+        }
+    }
+
+    // Pack into the 4-bit framebuffer
+    uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2)];
+    for (int x = 0; x < BBC_SCREEN_WIDTH; x += 2) {
+        *dst++ = (uint8_t)((line[x] << 4) | (line[x + 1] & 0x0F));
+    }
+}
+
+/*-- SN76489 -----------------------------------------------------------------*/
+
+static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value) {
+    if (value & 0x80) {
+        sn->reg = (value >> 4) & 7;
+        uint8_t v = value & 0x0F;
+        int ch = sn->reg >> 1;
+        if (sn->reg & 1) {
+            sn->vol[ch] = v ^ 0x0F;
+        } else {
+            sn->freq[ch] = (uint16_t)((sn->freq[ch] & ~0x0Fu) | v);
+            if (ch == 3) {
+                sn->noise_seed = 1 << 14;
+            }
+        }
+    } else {
+        int ch = sn->reg >> 1;
+        uint8_t v = value & 0x3F;
+        if (sn->reg & 1) {
+            sn->vol[ch] = (v & 0x0F) ^ 0x0F;
+        } else if (ch == 3) {
+            sn->freq[3] = v;
+            sn->noise_seed = 1 << 14;
+        } else {
+            sn->freq[ch] = (uint16_t)((sn->freq[ch] & 0x0F) | (v << 4));
+        }
+    }
+}
+
+// Volume table: 2 dB steps, 15 = max
+static const uint8_t _bbc_sn_volume[16] = {0, 1, 1, 2, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25, 31};
+
+static void _bbc_sn_tick(bbc_t* sys) {
+    bbc_sn76489_t* sn = &sys->sn;
+
+    // 250 kHz chip clock
+    sn->prescale++;
+    if (sn->prescale == 8) {
+        sn->prescale = 0;
+        for (int i = 0; i < 3; i++) {
+            if (sn->counter[i] > 0) {
+                sn->counter[i]--;
+            }
+            if (sn->counter[i] == 0) {
+                sn->mask[i] = ~sn->mask[i];
+                sn->counter[i] = sn->freq[i] ? sn->freq[i] : 1024;
+            }
+        }
+        if (sn->counter[3] > 0) {
+            sn->counter[3]--;
+        }
+        if (sn->counter[3] == 0) {
+            sn->noise_toggle = !sn->noise_toggle;
+            if (sn->noise_toggle) {
+                bool bit;
+                if (sn->freq[3] & 4) {
+                    // White noise: 15-bit LFSR, taps 0 and 1
+                    bit = sn->noise_seed & 1;
+                    uint16_t fb = ((sn->noise_seed & 1) ^ ((sn->noise_seed >> 1) & 1)) & 1;
+                    sn->noise_seed = (uint16_t)((sn->noise_seed >> 1) | (fb << 14));
+                } else {
+                    // Periodic noise
+                    bit = sn->noise_seed & 1;
+                    sn->noise_seed = (uint16_t)((sn->noise_seed >> 1) | ((sn->noise_seed & 1) << 14));
+                }
+                sn->mask[3] = bit ? 0xFF : 0x00;
+            }
+            switch (sn->freq[3] & 3) {
+                case 3: sn->counter[3] = sn->freq[2] ? sn->freq[2] : 1024; break;
+                case 2: sn->counter[3] = 0x40; break;
+                case 1: sn->counter[3] = 0x20; break;
+                default: sn->counter[3] = 0x10; break;
+            }
+        }
+    }
+
+    // Output sample
+    sn->sample_accum += 256;
+    if (sn->sample_accum >= sn->sample_period) {
+        sn->sample_accum -= sn->sample_period;
+        int level = 0;
+        for (int i = 0; i < 4; i++) {
+            level += sn->mask[i] ? _bbc_sn_volume[sn->vol[i]] : 0;
+        }
+        // 4 channels x 31 max = 124 -> centre at 128
+        uint8_t sample = (uint8_t)(128 + level);
+        if (sys->audio_callback.func) {
+            sys->audio_callback.func(sample, sys->audio_callback.user_data);
+        }
+    }
+}
+
+#endif  // CHIPS_IMPL
