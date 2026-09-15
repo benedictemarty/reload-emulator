@@ -5,6 +5,7 @@
 // Keys: positional PC -> BBC mapping, F12 = BREAK, F10 = BBC f0, F1-F9 = f1-f9.
 // Discs: drop a .ssd/.dsd file on the window (drive 0), or start with
 // `bbc disc=game.ssd`; hold SHIFT and press F12 (BREAK) to auto-boot.
+// `model=master` starts a Master 128 (MOS 3.20, roms/bbc_master_roms.h).
 // With `write=1` the image file is written back on exit (writes are
 // otherwise kept in memory only).
 //
@@ -38,6 +39,10 @@
 #include <string.h>
 
 #include "roms/bbc_roms.h"
+#if __has_include("roms/bbc_master_roms.h")
+#include "roms/bbc_master_roms.h"
+#define HAVE_MASTER_ROMS 1
+#endif
 
 #include "chips/chips_common.h"
 #include "common.h"
@@ -99,6 +104,22 @@ bbc_desc_t bbc_desc(void) {
     static uint8_t swr[4 * 0x4000];
     desc.ram_banks = 0x00F0;
     desc.swr = (chips_range_t){.ptr = swr, .size = sizeof(swr)};
+#ifdef HAVE_MASTER_ROMS
+    if (sargs_exists("model") && sargs_equals("model", "master")) {
+        static uint8_t master_ram[0x8000];
+        desc.model = BBC_MODEL_MASTER;
+        desc.roms.os = (chips_range_t){.ptr = bbc_master_mos_rom, .size = sizeof(bbc_master_mos_rom)};
+        memset(desc.roms.banks, 0, sizeof(desc.roms.banks));
+        desc.roms.banks[9] = (chips_range_t){.ptr = bbc_master_dfs_rom, .size = 0x4000};
+        desc.roms.banks[10] = (chips_range_t){.ptr = bbc_master_viewsht_rom, .size = 0x4000};
+        desc.roms.banks[11] = (chips_range_t){.ptr = bbc_master_edit_rom, .size = 0x4000};
+        desc.roms.banks[12] = (chips_range_t){.ptr = bbc_master_basic4_rom, .size = 0x4000};
+        desc.roms.banks[13] = (chips_range_t){.ptr = bbc_master_adfs_rom, .size = 0x4000};
+        desc.roms.banks[14] = (chips_range_t){.ptr = bbc_master_view_rom, .size = 0x4000};
+        desc.roms.banks[15] = (chips_range_t){.ptr = bbc_master_terminal_rom, .size = 0x4000};
+        desc.master_ram = (chips_range_t){.ptr = master_ram, .size = sizeof(master_ram)};
+    }
+#endif
     return desc;
 }
 

@@ -1,0 +1,22 @@
+#pragma once
+#include <stdint.h>
+
+// BBC Master 128, MOS 3.20 (generated with tools/bin2hdr, __not_in_flash())
+// clang-format off
+uint8_t __not_in_flash() bbc_master_mos_rom[] = {      // MD5 9087f772447038a00178488b3591347b
+};
+uint8_t __not_in_flash() bbc_master_dfs_rom[] = {      // bank 9,  MD5 865a0f7a5d6f10f48798801bf514d761
+};
+uint8_t __not_in_flash() bbc_master_viewsht_rom[] = {  // bank 10, MD5 7d5a80a8ce929d0a0f6ca8626cb9f436
+};
+uint8_t __not_in_flash() bbc_master_edit_rom[] = {     // bank 11, MD5 cb3d762eaab6130d1360e1ac575589de
+};
+uint8_t __not_in_flash() bbc_master_basic4_rom[] = {   // bank 12, MD5 63a6f43cbf491533cb03ceca2d2728d4
+};
+uint8_t __not_in_flash() bbc_master_adfs_rom[] = {     // bank 13, MD5 10f08b255d6a6e3e888631946b628f1a
+};
+uint8_t __not_in_flash() bbc_master_view_rom[] = {     // bank 14, MD5 178d09285727d596f8863f94a2fc8dad
+};
+uint8_t __not_in_flash() bbc_master_terminal_rom[] = { // bank 15, MD5 7e053353b78b4631c274280931d96f02
+};
+// clang-format on

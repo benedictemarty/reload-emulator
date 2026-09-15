@@ -12,6 +12,7 @@
 //   -r FILE   write the 32 KB RAM
 //   -s        print the 40x25 MODE 7 screen ($7C00) as ASCII
 //   -d        disable the DFS ROM (bank 14 empty)
+//   -m        BBC Master 128 (MOS 3.20, roms/bbc_master_roms.h)
 //   -a FILE   write the sound output as a 22050 Hz 8-bit mono WAV
 //   -M        print a summary of the MOS entry points called (OSBYTE/OSWORD by A, VDU codes)
 //   -T FILE   log every MOS call (entry, A, X, Y, PC of caller) to FILE
@@ -51,6 +52,10 @@
 #include <string.h>
 
 #include "roms/bbc_roms.h"
+#if __has_include("roms/bbc_master_roms.h")
+#include "roms/bbc_master_roms.h"
+#define HAVE_MASTER_ROMS 1
+#endif
 
 #include "chips/chips_common.h"
 // CPU core: W65C02S (as on the Neo6502 board) by default, -DBBC_CPU_NMOS for the NMOS 6502
@@ -116,6 +121,11 @@ static void mos_debug_cb(void* user_data, uint64_t pins) {
     if (!bbc.cpu.sync) return;
     uint16_t pc = bbc.cpu.PC;
     last_sync_pc = pc;
+    if (getenv("BBC_PCTRACE")) {
+        static int n; static uint16_t prev;
+        if (n < 400 && (pc < 0x8000 || (pc >= 0x8000 && pc < 0xC000)) ) { if (n == 0 || pc != prev + 0) fprintf(stderr, "pc %04X A=%02X X=%02X romsel=%02X acccon=%02X\n", pc, bbc.cpu.A, bbc.cpu.X, bbc.romsel, bbc.acccon); n++; }
+        prev = pc;
+    }
     if (c02_check) {
         uint8_t op = mem_rd(&bbc.mem, pc);
         if (!nmos_legal[op]) {
@@ -230,7 +240,8 @@ static void print_mode7(void) {
     for (int row = 0; row < 25; row++) {
         char line[41];
         for (int col = 0; col < 40; col++) {
-            uint8_t c = bbc.ram[0x7C00 + row * 40 + col] & 0x7F;
+            uint16_t a = (uint16_t)(0x7C00 + row * 40 + col);
+            uint8_t c = ((bbc.model == BBC_MODEL_MASTER && (bbc.acccon & 1)) ? bbc.lynne[a - 0x3000] : bbc.ram[a]) & 0x7F;
             line[col] = (c >= 0x20 && c < 0x7F) ? (char)c : '.';
         }
         line[40] = 0;
@@ -245,6 +256,7 @@ int main(int argc, char** argv) {
     const char* ram = NULL;
     bool show = false;
     bool dfs = true;
+    bool master = false;
     const char* disc = NULL;
     const char* disc_out = NULL;
     bool boot = false;
@@ -261,6 +273,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) ram = argv[++i];
         else if (!strcmp(argv[i], "-s")) show = true;
         else if (!strcmp(argv[i], "-d")) dfs = false;
+        else if (!strcmp(argv[i], "-m")) master = true;
         else if (!strcmp(argv[i], "-0") && i + 1 < argc) disc = argv[++i];
         else if (!strcmp(argv[i], "-W") && i + 1 < argc) disc_out = argv[++i];
         else if (!strcmp(argv[i], "-b")) boot = true;
@@ -297,6 +310,25 @@ int main(int argc, char** argv) {
     desc.roms.banks[15] = (chips_range_t){.ptr = bbc_basic_rom, .size = sizeof(bbc_basic_rom)};
     if (dfs) {
         desc.roms.banks[14] = (chips_range_t){.ptr = bbc_dfs_rom, .size = sizeof(bbc_dfs_rom)};
+    }
+    static uint8_t master_ram[0x8000];
+    if (master) {
+#ifdef HAVE_MASTER_ROMS
+        desc.model = BBC_MODEL_MASTER;
+        desc.roms.os = (chips_range_t){.ptr = bbc_master_mos_rom, .size = sizeof(bbc_master_mos_rom)};
+        memset(desc.roms.banks, 0, sizeof(desc.roms.banks));
+        desc.roms.banks[9] = (chips_range_t){.ptr = bbc_master_dfs_rom, .size = 0x4000};
+        desc.roms.banks[10] = (chips_range_t){.ptr = bbc_master_viewsht_rom, .size = 0x4000};
+        desc.roms.banks[11] = (chips_range_t){.ptr = bbc_master_edit_rom, .size = 0x4000};
+        desc.roms.banks[12] = (chips_range_t){.ptr = bbc_master_basic4_rom, .size = 0x4000};
+        desc.roms.banks[13] = (chips_range_t){.ptr = bbc_master_adfs_rom, .size = 0x4000};
+        desc.roms.banks[14] = (chips_range_t){.ptr = bbc_master_view_rom, .size = 0x4000};
+        desc.roms.banks[15] = (chips_range_t){.ptr = bbc_master_terminal_rom, .size = 0x4000};
+        desc.master_ram = (chips_range_t){.ptr = master_ram, .size = sizeof(master_ram)};
+#else
+        fprintf(stderr, "roms/bbc_master_roms.h absent\n");
+        return 2;
+#endif
     }
     // Sideways RAM in banks 4-7 (4 x 16 KB)
     static uint8_t swr[4 * 0x4000];

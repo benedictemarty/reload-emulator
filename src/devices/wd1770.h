@@ -103,8 +103,10 @@ typedef struct {
     // Pins
     bool drq;
     bool intrq;
-    // Acorn control latch ($FE80)
+    // Acorn control latch ($FE80 Model B: bit 2 side, bit 3 !dden, bit 5 !reset ;
+    // $FE24 Master 128: bit 2 !reset, bit 4 side, bit 5 !dden)
     uint8_t control;
+    bool master_control;
     int drive;               // 0, 1 or -1
     int side;
     // Head
@@ -563,9 +565,12 @@ void wd1770_write_control(wd1770_t* fdc, uint8_t value) {
     } else {
         fdc->drive = -1;
     }
-    fdc->side = (value & 4) ? 1 : 0;
-    if (!(value & 0x20)) {
-        wd1770_reset(fdc);
+    if (fdc->master_control) {
+        fdc->side = (value & 0x10) ? 1 : 0;
+        if (!(value & 0x04)) wd1770_reset(fdc);
+    } else {
+        fdc->side = (value & 4) ? 1 : 0;
+        if (!(value & 0x20)) wd1770_reset(fdc);
     }
 }
 

@@ -90,8 +90,14 @@ static const uint32_t bbc_palette[BBC_PALETTE_SIZE] = {
     RGBA8(0xFF, 0xFF, 0xFF), /* white */
 };
 
+typedef enum {
+    BBC_MODEL_B = 0,        // Model B, OS 1.20, Acorn 1770 DFS at $FE80
+    BBC_MODEL_MASTER = 1,   // Master 128, MOS 3.20: LYNNE/ANDY/HAZEL, ACCCON, RTC, 1770 at $FE24/$FE28
+} bbc_model_t;
+
 // Config parameters for bbc_init()
 typedef struct {
+    bbc_model_t model;
     chips_debug_t debug;  // Optional debugging hook
     chips_audio_desc_t audio;
     struct {
@@ -102,6 +108,10 @@ typedef struct {
     // 16 KB per selected bank (in bank order), owned by the caller
     uint16_t ram_banks;
     chips_range_t swr;
+    // Master 128 extra RAM (32 KB, owned by the caller): LYNNE 20 KB, ANDY 4 KB, HAZEL 8 KB
+    chips_range_t master_ram;
+    // Master 128 CMOS RAM contents (50 bytes) or .ptr == 0 for the defaults
+    chips_range_t nvram;
 } bbc_desc_t;
 
 // SN76489 sound generator state
@@ -128,7 +138,18 @@ typedef struct {
 
     chips_audio_callback_t audio_callback;
 
+    bbc_model_t model;
     uint8_t ram[0x8000];
+    // Master 128
+    uint8_t* lynne;            // Shadow screen RAM $3000-$7FFF (20 KB)
+    uint8_t* andy;             // $8000-$8FFF when ROMSEL bit 7 (4 KB)
+    uint8_t* hazel;            // $C000-$DFFF when ACCCON Y (8 KB)
+    uint8_t acccon;            // bit 0 D (display LYNNE), 1 E (VDU code sees LYNNE), 2 X (all see LYNNE), 3 Y (HAZEL)
+    uint16_t last_pc;          // Address of the executing instruction (for the E rule)
+    uint8_t rtc_regs[64];      // MC146818: 0-9 time, 10-13 A-D, 14-63 CMOS RAM
+    uint8_t rtc_addr;
+    uint32_t rtc_ticks;        // 1 MHz ticks towards the next second
+    uint8_t sysvia_pb_old_rtc;
     const uint8_t* os;
     const uint8_t* banks[BBC_NUM_ROM_BANKS];
     uint8_t* ram_bank[BBC_NUM_ROM_BANKS];   // Sideways RAM storage per bank, or 0
@@ -243,6 +264,8 @@ static uint8_t _bbc_empty_bank[0x4000];
 static void _bbc_init_memorymap(bbc_t* sys);
 static void _bbc_teletext_init(bbc_t* sys);
 static void _bbc_update_keyboard(bbc_t* sys, bool advance);
+static void _bbc_update_ic32(bbc_t* sys);
+static void _bbc_update_rtc(bbc_t* sys, uint8_t old_ic32);
 static void _bbc_render_scanline(bbc_t* sys);
 static void _bbc_crtc_tick(bbc_t* sys);
 static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value);
@@ -279,10 +302,30 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
         }
     }
 
+    sys->model = desc->model;
+    if (desc->model == BBC_MODEL_MASTER) {
+        CHIPS_ASSERT(desc->master_ram.ptr && desc->master_ram.size >= 0x8000);
+        sys->lynne = (uint8_t*)desc->master_ram.ptr;
+        sys->andy = sys->lynne + 0x5000;
+        sys->hazel = sys->andy + 0x1000;
+        // MC146818: 24-hour BCD clock (register B = $02), 2026-09-15 12:00:00, VRT set
+        sys->rtc_regs[0] = 0x00; sys->rtc_regs[2] = 0x00; sys->rtc_regs[4] = 0x12;
+        sys->rtc_regs[6] = 0x03; sys->rtc_regs[7] = 0x15; sys->rtc_regs[8] = 0x09; sys->rtc_regs[9] = 0x26;
+        sys->rtc_regs[10] = 0x26; sys->rtc_regs[11] = 0x02; sys->rtc_regs[13] = 0x80;
+        static const uint8_t nvram_default[50] = {
+            0, 0, 0, 0, 0, 0xC9, 0xFF, 0xFF, 0x00, 0x00, 0x17, 0x80, 55, 0x03, 0x00, 0x01, 0x02};   // LANG 12, FS 9, MODE 7, FLOPPY, DELAY 55, REPEAT 3, TUBE, LOUD
+        if (desc->nvram.ptr && desc->nvram.size >= 50) {
+            memcpy(&sys->rtc_regs[14], desc->nvram.ptr, 50);
+        } else {
+            memcpy(&sys->rtc_regs[14], nvram_default, 50);
+        }
+    }
+
     MOS6502CPU_INIT(&sys->cpu, &(MOS6502CPU_DESC_T){0});
     mos6522via_init(&sys->sysvia);
     mos6522via_init(&sys->uservia);
     wd1770_init(&sys->fdc);
+    sys->fdc.master_control = (desc->model == BBC_MODEL_MASTER);
 
     // Sound: one sample every (2 MHz / sample_rate) ticks, in 1/256 tick units
     int sample_rate = desc->audio.sample_rate > 0 ? desc->audio.sample_rate : 22050;
@@ -314,6 +357,7 @@ void bbc_reset(bbc_t* sys) {
     mos6522via_reset(&sys->uservia);
     wd1770_reset(&sys->fdc);
     sys->romsel = 0;
+    sys->acccon = 0;
     sys->ic32 = 0xFF;
     _bbc_init_memorymap(sys);
     MOS6502CPU_RESET(&sys->cpu);
@@ -321,13 +365,34 @@ void bbc_reset(bbc_t* sys) {
 
 // ROMSEL: select the sideways bank at $8000-$BFFF
 static void _bbc_set_romsel(bbc_t* sys, uint8_t bank) {
-    sys->romsel = bank & 0x0F;
-    if (sys->ram_bank[sys->romsel]) {
-        mem_map_ram(&sys->mem, 0, 0x8000, 0x4000, sys->ram_bank[sys->romsel]);
-    } else if (sys->banks[sys->romsel]) {
-        mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, sys->banks[sys->romsel]);
+    sys->romsel = (sys->model == BBC_MODEL_MASTER) ? (bank & 0x8F) : (bank & 0x0F);
+    uint8_t b = sys->romsel & 0x0F;
+    if (sys->ram_bank[b]) {
+        mem_map_ram(&sys->mem, 0, 0x8000, 0x4000, sys->ram_bank[b]);
+    } else if (sys->banks[b]) {
+        mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, sys->banks[b]);
     } else {
         mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, _bbc_empty_bank);
+    }
+    if (sys->model == BBC_MODEL_MASTER && (sys->romsel & 0x80)) {
+        mem_map_ram(&sys->mem, 0, 0x8000, 0x1000, sys->andy);   // ANDY
+    }
+}
+
+// Master 128 ACCCON: HAZEL over the MOS at $C000-$DFFF (Y), LYNNE for all
+// accesses to $3000-$7FFF (X). The E rule (only the VDU code in $C000-$DFFF
+// sees LYNNE) is applied per access in _bbc_mem_rw.
+static void _bbc_set_acccon(bbc_t* sys, uint8_t v) {
+    sys->acccon = v;
+    if (v & 0x08) {
+        mem_map_ram(&sys->mem, 0, 0xC000, 0x2000, sys->hazel);
+    } else {
+        mem_map_rom(&sys->mem, 0, 0xC000, 0x2000, sys->os);
+    }
+    if (v & 0x04) {
+        mem_map_ram(&sys->mem, 0, 0x3000, 0x5000, sys->lynne);
+    } else {
+        mem_map_ram(&sys->mem, 0, 0x3000, 0x5000, sys->ram + 0x3000);
     }
 }
 
@@ -345,7 +410,7 @@ static void _bbc_update_keyboard(bbc_t* sys, bool advance) {
         if (advance) {
             sys->key_scan_column = (sys->key_scan_column + 1) & 0x0F;
         }
-        mos6522via_set_pa(&sys->sysvia, pa | 0x80);
+        // PA7 is not driven by the keyboard in auto-scan mode (the RTC may drive port A on the Master)
     } else {
         // Manual scan: MOS writes column (PA0-3) and row (PA4-6), reads PA7
         uint8_t col = pa & 0x0F;
@@ -366,12 +431,64 @@ static void _bbc_update_keyboard(bbc_t* sys, bool advance) {
     }
 }
 
+// Master 128 MC146818 on the system VIA: PB6 = chip select, PB7 = address
+// strobe, IC32 bit 1 = read, bit 2 = data strobe, port A = data bus
+// Advance the MC146818 clock by `us` microseconds (BCD, 24-hour, register B bit 2 = binary)
+static void _bbc_rtc_tick(bbc_t* sys, uint32_t us) {
+    sys->rtc_ticks += us;
+    if (sys->rtc_ticks < 1000000) return;
+    sys->rtc_ticks -= 1000000;
+    uint8_t* r = sys->rtc_regs;
+    r[12] |= 0x90;   // Register C: update-ended flag (UF) + IRQF, cleared when read
+    bool binary = r[11] & 0x04;
+    static const uint8_t days_in_month[13] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    #define RTC_INC(reg, limit, wrap) do { \
+        uint8_t v = r[reg]; \
+        v = binary ? (uint8_t)(v + 1) : (uint8_t)(((v & 0x0F) == 9) ? ((v & 0xF0) + 0x10) : (v + 1)); \
+        uint8_t dec = binary ? v : (uint8_t)((v >> 4) * 10 + (v & 0x0F)); \
+        if (dec > (limit)) { r[reg] = (wrap); carry = true; } else { r[reg] = v; carry = false; } } while (0)
+    bool carry;
+    RTC_INC(0, 59, 0); if (!carry) return;
+    RTC_INC(2, 59, 0); if (!carry) return;
+    RTC_INC(4, 23, 0); if (!carry) return;
+    RTC_INC(6, 7, 1);
+    uint8_t month = binary ? r[8] : (uint8_t)((r[8] >> 4) * 10 + (r[8] & 0x0F));
+    uint8_t dim = (month >= 1 && month <= 12) ? days_in_month[month] : 31;
+    RTC_INC(7, dim, 1); if (!carry) return;
+    RTC_INC(8, 12, 1); if (!carry) return;
+    RTC_INC(9, 99, 0);
+    #undef RTC_INC
+}
+
+static void _bbc_update_rtc(bbc_t* sys, uint8_t old_ic32) {
+    uint8_t pb = mos6522via_get_pb(&sys->sysvia);
+    bool cs = pb & 0x40, as = pb & 0x80;
+    bool old_as = sys->sysvia_pb_old_rtc & 0x80;
+    uint8_t pa = mos6522via_get_pa(&sys->sysvia);
+    if (cs && old_as && !as) {
+        sys->rtc_addr = pa & 0x3F;                              // Address latched on AS 1 -> 0
+    }
+    if (cs && !as) {
+        if (sys->ic32 & 0x02) {
+            // Read mode: the RTC drives port A (D register reports valid RAM/time)
+            uint8_t v = sys->rtc_regs[sys->rtc_addr];
+            if (sys->rtc_addr == 13) v |= 0x80;
+            if (sys->rtc_addr == 12) sys->rtc_regs[12] = 0;    // Flags cleared by the read
+            mos6522via_set_pa(&sys->sysvia, v);
+        } else if ((old_ic32 & 0x04) && !(sys->ic32 & 0x04)) {
+            // Write on data strobe 1 -> 0 (registers C and D are read-only)
+            if (sys->rtc_addr != 12 && sys->rtc_addr != 13) sys->rtc_regs[sys->rtc_addr] = pa;
+        }
+    }
+    sys->sysvia_pb_old_rtc = pb;
+}
+
 // System VIA port B: IC32 addressable latch (PB0-2 = bit, PB3 = value), joystick buttons (PB4-5 in)
 static void _bbc_update_ic32(bbc_t* sys) {
     uint8_t pb = mos6522via_get_pb(&sys->sysvia);
+    uint8_t old = sys->ic32;
     if (pb != sys->sysvia_pb_old) {
         uint8_t mask = 1 << (pb & 7);
-        uint8_t old = sys->ic32;
         if (pb & 0x08) {
             sys->ic32 |= mask;
         } else {
@@ -385,6 +502,11 @@ static void _bbc_update_ic32(bbc_t* sys) {
     }
     // Joystick fire buttons not pressed, speech chip absent (PB6 = 1, PB7 = 1)
     mos6522via_set_pb(&sys->sysvia, pb | 0xF0);
+
+    if (sys->model == BBC_MODEL_MASTER) {
+        _bbc_update_rtc(sys, old);
+        _bbc_rtc_tick(sys, 2);
+    }
 }
 
 static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
@@ -422,7 +544,7 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 }
                 break;
             case 0x20:
-                if (addr < 0xFE30) {
+                if ((addr & 0xFF) < 0x24) {
                     // Video ULA (write only)
                     if (!rw) {
                         uint8_t v = MOS6502CPU_GET_DATA(&sys->cpu);
@@ -434,6 +556,23 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                         sys->ula_dirty = true;
                     } else {
                         data = 0xFE;
+                    }
+                } else if (sys->model == BBC_MODEL_MASTER) {
+                    // Master 128: ROMSEL ($FE30-$FE33) and ACCCON ($FE34-$FE37) read back;
+                    // 1770 control at $FE24-$FE27, registers at $FE28-$FE2F
+                    uint8_t lo = (uint8_t)addr;
+                    if (lo < 0x28) {
+                        if (rw) data = wd1770_read_control(&sys->fdc);
+                        else wd1770_write_control(&sys->fdc, MOS6502CPU_GET_DATA(&sys->cpu));
+                    } else if (lo < 0x30) {
+                        if (rw) data = wd1770_read(&sys->fdc, addr & 3);
+                        else wd1770_write(&sys->fdc, addr & 3, MOS6502CPU_GET_DATA(&sys->cpu));
+                    } else if (lo < 0x34) {
+                        if (rw) data = sys->romsel;
+                        else _bbc_set_romsel(sys, MOS6502CPU_GET_DATA(&sys->cpu));
+                    } else {
+                        if (rw) data = sys->acccon;
+                        else _bbc_set_acccon(sys, MOS6502CPU_GET_DATA(&sys->cpu));
                     }
                 } else {
                     // ROMSEL (write only)
@@ -449,11 +588,16 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 // very next access after the column/row was written on port A.
                 uint8_t reg = addr & 0x0F;
                 bool port_a = (reg == 1) || (reg == 15) || (reg == 3);
+                bool port_b = (reg == 0) || (reg == 2);
                 if (rw) {
-                    if (port_a) _bbc_update_keyboard(sys, false);
+                    if (port_a) {
+                        if (sys->model == BBC_MODEL_MASTER) _bbc_update_rtc(sys, sys->ic32);
+                        _bbc_update_keyboard(sys, false);
+                    }
                     data = mos6522via_read(&sys->sysvia, reg);
                 } else {
                     mos6522via_write(&sys->sysvia, reg, MOS6502CPU_GET_DATA(&sys->cpu));
+                    if (port_b) _bbc_update_ic32(sys);          // Latch, RTC strobes
                     if (port_a) _bbc_update_keyboard(sys, false);
                 }
                 break;
@@ -467,7 +611,11 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 }
                 break;
             case 0x80:
-                // Acorn 1770 interface: $FE80-$FE83 control latch, $FE84-$FE87 WD1770
+                // Acorn 1770 interface (Model B): $FE80-$FE83 control latch, $FE84-$FE87 WD1770
+                if (sys->model == BBC_MODEL_MASTER) {
+                    if (rw) data = 0xFE;
+                    break;
+                }
                 if (addr & 0x04) {
                     if (rw) {
                         data = wd1770_read(&sys->fdc, addr & 3);
@@ -520,6 +668,14 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
         if (rw) {
             MOS6502CPU_SET_DATA(&sys->cpu, 0xFF);
         }
+    } else if (sys->model == BBC_MODEL_MASTER && (sys->acccon & 0x02) && !(sys->acccon & 0x04) &&
+               addr >= 0x3000 && addr < 0x8000 && sys->last_pc >= 0xC000 && sys->last_pc < 0xE000) {
+        // ACCCON E: code running from $C000-$DFFF (VDU driver) accesses LYNNE
+        if (rw) {
+            MOS6502CPU_SET_DATA(&sys->cpu, sys->lynne[addr - 0x3000]);
+        } else {
+            sys->lynne[addr - 0x3000] = MOS6502CPU_GET_DATA(&sys->cpu);
+        }
     } else {
         // Regular memory access
         if (rw) {
@@ -546,6 +702,7 @@ void bbc_tick(bbc_t* sys) {
     } else {
         MOS6502CPU_TICK(&sys->cpu);
         uint16_t a = MOS6502CPU_GET_ADDR(&sys->cpu);
+        if (sys->cpu.sync) sys->last_pc = a;
         if (_bbc_is_1mhz(a)) {
             // Stretched to the next 1 MHz edge, then one full 1 MHz cycle: 1 or 2 extra cycles
             sys->stall = (uint8_t)((sys->system_ticks & 1) ? 1 : 2);
@@ -631,9 +788,20 @@ static void _bbc_init_memorymap(bbc_t* sys) {
     mem_map_ram(&sys->mem, 0, 0x0000, 0x8000, sys->ram);
     _bbc_set_romsel(sys, sys->romsel);
     mem_map_rom(&sys->mem, 0, 0xC000, 0x4000, sys->os);
+    if (sys->model == BBC_MODEL_MASTER) {
+        _bbc_set_acccon(sys, sys->acccon);
+    }
 }
 
 /*-- 6845 CRTC ---------------------------------------------------------------*/
+
+// Byte of the displayed screen RAM (LYNNE when ACCCON D on the Master)
+static inline uint8_t _bbc_vram(const bbc_t* sys, uint16_t addr) {
+    if (sys->model == BBC_MODEL_MASTER && (sys->acccon & 0x01) && addr >= 0x3000) {
+        return sys->lynne[addr - 0x3000];
+    }
+    return sys->ram[addr];
+}
 
 // Screen address wrap-around per IC32 bits 4-5 (values in 8-byte units, MA is a byte/8 address)
 static const uint16_t _bbc_screen_wrap[4] = {0x4000 >> 3, 0x2000 >> 3, 0x5000 >> 3, 0x2800 >> 3};
@@ -783,7 +951,7 @@ static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint
     if (sys->vcc > 0) {
         uint16_t prev = (uint16_t)(ma - chars);
         for (int c = 0; c < chars && c < 40; c++) {
-            if ((sys->ram[((prev + c) & 0x3FF) | 0x7C00] & 0x7F) == 0x0D) {
+            if ((_bbc_vram(sys, (uint16_t)(((prev + c) & 0x3FF) | 0x7C00)) & 0x7F) == 0x0D) {
                 bottom_row = true;
                 break;
             }
@@ -791,7 +959,7 @@ static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint
     }
     for (int c = 0; c < chars && c < 40; c++) {
         uint16_t a = (uint16_t)((ma + c) & 0x3FF) | 0x7C00;
-        uint8_t ch = sys->ram[a] & 0x7F;
+        uint8_t ch = _bbc_vram(sys, a) & 0x7F;
         uint8_t fg = st.fg, bg = st.bg;
         uint8_t* p = line + c * 16;
         uint16_t bits = 0;
@@ -953,7 +1121,7 @@ static void _bbc_render_scanline(bbc_t* sys) {
                 addr = ma;
             }
             addr = (uint16_t)((addr << 3) | (raster & 7));
-            uint8_t byte = (raster < 8 && addr < 0x8000) ? sys->ram[addr] : 0;
+            uint8_t byte = (raster < 8 && addr < 0x8000) ? _bbc_vram(sys, addr) : 0;
             memcpy(dst + x, sys->lut[byte], (size_t)out_bytes);
             x += out_bytes;
         }
