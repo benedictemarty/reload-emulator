@@ -153,6 +153,8 @@ typedef struct {
     bool frame_done;           // Set at the end of each vsync
 
     // Video ULA
+    bool ula_dirty;            // Palette or control changed: rebuild the byte -> pixels table
+    uint8_t lut[256][8];       // One screen byte -> 16 (1 MHz) or 8 (2 MHz) packed 4-bit pixels
     uint8_t ula_ctrl;          // bit 0 flash, bit 1 teletext, bits 2-3 chars per line, bit 4 2 MHz CRTC clock, bits 5-7 cursor
     uint8_t ula_pal[16];       // Logical -> physical colour (0-15, 8-15 flashing)
 
@@ -270,6 +272,7 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
 
     sys->ic32 = 0xFF;  // Sound write and keyboard write disabled, screen base 3
     memset(sys->ula_pal, 0, sizeof(sys->ula_pal));
+    sys->ula_dirty = true;
     memset(_bbc_empty_bank, 0xFF, sizeof(_bbc_empty_bank));
 
     _bbc_init_memorymap(sys);
@@ -402,6 +405,7 @@ static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                         } else {
                             sys->ula_ctrl = v;
                         }
+                        sys->ula_dirty = true;
                     } else {
                         data = 0xFE;
                     }
@@ -786,6 +790,35 @@ static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint
     }
 }
 
+// Byte -> packed pixels table for the current ULA mode and palette.
+// ULA chars per line (bits 2-3): 0 = 10, 1 = 20, 2 = 40, 3 = 80 ; with the 2 MHz
+// clock (bit 4) a byte covers 8 output pixels, else 16.
+// MODE 0/3: 1 bpp, MODE 1: 2 bpp, MODE 2: 4 bpp, MODE 4/6: 1 bpp, MODE 5: 2 bpp.
+static void _bbc_ula_build_lut(bbc_t* sys) {
+    int cpl_sel = (sys->ula_ctrl >> 2) & 3;
+    bool fast = sys->ula_ctrl & 0x10;
+    int px_per_byte = fast ? 8 : 16;
+    int bpp = fast ? ((cpl_sel == 3) ? 1 : (cpl_sel == 2) ? 2 : 4) : ((cpl_sel == 2) ? 1 : (cpl_sel == 1) ? 2 : 4);
+    int pixels_per_byte = 8 / bpp;
+    int px_w = px_per_byte / pixels_per_byte;
+    for (int b = 0; b < 256; b++) {
+        uint8_t px[16];
+        uint8_t byte = (uint8_t)b;
+        int x = 0;
+        for (int p = 0; p < pixels_per_byte; p++) {
+            uint8_t col = _bbc_phys_colour(sys, _bbc_ula_index(byte));
+            byte = (uint8_t)((byte << 1) | 1);
+            for (int k = 0; k < px_w; k++) {
+                px[x++] = col;
+            }
+        }
+        for (int i = 0; i < px_per_byte / 2; i++) {
+            sys->lut[b][i] = (uint8_t)((px[i * 2] << 4) | px[i * 2 + 1]);
+        }
+    }
+    sys->ula_dirty = false;
+}
+
 static void _bbc_render_scanline(bbc_t* sys) {
     const uint8_t* r = sys->crtc_reg;
     int y = sys->display_y;
@@ -804,25 +837,16 @@ static void _bbc_render_scanline(bbc_t* sys) {
         int raster = (sys->rc >> 1) % 10;
         _bbc_render_teletext_line(sys, line, chars, sys->ma_row_start, raster);
     } else {
-        // Bitmap modes. ULA chars per line: 0 = 10, 1 = 20, 2 = 40, 3 = 80 -> pixels per byte
-        int cpl_sel = (sys->ula_ctrl >> 2) & 3;
-        int px_per_byte;      // Output pixels per byte on the 640 grid
-        int bpp;              // Bits per pixel
-        bool fast = sys->ula_ctrl & 0x10;
-        if (fast) {
-            // 2 MHz: 80 bytes per line
-            px_per_byte = 8;
-            bpp = (cpl_sel == 3) ? 1 : (cpl_sel == 2) ? 2 : 4;  // MODE 0/3: 1 bpp, MODE 1: 2 bpp, MODE 2: 4 bpp
-        } else {
-            // 1 MHz: 40 bytes per line
-            px_per_byte = 16;
-            bpp = (cpl_sel == 2) ? 1 : (cpl_sel == 1) ? 2 : 4;  // MODE 4/6: 1 bpp, MODE 5: 2 bpp
+        // Bitmap modes: one table lookup per screen byte (see _bbc_ula_build_lut)
+        if (sys->ula_dirty) {
+            _bbc_ula_build_lut(sys);
         }
-        int pixels_per_byte = 8 / bpp;
-        int px_w = px_per_byte / pixels_per_byte;
+        bool fast = sys->ula_ctrl & 0x10;
+        int out_bytes = fast ? 4 : 8;       // Packed bytes per screen byte (8 or 16 pixels)
         uint8_t raster = sys->rc;
+        uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2)];
         int x = 0;
-        for (int c = 0; c < chars && x < BBC_SCREEN_WIDTH; c++) {
+        for (int c = 0; c < chars && x + out_bytes <= BBC_SCREEN_WIDTH / 2; c++) {
             uint16_t ma = (uint16_t)((sys->ma_row_start + c) & 0x3FFF);
             uint16_t addr;
             if (ma & 0x1000) {
@@ -832,17 +856,13 @@ static void _bbc_render_scanline(bbc_t* sys) {
             }
             addr = (uint16_t)((addr << 3) | (raster & 7));
             uint8_t byte = (raster < 8 && addr < 0x8000) ? sys->ram[addr] : 0;
-            for (int p = 0; p < pixels_per_byte; p++) {
-                uint8_t col = _bbc_phys_colour(sys, _bbc_ula_index(byte));
-                byte = (uint8_t)((byte << 1) | 1);
-                for (int k = 0; k < px_w && x < BBC_SCREEN_WIDTH; k++) {
-                    line[x++] = col;
-                }
-            }
+            memcpy(dst + x, sys->lut[byte], (size_t)out_bytes);
+            x += out_bytes;
         }
-        while (x < BBC_SCREEN_WIDTH) {
-            line[x++] = 0;
+        if (x < BBC_SCREEN_WIDTH / 2) {
+            memset(dst + x, 0, (size_t)(BBC_SCREEN_WIDTH / 2 - x));
         }
+        return;
     }
 
     // Pack into the 4-bit framebuffer
