@@ -4,6 +4,7 @@
 // the RP2040 emulates memory, 6845/ULA video, VIAs, keyboard and SN76489.
 //
 // Core 0: CPU bus (bit-banged, 2 MHz target), USB host.
+// Discs: images compiled in flash (src/images/bbc_images.h), F11 = next image.
 // Core 1: DVI 800x480 @ 60 Hz, BBC 640x256 framebuffer centred, lines
 //         BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP+239 doubled (256 lines do not
 //         fit twice in 480; policy: crop 8 lines top and bottom).
@@ -38,6 +39,12 @@
 #include "pico/stdlib.h"
 
 #include "roms/bbc_roms.h"
+#if __has_include("images/bbc_images.h")
+#include "images/bbc_images.h"
+#define BBC_NUM_IMAGES ((int)(sizeof(bbc_disc_images) / sizeof(bbc_disc_images[0])))
+#else
+#define BBC_NUM_IMAGES 0
+#endif
 
 #include "chips/chips_common.h"
 #ifdef OLIMEX_NEO6502
@@ -102,10 +109,26 @@ bbc_desc_t bbc_desc(void) {
     return desc;
 }
 
+static int current_image = -1;
+
+// Insert flash image `index` (read-only) in drive 0
+static void insert_image(int index) {
+#if BBC_NUM_IMAGES > 0
+    if (index < 0 || index >= BBC_NUM_IMAGES) return;
+    const bbc_disc_image_t* im = &bbc_disc_images[index];
+    bbc_insert_disc(&state.bbc, 0, (uint8_t*)im->data, im->size, im->sides, true);
+    current_image = index;
+    printf("Disc %d inserted (%u bytes)\n", index, (unsigned)im->size);
+#else
+    (void)index;
+#endif
+}
+
 void app_init(void) {
     bbc_desc_t desc = bbc_desc();
     bbc_init(&state.bbc, &desc);
     bbc_reset(&state.bbc);
+    insert_image(0);
 }
 
 // TMDS bit clock 295.2 MHz, DVDD 1.2V (Neo6502 timing shared with the Oric build)
@@ -190,6 +213,11 @@ static int bbc_key_from_hid(uint8_t k) {
 }
 
 void hid_raw_key_down(uint8_t keycode) {
+    if (keycode == HID_KEY_F11) {
+        // Next disc image
+        if (BBC_NUM_IMAGES > 0) insert_image((current_image + 1) % BBC_NUM_IMAGES);
+        return;
+    }
     int key = bbc_key_from_hid(keycode);
     if (key >= 0) {
         bbc_key_down(&state.bbc, (uint8_t)key);

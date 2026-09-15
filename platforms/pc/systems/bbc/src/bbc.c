@@ -3,6 +3,8 @@
 // BBC Micro Model B emulator, PC platform (sokol).
 //
 // Keys: positional PC -> BBC mapping, F12 = BREAK, F10 = BBC f0, F1-F9 = f1-f9.
+// Discs: drop a .ssd/.dsd file on the window (drive 0), or start with
+// `bbc disc=game.ssd`; hold SHIFT and press F12 (BREAK) to auto-boot.
 //
 // ## zlib/libpng license
 //
@@ -30,6 +32,8 @@
 #define RGBA8(b, g, r) (0xFF000000 | (r << 16) | (g << 8) | (b))
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "roms/bbc_roms.h"
 
@@ -131,6 +135,25 @@ chips_display_info_t bbc_display_info(bbc_t* sys) {
     return res;
 }
 
+// Disc image in RAM (writable), 2 sides x 80 tracks x 10 sectors x 256 bytes
+static uint8_t disc_data[2 * 80 * 10 * 256];
+
+static bool load_disc(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        perror(path);
+        return false;
+    }
+    size_t n = fread(disc_data, 1, sizeof(disc_data), f);
+    fclose(f);
+    size_t len = strlen(path);
+    int sides = (len > 4 && !strcmp(path + len - 4, ".dsd")) ? 2 : 1;
+    bbc_insert_disc(&state.bbc, 0, disc_data, n, sides, false);
+    printf("Disc inserted: %s (%u bytes, %d side%s)\n", path, (unsigned)n, sides, sides > 1 ? "s" : "");
+    fflush(stdout);
+    return true;
+}
+
 void app_init(void) {
     saudio_setup(&(saudio_desc){
         .logger.func = slog_func,
@@ -151,6 +174,9 @@ void app_init(void) {
     });
     clock_init();
     prof_init();
+    if (sargs_exists("disc")) {
+        load_disc(sargs_value("disc"));
+    }
 }
 
 static void draw_status_bar(void);
@@ -259,6 +285,11 @@ void app_input(const sapp_event* event) {
             }
             break;
         }
+        case SAPP_EVENTTYPE_FILES_DROPPED:
+            if (sapp_get_num_dropped_files() > 0) {
+                load_disc(sapp_get_dropped_file_path(0));
+            }
+            break;
         default:
             break;
     }

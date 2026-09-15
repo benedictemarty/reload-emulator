@@ -1,0 +1,18 @@
+#pragma once
+#include <stdint.h>
+#include <stddef.h>
+
+// Disc images for the BBC Micro (.ssd = 1 side, .dsd = 2 sides), generated
+// with tools/bin2hdr (e.g. bin2hdr -i game.ssd -o game_ssd.h -a game_ssd),
+// kept in flash (read-only: the emulated disc reports write protect).
+// #include "game_ssd.h"
+
+typedef struct {
+    const uint8_t* data;
+    size_t size;
+    int sides;
+} bbc_disc_image_t;
+
+static const bbc_disc_image_t bbc_disc_images[] = {
+    // {game_ssd, sizeof(game_ssd), 1},
+};
