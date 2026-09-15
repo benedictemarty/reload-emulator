@@ -36,10 +36,10 @@
 // (R12/R13) and palette changes between lines are honoured; changes
 // inside a line are not.
 //
-// MODE 7 is provisional: the SAA5050 alphanumerics are drawn with the MOS
-// 8x8 font (control codes for colour, graphics, double height and
-// background are honoured; contiguous/separated sixels are drawn from the
-// character code).
+// MODE 7 uses the SAA5050 English glyphs (bbc_teletext_font.h, from the
+// public-domain Bedstead bitmaps) with the SAA5050 character rounding;
+// colour, graphics (contiguous/separated, hold), double height and
+// background codes are honoured; flashing and conceal are not.
 //
 // ## zlib/libpng license
 //
@@ -163,6 +163,9 @@ typedef struct {
     wd1770_t fdc;
     bool nmi;
 
+    // Teletext glyphs, 12x20 after SAA5050 rounding (bits 11..0)
+    uint16_t tt_glyphs[96][20];
+
     // Framebuffer, 4 bits per pixel, 640x256
     uint8_t fb[BBC_FRAMEBUFFER_SIZE];
 
@@ -197,6 +200,8 @@ void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int side
 #define CHIPS_ASSERT(c) assert(c)
 #endif
 
+#include "bbc_teletext_font.h"
+
 #define BBC_KEY_SHIFT 0x00
 #define BBC_KEY_CTRL  0x01
 #define BBC_KEY_BREAK 0xFF   // Not in the matrix: wired to the CPU reset line
@@ -223,6 +228,7 @@ void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int side
 static uint8_t _bbc_empty_bank[0x4000];
 
 static void _bbc_init_memorymap(bbc_t* sys);
+static void _bbc_teletext_init(bbc_t* sys);
 static void _bbc_update_keyboard(bbc_t* sys, bool advance);
 static void _bbc_render_scanline(bbc_t* sys);
 static void _bbc_crtc_tick(bbc_t* sys);
@@ -267,6 +273,7 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
     memset(_bbc_empty_bank, 0xFF, sizeof(_bbc_empty_bank));
 
     _bbc_init_memorymap(sys);
+    _bbc_teletext_init(sys);
 }
 
 void bbc_discard(bbc_t* sys) {
@@ -649,28 +656,81 @@ static inline uint8_t _bbc_ula_index(uint8_t byte) {
     return (uint8_t)(((byte >> 4) & 0x08) | ((byte >> 3) & 0x04) | ((byte >> 2) & 0x02) | ((byte >> 1) & 0x01));
 }
 
-// Teletext (MODE 7) provisional renderer: MOS 8x8 font, colour / graphics / double-height codes
+// Teletext (MODE 7): SAA5050 character generator, English set. Glyphs are
+// 5x9 in a 6x10 cell, doubled to 12x20 with the SAA5050 character rounding
+// (an off pixel gets a quadrant filled when its two orthogonal neighbours
+// towards that quadrant are on and the diagonal one is off). One frame line
+// = two of the 20 rows (the two interlaced fields merged). Not emulated:
+// flashing (0x08/0x09), conceal (0x18).
+static void _bbc_teletext_init(bbc_t* sys) {
+    for (int ch = 0; ch < 96; ch++) {
+        const uint8_t* g = bbc_teletext_font[ch];
+        // 6x10 source with 1-pixel blank margin at right and bottom
+        #define TT_PX(x, y) (((x) >= 0 && (x) < 5 && (y) >= 0 && (y) < 9) ? ((g[y] >> (4 - (x))) & 1) : 0)
+        for (int y = 0; y < 10; y++) {
+            uint16_t top = 0, bottom = 0;
+            for (int x = 0; x < 6; x++) {
+                bool on = TT_PX(x, y);
+                bool l = TT_PX(x - 1, y), r = TT_PX(x + 1, y), u = TT_PX(x, y - 1), d = TT_PX(x, y + 1);
+                bool ul = TT_PX(x - 1, y - 1), ur = TT_PX(x + 1, y - 1), dl = TT_PX(x - 1, y + 1), dr = TT_PX(x + 1, y + 1);
+                bool tl = on || (l && u && !ul);
+                bool tr = on || (r && u && !ur);
+                bool bl = on || (l && d && !dl);
+                bool br = on || (r && d && !dr);
+                if (tl) top |= (uint16_t)(0x800 >> (x * 2));
+                if (tr) top |= (uint16_t)(0x400 >> (x * 2));
+                if (bl) bottom |= (uint16_t)(0x800 >> (x * 2));
+                if (br) bottom |= (uint16_t)(0x400 >> (x * 2));
+            }
+            sys->tt_glyphs[ch][y * 2] = top;
+            sys->tt_glyphs[ch][y * 2 + 1] = bottom;
+        }
+        #undef TT_PX
+    }
+}
+
 typedef struct {
     uint8_t fg, bg;
     bool graphics, separated, double_height, hold;
     uint8_t held;
+    bool held_separated;
 } _bbc_tt_state_t;
+
+// Draw 12 teletext pixels (bits 11..0) as 16 frame pixels
+static inline void _bbc_tt_put(uint8_t* p, uint16_t bits, uint8_t fg, uint8_t bg) {
+    for (int px = 0; px < 16; px++) {
+        int tx = (px * 3) >> 2;
+        p[px] = (bits & (0x800 >> tx)) ? fg : bg;
+    }
+}
 
 static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint16_t ma, int raster) {
     _bbc_tt_state_t st = {.fg = 7, .bg = 0};
-    // 40 characters -> 16 pixels each, 10 rasters per row (0-9) ; font rows 0-7 then blank
-    int font_row = raster;
+    // A row following a row that used double height shows the bottom halves
+    bool bottom_row = false;
+    if (sys->vcc > 0) {
+        uint16_t prev = (uint16_t)(ma - chars);
+        for (int c = 0; c < chars && c < 40; c++) {
+            if ((sys->ram[((prev + c) & 0x3FF) | 0x7C00] & 0x7F) == 0x0D) {
+                bottom_row = true;
+                break;
+            }
+        }
+    }
     for (int c = 0; c < chars && c < 40; c++) {
         uint16_t a = (uint16_t)((ma + c) & 0x3FF) | 0x7C00;
         uint8_t ch = sys->ram[a] & 0x7F;
         uint8_t fg = st.fg, bg = st.bg;
-        bool draw_graphics = false;
-        uint8_t glyph = 0;
+        uint8_t* p = line + c * 16;
+        uint16_t bits = 0;
+        bool draw_sixels = false;
+        uint8_t sixel = 0;
+        bool sixel_sep = st.separated;
         if (ch < 0x20) {
-            // Control codes take effect from this cell (set-after) except background changes
+            // Control codes: set-after, except background which applies at once
             switch (ch) {
                 case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07:
-                    st.fg = ch; st.graphics = false; st.hold = false; break;
+                    st.fg = ch; st.graphics = false; break;
                 case 0x0C: st.double_height = false; break;
                 case 0x0D: st.double_height = true; break;
                 case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16: case 0x17:
@@ -684,50 +744,45 @@ static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint
                 default: break;
             }
             if (st.hold && st.graphics) {
-                glyph = st.held;
-                draw_graphics = true;
+                draw_sixels = true;
+                sixel = st.held;
+                sixel_sep = st.held_separated;
             }
         } else if (st.graphics && (ch & 0x20)) {
-            // Sixel graphics: bits 0,1 / 2,3 / 4,6 = rows of 2 cells, 3 rows of (3,3,4) rasters
-            draw_graphics = true;
-            glyph = ch;
+            draw_sixels = true;
+            sixel = ch;
             st.held = ch;
+            st.held_separated = st.separated;
         } else {
-            // Alphanumeric: MOS font at $C000 + (ch - 32) * 8, 8 rows
-            if (font_row < 8) {
-                int fr = font_row;
-                if (st.double_height) {
-                    // Double height: top row shows font rows 0-3, bottom row rows 4-7 (approximation)
-                    fr = (sys->rc >= 10 ? 4 : 0) + (font_row >> 1);
-                }
-                glyph = sys->os[(ch - 0x20) * 8 + fr];
+            int row;
+            if (st.double_height) {
+                row = bottom_row ? 10 + raster : raster;
             } else {
-                glyph = 0;
+                row = raster * 2;
+            }
+            bits = sys->tt_glyphs[ch - 0x20][row];
+            if (!st.double_height) {
+                bits |= sys->tt_glyphs[ch - 0x20][row + 1];
             }
         }
-        uint8_t* p = line + c * 16;
-        if (draw_graphics) {
+        if (draw_sixels) {
+            // 2 x 3 blocks of 6 x (6,8,6) teletext pixels; separated: 4 x (4,6,4) inside
             int band = raster < 3 ? 0 : (raster < 7 ? 1 : 2);
             bool left, right;
             switch (band) {
-                case 0: left = glyph & 0x01; right = glyph & 0x02; break;
-                case 1: left = glyph & 0x04; right = glyph & 0x08; break;
-                default: left = glyph & 0x10; right = glyph & 0x40; break;
+                case 0: left = sixel & 0x01; right = sixel & 0x02; break;
+                case 1: left = sixel & 0x04; right = sixel & 0x08; break;
+                default: left = sixel & 0x10; right = sixel & 0x40; break;
             }
-            bool gap = st.separated && ((band == 0 && raster == 2) || (band == 1 && raster == 6) || (band == 2 && raster == 9));
-            for (int x = 0; x < 16; x++) {
-                bool on = (x < 8) ? left : right;
-                if (st.separated && ((x & 7) < 2)) on = false;
-                if (gap) on = false;
-                p[x] = on ? fg : bg;
+            uint16_t lmask = 0xFC0, rmask = 0x03F;
+            if (sixel_sep) {
+                lmask = 0x3C0; rmask = 0x00F;
+                bool gap_line = (band == 0 && raster == 2) || (band == 1 && raster == 6) || (band == 2 && raster == 9);
+                if (gap_line) { lmask = 0; rmask = 0; }
             }
-        } else {
-            for (int x = 0; x < 8; x++) {
-                uint8_t col = (glyph & (0x80 >> x)) ? fg : bg;
-                p[x * 2] = col;
-                p[x * 2 + 1] = col;
-            }
+            bits = (uint16_t)((left ? lmask : 0) | (right ? rmask : 0));
         }
+        _bbc_tt_put(p, bits, fg, bg);
     }
 }
 
