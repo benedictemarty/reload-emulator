@@ -158,3 +158,7 @@ For Oric emulator to work correctly you must connect pin 10 of UEXT connector (G
 To use F12 as RESET button (both Apple ][ and Oric) you have to connect pin 9 of UEXT connector (GPIO 26) to pin 40 of 6502 bus connector (RESET).
 
 To use F11 as NMI button (Oric) you have to connect pin 8 of UEXT connector (GPIO 27) to pin 26 of 6502 bus connector (NMI).
+
+## Avertissement
+
+⚠️ Avertissement : ce programme est un programme généré par Claude Code sous la supervision d'un être humain : il a été utilisé pour améliorer, développer, rendre compatible ou traduire ce logiciel.
