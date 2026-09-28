@@ -185,6 +185,11 @@ typedef struct {
     bool kbd_ca2;              // Last CA2 level driven by the keyboard
     bbc_model_t model;
     uint8_t hcc;               // Horizontal character counter
+    bool crtc_lazy;            // Middle of a line: hcc = crtc_base_hcc + characters since crtc_base_tick
+    bool crtc_fast;            // Character clock of the lazy span (2 MHz)
+    uint8_t crtc_base_hcc;
+    uint32_t crtc_base_tick;
+    uint32_t crtc_lazy_until;  // First tick at which the exact per-cycle CRTC must resume
     uint8_t ula_ctrl;          // bit 0 flash, bit 1 teletext, bits 2-3 chars per line, bit 4 2 MHz CRTC clock, bits 5-7 cursor
     bool vsync;
     bool nmi;
@@ -639,6 +644,32 @@ static BBC_HOT void _bbc_update_ic32(bbc_t* sys) {
     }
 }
 
+// Lazy CRTC: in the middle of a line only the characters are counted; hcc is
+// computed back (exactly) when needed: ULA or CRTC write, end of the lazy span
+static inline __attribute__((always_inline)) void _bbc_crtc_sync(bbc_t* sys) {
+    if (sys->crtc_lazy) {
+        uint32_t t = sys->system_ticks, b = sys->crtc_base_tick;
+        // CRTC cycles in [b, t): every cycle at 2 MHz, odd cycles at 1 MHz
+        uint32_t n = sys->crtc_fast ? (t - b) : ((t >> 1) - (b >> 1));
+        sys->hcc = (uint8_t)(sys->crtc_base_hcc + n);
+        sys->crtc_lazy = false;
+    }
+}
+
+static inline __attribute__((always_inline)) void _bbc_crtc_try_lazy(bbc_t* sys) {
+    uint8_t r0 = sys->crtc_reg[CRTC_R0_HTOTAL];
+    if (sys->hcc != 0 && sys->hcc < r0) {
+        uint32_t allowed = (uint32_t)(r0 - sys->hcc - 1);   // hcc stays below R0 (the last character has work)
+        if (allowed >= 8) {
+            sys->crtc_fast = sys->ula_ctrl & 0x10;
+            sys->crtc_base_hcc = sys->hcc;
+            sys->crtc_base_tick = sys->system_ticks;
+            sys->crtc_lazy_until = sys->system_ticks + (sys->crtc_fast ? allowed : 2 * allowed - 1);
+            sys->crtc_lazy = true;
+        }
+    }
+}
+
 static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
     if ((uint16_t)(addr - 0xFC00) >= 0x300 && !sys->lynne_e) {
         // Fast path: RAM, ROM and sideways banks (everything but FRED/JIM/SHEILA)
@@ -669,6 +700,7 @@ static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                     } else {
                         if (addr & 1) {
                             if (sys->crtc_addr < 18) {
+                                _bbc_crtc_sync(sys);   // R0 may move the end of the line
                                 sys->crtc_reg[sys->crtc_addr] = MOS6502CPU_GET_DATA(&sys->cpu);
                             }
                         } else {
@@ -686,6 +718,7 @@ static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 if ((addr & 0xFF) < 0x24) {
                     // Video ULA (write only)
                     if (!rw) {
+                        _bbc_crtc_sync(sys);   // Exact character position; the clock rate may change
                         uint8_t v = MOS6502CPU_GET_DATA(&sys->cpu);
                         if (addr & 1) {
                             sys->ula_pal[v >> 4] = (v & 0x0F) ^ 7;
@@ -971,6 +1004,7 @@ static inline __attribute__((always_inline)) void _bbc_tick_1mhz(bbc_t* sys) {
     }
 
 BBC_HOT void bbc_tick(bbc_t* sys) {
+    _bbc_crtc_sync(sys);
     _bbc_tick_cpu(sys);
     _bbc_tick_crtc(sys, sys->system_ticks & 1);
     if ((sys->system_ticks & 3) == 3) {
@@ -998,17 +1032,23 @@ BBC_HOT void bbc_tick4(bbc_t* sys) {
         for (int i = 0; i < 4; i++) bbc_tick(sys);
         return;
     }
+    if (!sys->crtc_lazy) {
+        _bbc_crtc_try_lazy(sys);
+    } else if (sys->system_ticks + 4 > sys->crtc_lazy_until) {
+        _bbc_crtc_sync(sys);   // Close to the last character: exact cycles again
+    }
+    // In a lazy span the CRTC has nothing to do (a ULA/CRTC write may end it)
     _bbc_tick_cpu(sys);
-    _bbc_tick_crtc(sys, false);
+    if (!sys->crtc_lazy) _bbc_tick_crtc(sys, false);
     sys->system_ticks++;
     _bbc_tick_cpu(sys);
-    _bbc_tick_crtc(sys, true);
+    if (!sys->crtc_lazy) _bbc_tick_crtc(sys, true);
     sys->system_ticks++;
     _bbc_tick_cpu(sys);
-    _bbc_tick_crtc(sys, false);
+    if (!sys->crtc_lazy) _bbc_tick_crtc(sys, false);
     sys->system_ticks++;
     _bbc_tick_cpu(sys);
-    _bbc_tick_crtc(sys, true);
+    if (!sys->crtc_lazy) _bbc_tick_crtc(sys, true);
     _bbc_tick_1mhz(sys);
     if ((sys->system_ticks & 7) == 7) {
         _bbc_sn_tick(sys);
