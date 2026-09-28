@@ -69,8 +69,11 @@
 // Code run every emulated cycle goes to RAM: from XIP flash it thrashes the
 // 16 KB cache (the Model B hot path alone is larger than that)
 #define BBC_HOT      __attribute__((section(".time_critical.bbc")))
+// Core 0 only captures each display line; core 1 draws it (no framebuffer)
+#define BBC_DEFER_RENDER 1
 #define CHIPS_HOT    __attribute__((section(".time_critical.bbc")))
 #define WDC65C02_HOT __attribute__((section(".time_critical.bbc")))
+#include <stddef.h>
 #include "chips/chips_common.h"
 #ifdef OLIMEX_NEO6502
 #include "chips/wdc65C02cpu.h"
@@ -434,6 +437,42 @@ static uint32_t emu_frames;
 static uint32_t key_down_frame[128];
 static bool key_release_pending[128];
 
+#ifdef BBC_DIAG
+// Remote typing for bench tests over SWD: the host writes BBC key codes into
+// diag_keyq (bit 7 = with SHIFT) and advances diag_keyq_tail; each key is held
+// then released for DIAG_KEY_FRAMES emulated frames
+#define DIAG_KEY_FRAMES 4
+volatile uint8_t diag_keyq[256];
+volatile uint32_t diag_keyq_head, diag_keyq_tail;
+// Layout for the host-side screen capture (RAM and captured lines of bbc_t)
+volatile uint32_t diag_layout[4] = {offsetof(bbc_t, ram), offsetof(bbc_t, lines), sizeof(bbc_line_t), offsetof(bbc_t, crtc_reg)};
+
+static void diag_key_service(void) {
+    static int phase, timer;
+    (void)diag_layout[0];   // Keep the layout table for the host tools
+    static uint8_t key;
+    if (timer > 0) {
+        timer--;
+        return;
+    }
+    if (phase == 1) {
+        bbc_key_up(&state.bbc, key & 0x7F);
+        if (key & 0x80) bbc_key_up(&state.bbc, BBC_KEY_Shift);
+        phase = 2;
+        timer = DIAG_KEY_FRAMES;
+    } else if (diag_keyq_head != diag_keyq_tail) {
+        key = diag_keyq[diag_keyq_head & 255];
+        diag_keyq_head++;
+        if (key & 0x80) bbc_key_down(&state.bbc, BBC_KEY_Shift);
+        bbc_key_down(&state.bbc, key & 0x7F);
+        phase = 1;
+        timer = DIAG_KEY_FRAMES;
+    } else {
+        phase = 0;
+    }
+}
+#endif
+
 static void release_pending_keys(void) {
     for (int k = 0; k < 128; k++) {
         if (key_release_pending[k] && emu_frames - key_down_frame[k] >= KEY_MIN_HOLD_FRAMES) {
@@ -499,44 +538,8 @@ static void __not_in_flash_func(diag_draw)(int row) {
 }
 #endif
 
-// One 4 bpp framebuffer byte (2 pixels, high nibble first) -> 2 bits per
-// plane: red plane in bits 0-1, green in bits 8-9, blue in bits 16-17
-static uint32_t __not_in_flash() plane_lut[256];
-
-static void plane_lut_init(void) {
-    for (int b = 0; b < 256; b++) {
-        uint32_t v = 0;
-        for (int px = 0; px < 2; px++) {
-            uint8_t c = (uint8_t)((px ? b : (b >> 4)) & 7);   // Bit 3 (flash) resolved by the ULA already
-            for (int ch = 0; ch < 3; ch++) {
-                if (c & (1 << ch)) v |= 1u << (ch * 8 + px);
-            }
-        }
-        plane_lut[b] = v;
-    }
-}
-
-// Split one BBC line (320 bytes, 640 pixels) into the three planes, starting
-// at pixel BBC_EMPTY_COLUMNS (a multiple of 16): 16 pixels per iteration
-static inline void __not_in_flash_func(split_scanline)(const uint8_t *src) {
-    uint16_t *r = (uint16_t *)planes[0] + BBC_EMPTY_COLUMNS / 16;
-    uint16_t *g = (uint16_t *)planes[1] + BBC_EMPTY_COLUMNS / 16;
-    uint16_t *b = (uint16_t *)planes[2] + BBC_EMPTY_COLUMNS / 16;
-    for (int i = 0; i < BBC_SCREEN_WIDTH / 16; i++, src += 8) {
-        uint32_t w0 = plane_lut[src[0]] | (plane_lut[src[1]] << 2) | (plane_lut[src[2]] << 4) | (plane_lut[src[3]] << 6);
-        uint32_t w1 = plane_lut[src[4]] | (plane_lut[src[5]] << 2) | (plane_lut[src[6]] << 4) | (plane_lut[src[7]] << 6);
-        r[i] = (uint16_t)((w0 & 0xFF) | ((w1 & 0xFF) << 8));
-        g[i] = (uint16_t)(((w0 >> 8) & 0xFF) | (w1 & 0xFF00));
-        b[i] = (uint16_t)(((w0 >> 16) & 0xFF) | ((w1 >> 8) & 0xFF00));
-    }
-}
-
-static inline void __not_in_flash_func(clear_scanline)(void) {
-    for (int ch = 0; ch < 3; ch++) {
-        uint16_t *p = (uint16_t *)planes[ch] + BBC_EMPTY_COLUMNS / 16;
-        for (int i = 0; i < BBC_SCREEN_WIDTH / 16; i++) p[i] = 0;
-    }
-}
+// Line renderer state of core 1 (byte -> pixels table of the last palette)
+static bbc_lut_t __not_in_flash() core1_lut;
 
 // One TMDS buffer per BBC line: PicoDVI shows each buffer on two output lines
 // (DVI_VERTICAL_REPEAT = 2), so a line must be ready every 2 x 31.7 us
@@ -548,10 +551,12 @@ static inline void __not_in_flash_func(render_frame)() {
 #ifdef BBC_DIAG
         uint32_t t0 = time_us_32();
 #endif
+        uint8_t *pp[3] = {(uint8_t *)planes[0] + BBC_EMPTY_COLUMNS / 8, (uint8_t *)planes[1] + BBC_EMPTY_COLUMNS / 8,
+                          (uint8_t *)planes[2] + BBC_EMPTY_COLUMNS / 8};
         if (src_line < BBC_SCREEN_HEIGHT) {
-            split_scanline(&state.bbc.fb[src_line * (BBC_SCREEN_WIDTH / 2)]);
+            bbc_render_line(&state.bbc, &state.bbc.lines[src_line], &core1_lut, pp);
         } else {
-            clear_scanline();
+            for (int ch = 0; ch < 3; ch++) memset(pp[ch], 0, BBC_SCREEN_WIDTH / 8);
         }
 #ifdef BBC_DIAG
         if (y >= BBC_DISPLAY_LINES - 6 && y < BBC_DISPLAY_LINES - 1) {
@@ -614,7 +619,6 @@ int main() {
     dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
     dvi_init(&dvi0, next_striped_spin_lock_num(), next_striped_spin_lock_num());
 
-    plane_lut_init();
     memset(planes, 0, sizeof(planes));
 
     printf("Core 1 start\n");
@@ -659,6 +663,9 @@ int main() {
         emu_frames++;
         tuh_task();
         release_pending_keys();
+#ifdef BBC_DIAG
+        diag_key_service();
+#endif
         usb_poll();
 
         uint32_t execution_time = time_us_32() - start_time_in_micros;

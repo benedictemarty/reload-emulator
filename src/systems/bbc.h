@@ -90,6 +90,45 @@ static const uint32_t bbc_palette[BBC_PALETTE_SIZE] = {
     RGBA8(0xFF, 0xFF, 0xFF), /* white */
 };
 
+// One display line as captured at the end of its scanline: enough to draw it
+// later (the RP2040 build draws on the display core, the PC build at once)
+#define BBC_LINE_EVENTS 16
+typedef struct { uint8_t hcc, reg, value; } bbc_ula_event_t;
+#define BBC_LINE_DISPLAYED     0x01
+#define BBC_LINE_TELETEXT      0x02
+#define BBC_LINE_NOT_FIRST_ROW 0x04
+#define BBC_LINE_LYNNE         0x08   // Master: screen read from LYNNE (ACCCON D)
+typedef struct {
+    uint16_t ma;               // CRTC address at the start of the character row
+    uint8_t chars;             // Displayed characters (0 = blank line)
+    uint8_t rc;                // Raster in the character row
+    uint8_t flags;             // BBC_LINE_*
+    uint8_t ctrl;              // ULA control at the start of the line
+    uint8_t wrap;              // IC32 screen size bits (hardware scroll wrap)
+    uint8_t field;             // Field counter (teletext flash)
+    uint8_t cursor_col;        // Cursor character on this line (0xFF: none)
+    uint8_t cursor_w;          // Cursor width in characters
+    uint8_t nev;               // ULA writes during the line
+    uint8_t pal[16];           // ULA palette at the start of the line
+    bbc_ula_event_t ev[BBC_LINE_EVENTS];
+} bbc_line_t;
+
+// Screen byte -> pixels of the 3 colour planes (bit n = pixel n from the left),
+// cached for the last few ULA control/palette states (the MOS flips the flash
+// bit twice a second: both states stay cached)
+#define BBC_LUT_SLOTS 4
+typedef struct {
+    bool valid;
+    uint8_t ctrl;
+    uint8_t pal[16];
+    uint32_t used;
+    uint16_t px[256][3];
+} bbc_lut_slot_t;
+typedef struct {
+    bbc_lut_slot_t slot[BBC_LUT_SLOTS];
+    uint32_t clock;
+} bbc_lut_t;
+
 typedef enum {
     BBC_MODEL_B = 0,        // Model B, OS 1.20, Acorn 1770 DFS at $FE80
     BBC_MODEL_MASTER = 1,   // Master 128, MOS 3.20: LYNNE/ANDY/HAZEL, ACCCON, RTC, 1770 at $FE24/$FE28
@@ -187,14 +226,12 @@ typedef struct {
     uint32_t field_count;      // Fields since power-up (teletext flash: 48 on / 16 off)
 
     // Video ULA writes during the current line (rendered by segments at the end of the line)
-    struct { uint8_t hcc, reg, value; } ula_events[16];
+    bbc_ula_event_t ula_events[BBC_LINE_EVENTS];
     uint8_t ula_event_count;
     uint8_t ula_ctrl_start;    // ULA state at the start of the line
     uint8_t ula_pal_start[16];
 
     // Video ULA
-    bool ula_dirty;            // Palette or control changed: rebuild the byte -> pixels table
-    uint8_t lut[256][8];       // One screen byte -> 16 (1 MHz) or 8 (2 MHz) packed 4-bit pixels
     uint8_t ula_ctrl;          // bit 0 flash, bit 1 teletext, bits 2-3 chars per line, bit 4 2 MHz CRTC clock, bits 5-7 cursor
     uint8_t ula_pal[16];       // Logical -> physical colour (0-15, 8-15 flashing)
 
@@ -217,8 +254,14 @@ typedef struct {
     // Teletext glyphs, 12x20 after SAA5050 rounding (bits 11..0)
     uint16_t tt_glyphs[96][20];
 
+#ifdef BBC_DEFER_RENDER
+    // Captured display lines, drawn elsewhere with bbc_render_line()
+    bbc_line_t lines[BBC_SCREEN_HEIGHT];
+#else
     // Framebuffer, 4 bits per pixel, 640x256
-    uint8_t fb[BBC_FRAMEBUFFER_SIZE] __attribute__((aligned(4)));   // Word aligned: read 16 bits at a time by the RP2040 display
+    bbc_lut_t lut;
+    uint8_t fb[BBC_FRAMEBUFFER_SIZE];
+#endif
 
     uint32_t system_ticks;
     uint8_t stall;             // Remaining cycles during which the CPU clock is held (1 MHz bus access)
@@ -250,6 +293,9 @@ void bbc_key_up(bbc_t* sys, uint8_t key);
 void bbc_set_joystick(bbc_t* sys, int n, uint16_t x, uint16_t y, bool fire);
 // Insert a disc image (bytes stay owned by the caller and are modified by writes)
 void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int sides, bool write_protected);
+// Draw a captured line into 3 colour planes of 640 pixels (80 bytes each,
+// 2-byte aligned; plane 0 red, 1 green, 2 blue)
+void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* lut, uint8_t* planes[3]);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -296,6 +342,7 @@ void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int side
 
 static void _bbc_init_memorymap(bbc_t* sys);
 static void _bbc_teletext_init(bbc_t* sys);
+static void _bbc_tt_expand_init(void);
 static void _bbc_update_keyboard(bbc_t* sys, bool advance);
 static void _bbc_update_ic32(bbc_t* sys);
 static void _bbc_update_rtc(bbc_t* sys, uint8_t old_ic32);
@@ -379,13 +426,13 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
 
     sys->ic32 = 0xFF;  // Sound write and keyboard write disabled, screen base 3
     memset(sys->ula_pal, 0, sizeof(sys->ula_pal));
-    sys->ula_dirty = true;
     sys->adc_status = 0xC0;   // Not busy, no conversion
     sys->adc_value = 0x8000;
     for (int i = 0; i < 4; i++) sys->adc_channel[i] = 0x8000;
 
     _bbc_init_memorymap(sys);
     _bbc_teletext_init(sys);
+    _bbc_tt_expand_init();
 }
 
 void bbc_discard(bbc_t* sys) {
@@ -619,7 +666,6 @@ static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                         } else {
                             sys->ula_ctrl = v;
                         }
-                        sys->ula_dirty = true;
                         if (sys->ula_event_count < 16) {
                             sys->ula_events[sys->ula_event_count].hcc = sys->hcc;
                             sys->ula_events[sys->ula_event_count].reg = (uint8_t)(addr & 1);
@@ -937,13 +983,6 @@ static void _bbc_init_memorymap(bbc_t* sys) {
 
 /*-- 6845 CRTC ---------------------------------------------------------------*/
 
-// Byte of the displayed screen RAM (LYNNE when ACCCON D on the Master)
-static inline uint8_t _bbc_vram(const bbc_t* sys, uint16_t addr) {
-    if (sys->model == BBC_MODEL_MASTER && (sys->acccon & 0x01) && addr >= 0x3000) {
-        return sys->lynne[addr - 0x3000];
-    }
-    return sys->ram[addr];
-}
 
 // Screen address wrap-around per IC32 bits 4-5 (values in 8-byte units, MA is a byte/8 address)
 static const uint16_t _bbc_screen_wrap[4] = {0x4000 >> 3, 0x2000 >> 3, 0x5000 >> 3, 0x2800 >> 3};
@@ -1030,11 +1069,20 @@ static BBC_HOT void _bbc_crtc_tick(bbc_t* sys) {
 
 /*-- Video ULA rendering -----------------------------------------------------*/
 
+// Screen byte (MODE 7 when the line is teletext, bitmap otherwise); Master:
+// LYNNE when ACCCON D was set for the line
+static inline uint8_t _bbc_vram(const bbc_t* sys, bool lynne, uint16_t addr) {
+    if (lynne && addr >= 0x3000) {
+        return sys->lynne[addr - 0x3000];
+    }
+    return sys->ram[addr];
+}
+
 // Resolve a logical colour to a physical colour, honouring flashing colours
-static inline uint8_t _bbc_phys_colour(const bbc_t* sys, uint8_t logical) {
-    uint8_t p = sys->ula_pal[logical & 0x0F];
+static inline uint8_t _bbc_phys_colour(uint8_t ctrl, const uint8_t* pal, uint8_t logical) {
+    uint8_t p = pal[logical & 0x0F];
     if (p & 8) {
-        return (sys->ula_ctrl & 1) ? ((p & 7) ^ 7) : (p & 7);
+        return (ctrl & 1) ? ((p & 7) ^ 7) : (p & 7);
     }
     return p & 7;
 }
@@ -1077,6 +1125,20 @@ static void _bbc_teletext_init(bbc_t* sys) {
     }
 }
 
+// 6 teletext pixels (bit 5 = leftmost) -> 8 frame pixels (bit 0 = leftmost):
+// 12 teletext pixels are drawn as 16
+static uint8_t _bbc_tt_expand6[64];
+
+static void _bbc_tt_expand_init(void) {
+    for (int v = 0; v < 64; v++) {
+        uint8_t m = 0;
+        for (int px = 0; px < 8; px++) {
+            if (v & (0x20 >> ((px * 3) >> 2))) m |= (uint8_t)(1 << px);
+        }
+        _bbc_tt_expand6[v] = m;
+    }
+}
+
 typedef struct {
     uint8_t fg, bg;
     bool graphics, separated, double_height, hold, flash, conceal;
@@ -1084,33 +1146,38 @@ typedef struct {
     bool held_separated;
 } _bbc_tt_state_t;
 
-// Draw 12 teletext pixels (bits 11..0) as 16 frame pixels
-static inline void _bbc_tt_put(uint8_t* p, uint16_t bits, uint8_t fg, uint8_t bg) {
-    for (int px = 0; px < 16; px++) {
-        int tx = (px * 3) >> 2;
-        p[px] = (bits & (0x800 >> tx)) ? fg : bg;
+// Draw 12 teletext pixels (bits 11..0) as 16 frame pixels of character `c`
+static inline void _bbc_tt_put(uint8_t* planes[3], int c, uint16_t bits, uint8_t fg, uint8_t bg) {
+    uint16_t m = (uint16_t)(_bbc_tt_expand6[(bits >> 6) & 63] | (_bbc_tt_expand6[bits & 63] << 8));
+    for (int ch = 0; ch < 3; ch++) {
+        uint16_t v = (uint16_t)((((fg >> ch) & 1) ? m : 0) | (((bg >> ch) & 1) ? (uint16_t)~m : 0));
+        planes[ch][c * 2] = (uint8_t)v;
+        planes[ch][c * 2 + 1] = (uint8_t)(v >> 8);
     }
 }
 
-static BBC_HOT void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint16_t ma, int raster) {
+static BBC_HOT void _bbc_render_teletext_line(const bbc_t* sys, const bbc_line_t* ln, uint8_t* planes[3], int raster) {
+    int chars = ln->chars;
+    uint16_t ma = ln->ma;
+    bool lynne = ln->flags & BBC_LINE_LYNNE;
     _bbc_tt_state_t st = {.fg = 7, .bg = 0};
-    bool flash_off = (sys->field_count & 63) >= 48;
+    bool flash_off = (ln->field & 63) >= 48;
     // A row following a row that used double height shows the bottom halves
     bool bottom_row = false;
-    if (sys->vcc > 0) {
+    if (ln->flags & BBC_LINE_NOT_FIRST_ROW) {
         uint16_t prev = (uint16_t)(ma - chars);
         for (int c = 0; c < chars && c < 40; c++) {
-            if ((_bbc_vram(sys, (uint16_t)(((prev + c) & 0x3FF) | 0x7C00)) & 0x7F) == 0x0D) {
+            if ((_bbc_vram(sys, lynne, (uint16_t)(((prev + c) & 0x3FF) | 0x7C00)) & 0x7F) == 0x0D) {
                 bottom_row = true;
                 break;
             }
         }
     }
-    for (int c = 0; c < chars && c < 40; c++) {
+    int c = 0;
+    for (; c < chars && c < 40; c++) {
         uint16_t a = (uint16_t)((ma + c) & 0x3FF) | 0x7C00;
-        uint8_t ch = _bbc_vram(sys, a) & 0x7F;
+        uint8_t ch = _bbc_vram(sys, lynne, a) & 0x7F;
         uint8_t fg = st.fg, bg = st.bg;
-        uint8_t* p = line + c * 16;
         uint16_t bits = 0;
         bool draw_sixels = false;
         uint8_t sixel = 0;
@@ -1177,141 +1244,186 @@ static BBC_HOT void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int cha
         if (st.conceal || (st.flash && flash_off)) {
             bits = 0;
         }
-        _bbc_tt_put(p, bits, fg, bg);
+        _bbc_tt_put(planes, c, bits, fg, bg);
+    }
+    for (; c < 40; c++) {
+        _bbc_tt_put(planes, c, 0, 0, 0);
     }
 }
 
-// Byte -> packed pixels table for the current ULA mode and palette.
-// ULA chars per line (bits 2-3): 0 = 10, 1 = 20, 2 = 40, 3 = 80 ; with the 2 MHz
-// clock (bit 4) a byte covers 8 output pixels, else 16.
-// MODE 0/3: 1 bpp, MODE 1: 2 bpp, MODE 2: 4 bpp, MODE 4/6: 1 bpp, MODE 5: 2 bpp.
-static BBC_HOT void _bbc_ula_build_lut(bbc_t* sys) {
-    int cpl_sel = (sys->ula_ctrl >> 2) & 3;
-    bool fast = sys->ula_ctrl & 0x10;
+// Byte -> pixels table for a ULA control/palette (only the bits that shape pixels)
+static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, const uint8_t* pal) {
+    ctrl &= 0x1D;   // Flash, characters per line, 2 MHz clock
+    lut->clock++;
+    bbc_lut_slot_t* victim = &lut->slot[0];
+    for (int i = 0; i < BBC_LUT_SLOTS; i++) {
+        bbc_lut_slot_t* l = &lut->slot[i];
+        if (l->valid && l->ctrl == ctrl && memcmp(l->pal, pal, 16) == 0) {
+            l->used = lut->clock;
+            return l;
+        }
+        if (!l->valid || l->used < victim->used) victim = l;
+    }
+    bbc_lut_slot_t* l = victim;
+    int cpl_sel = (ctrl >> 2) & 3;
+    bool fast = ctrl & 0x10;
     int px_per_byte = fast ? 8 : 16;
     int bpp = fast ? ((cpl_sel == 3) ? 1 : (cpl_sel == 2) ? 2 : 4) : ((cpl_sel == 2) ? 1 : (cpl_sel == 1) ? 2 : 4);
     int pixels_per_byte = 8 / bpp;
     int px_w = px_per_byte / pixels_per_byte;
+    uint16_t wmask = (uint16_t)((1 << px_w) - 1);
+    uint8_t phys[16];
+    for (int i = 0; i < 16; i++) phys[i] = _bbc_phys_colour(ctrl, pal, (uint8_t)i);
     for (int b = 0; b < 256; b++) {
-        uint8_t px[16];
+        uint16_t m0 = 0, m1 = 0, m2 = 0;
         uint8_t byte = (uint8_t)b;
-        int x = 0;
-        for (int p = 0; p < pixels_per_byte; p++) {
-            uint8_t col = _bbc_phys_colour(sys, _bbc_ula_index(byte));
+        for (int p = 0, x = 0; p < pixels_per_byte; p++, x += px_w) {
+            uint8_t col = phys[_bbc_ula_index(byte)];
             byte = (uint8_t)((byte << 1) | 1);
-            for (int k = 0; k < px_w; k++) {
-                px[x++] = col;
-            }
+            uint16_t w = (uint16_t)(wmask << x);
+            if (col & 1) m0 |= w;
+            if (col & 2) m1 |= w;
+            if (col & 4) m2 |= w;
         }
-        for (int i = 0; i < px_per_byte / 2; i++) {
-            sys->lut[b][i] = (uint8_t)((px[i * 2] << 4) | px[i * 2 + 1]);
-        }
+        l->px[b][0] = m0;
+        l->px[b][1] = m1;
+        l->px[b][2] = m2;
     }
-    sys->ula_dirty = false;
+    l->ctrl = ctrl;
+    memcpy(l->pal, pal, 16);
+    l->valid = true;
+    l->used = lut->clock;
+    return l;
 }
 
-// 6845 hardware cursor: R14/R15 address, rasters R10 (bits 0-4) to R11, blink
-// from R10 bits 5-6 (00 steady, 01 off, 10 = 16 fields, 11 = 32 fields). The
-// ULA inverts the colours of the cell (width: one character, ULA control bits
-// 5-7 select 1 or 2 characters in the 2 MHz modes).
-static BBC_HOT void _bbc_draw_cursor(bbc_t* sys, int y, int cell_bytes) {
+BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* lut, uint8_t* planes[3]) {
+    const int bytes = BBC_SCREEN_WIDTH / 8;
+    int cell_px = 16;
+    if (!(ln->flags & BBC_LINE_DISPLAYED) || ln->chars == 0) {
+        for (int ch = 0; ch < 3; ch++) memset(planes[ch], 0, bytes);
+        return;
+    }
+    if (ln->flags & BBC_LINE_TELETEXT) {
+        _bbc_render_teletext_line(sys, ln, planes, (ln->rc >> 1) % 10);
+    } else {
+        // Bitmap modes: ULA writes made during the line are replayed at the
+        // character position where they happened (US-48)
+        bool lynne = ln->flags & BBC_LINE_LYNNE;
+        uint8_t ctrl = ln->ctrl;
+        uint8_t pal[16];
+        memcpy(pal, ln->pal, sizeof(pal));
+        const bbc_lut_slot_t* ls = _bbc_lut_use(lut, ctrl, pal);
+        int out_px = (ctrl & 0x10) ? 8 : 16;
+        int x = 0, ev = 0;
+        for (int c = 0; c < ln->chars && x + out_px <= BBC_SCREEN_WIDTH; c++) {
+            if (ev < ln->nev && ln->ev[ev].hcc <= c) {
+                while (ev < ln->nev && ln->ev[ev].hcc <= c) {
+                    if (ln->ev[ev].reg) pal[ln->ev[ev].value >> 4] = (uint8_t)((ln->ev[ev].value & 0x0F) ^ 7);
+                    else ctrl = ln->ev[ev].value;
+                    ev++;
+                }
+                ls = _bbc_lut_use(lut, ctrl, pal);
+                out_px = (ctrl & 0x10) ? 8 : 16;
+            }
+            uint16_t ma = (uint16_t)((ln->ma + c) & 0x3FFF);
+            uint16_t addr;
+            if (ma & 0x1000) {
+                addr = (uint16_t)((ma - _bbc_screen_wrap[ln->wrap]) & ~0x1000u);
+            } else {
+                addr = ma;
+            }
+            addr = (uint16_t)((addr << 3) | (ln->rc & 7));
+            uint8_t byte = (ln->rc < 8 && addr < 0x8000) ? _bbc_vram(sys, lynne, addr) : 0;
+            const uint16_t* m = ls->px[byte];
+            int i = x >> 3;
+            for (int ch = 0; ch < 3; ch++) {
+                planes[ch][i] = (uint8_t)m[ch];
+                if (out_px == 16) planes[ch][i + 1] = (uint8_t)(m[ch] >> 8);
+            }
+            x += out_px;
+        }
+        for (int ch = 0; ch < 3; ch++) {
+            if (x < BBC_SCREEN_WIDTH) memset(&planes[ch][x >> 3], 0, (size_t)(bytes - (x >> 3)));
+        }
+        cell_px = out_px;
+    }
+    // 6845 hardware cursor: inverted cell(s)
+    if (ln->cursor_col != 0xFF) {
+        int from = ln->cursor_col * cell_px / 8;
+        int to = from + ln->cursor_w * cell_px / 8;
+        if (to > bytes) to = bytes;
+        for (int ch = 0; ch < 3; ch++) {
+            for (int i = from; i < to; i++) planes[ch][i] ^= 0xFF;
+        }
+    }
+}
+
+// Cursor of the current line (CRTC R10/R11/R14/R15), or 0xFF
+static BBC_HOT uint8_t _bbc_cursor_col(const bbc_t* sys) {
     const uint8_t* r = sys->crtc_reg;
     uint8_t mode = (r[CRTC_R10_CURSOR_START] >> 5) & 3;
-    if (mode == 1) return;
-    if (mode == 2 && (sys->field_count & 16)) return;
-    if (mode == 3 && (sys->field_count & 32)) return;
+    if (mode == 1) return 0xFF;
+    if (mode == 2 && (sys->field_count & 16)) return 0xFF;
+    if (mode == 3 && (sys->field_count & 32)) return 0xFF;
     uint8_t start = r[CRTC_R10_CURSOR_START] & 0x1F, end = r[CRTC_R11_CURSOR_END] & 0x1F;
     // Interlaced video: the line shows rasters rc (even field) and rc + 1 (odd field)
     uint8_t r0 = sys->rc, r1 = (r[CRTC_R8_INTERLACE] & 3) == 3 ? (uint8_t)(sys->rc + 1) : sys->rc;
-    if (!((r0 >= start && r0 <= end) || (r1 >= start && r1 <= end))) return;
+    if (!((r0 >= start && r0 <= end) || (r1 >= start && r1 <= end))) return 0xFF;
     uint16_t cursor = (uint16_t)(((r[CRTC_R14_CURSOR_H] << 8) | r[CRTC_R15_CURSOR_L]) & 0x3FFF);
     int col = (int)((cursor - sys->ma_row_start) & 0x3FFF);
-    if (col < 0 || col >= r[CRTC_R1_HDISPLAYED]) return;
-    int width = ((sys->ula_ctrl & 0xA0) == 0xA0 && (sys->ula_ctrl & 0x10)) ? 2 : 1;   // Large cursor (MODE 0-2)
-    uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2) + col * cell_bytes];
-    for (int i = 0; i < width * cell_bytes && col * cell_bytes + i < BBC_SCREEN_WIDTH / 2; i++) {
-        dst[i] ^= 0x77;
+    if (col >= r[CRTC_R1_HDISPLAYED] || col > 0xFE) return 0xFF;
+    return (uint8_t)col;
+}
+
+static BBC_HOT void _bbc_capture_line(bbc_t* sys, bbc_line_t* ln) {
+    const uint8_t* r = sys->crtc_reg;
+    bool displayed = (sys->vcc < r[CRTC_R6_VDISPLAYED]) && !sys->in_adjust;
+    ln->chars = displayed ? r[CRTC_R1_HDISPLAYED] : 0;
+    ln->flags = (uint8_t)((displayed ? BBC_LINE_DISPLAYED : 0) | ((sys->ula_ctrl & 0x02) ? BBC_LINE_TELETEXT : 0) |
+                          ((sys->vcc > 0) ? BBC_LINE_NOT_FIRST_ROW : 0) |
+                          ((sys->model == BBC_MODEL_MASTER && (sys->acccon & 0x01)) ? BBC_LINE_LYNNE : 0));
+    ln->ma = sys->ma_row_start;
+    ln->rc = sys->rc;
+    ln->wrap = (uint8_t)((sys->ic32 >> 4) & 3);
+    ln->field = (uint8_t)sys->field_count;
+    uint8_t nev = sys->ula_event_count;
+    ln->nev = nev;
+    if (nev) {
+        ln->ctrl = sys->ula_ctrl_start;
+        memcpy(ln->pal, sys->ula_pal_start, sizeof(ln->pal));
+        memcpy(ln->ev, sys->ula_events, nev * sizeof(bbc_ula_event_t));
+    } else {
+        ln->ctrl = sys->ula_ctrl;
+        memcpy(ln->pal, sys->ula_pal, sizeof(ln->pal));
     }
+    ln->cursor_col = (displayed && ln->chars) ? _bbc_cursor_col(sys) : 0xFF;
+    ln->cursor_w = ((sys->ula_ctrl & 0xA0) == 0xA0 && (sys->ula_ctrl & 0x10)) ? 2 : 1;   // Large cursor (MODE 0-2)
 }
 
 static BBC_HOT void _bbc_render_scanline(bbc_t* sys) {
-    const uint8_t* r = sys->crtc_reg;
     int y = sys->display_y;
     if (y < 0 || y >= BBC_SCREEN_HEIGHT) {
         return;
     }
-    uint8_t line[BBC_SCREEN_WIDTH];
-    bool displayed = (sys->vcc < r[CRTC_R6_VDISPLAYED]) && !sys->in_adjust;
-    int chars = r[CRTC_R1_HDISPLAYED];
-    bool teletext = sys->ula_ctrl & 0x02;
-
-    if (!displayed || chars == 0) {
-        memset(line, 0, sizeof(line));
-    } else if (teletext) {
-        memset(line, 0, sizeof(line));
-        int raster = (sys->rc >> 1) % 10;
-        _bbc_render_teletext_line(sys, line, chars, sys->ma_row_start, raster);
-    } else {
-        // Bitmap modes: one table lookup per screen byte (see _bbc_ula_build_lut).
-        // ULA writes made during the line: replay them from the start-of-line state
-        // at the character position where they happened (US-48).
-        uint8_t end_ctrl = sys->ula_ctrl;
-        uint8_t end_pal[16];
-        int ev = 0, nev = sys->ula_event_count;
-        if (nev) {
-            memcpy(end_pal, sys->ula_pal, sizeof(end_pal));
-            sys->ula_ctrl = sys->ula_ctrl_start;
-            memcpy(sys->ula_pal, sys->ula_pal_start, sizeof(sys->ula_pal));
-            sys->ula_dirty = true;
-        }
-        uint8_t raster = sys->rc;
-        uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2)];
-        int x = 0;
-        int out_bytes = (sys->ula_ctrl & 0x10) ? 4 : 8;
-        for (int c = 0; c < chars && x + out_bytes <= BBC_SCREEN_WIDTH / 2; c++) {
-            while (ev < nev && sys->ula_events[ev].hcc <= c) {
-                if (sys->ula_events[ev].reg) sys->ula_pal[sys->ula_events[ev].value >> 4] = (uint8_t)((sys->ula_events[ev].value & 0x0F) ^ 7);
-                else sys->ula_ctrl = sys->ula_events[ev].value;
-                sys->ula_dirty = true;
-                ev++;
-            }
-            if (sys->ula_dirty) {
-                _bbc_ula_build_lut(sys);
-                out_bytes = (sys->ula_ctrl & 0x10) ? 4 : 8;   // Packed bytes per screen byte (8 or 16 pixels)
-            }
-            uint16_t ma = (uint16_t)((sys->ma_row_start + c) & 0x3FFF);
-            uint16_t addr;
-            if (ma & 0x1000) {
-                addr = (uint16_t)((ma - _bbc_screen_wrap[(sys->ic32 >> 4) & 3]) & ~0x1000u);
-            } else {
-                addr = ma;
-            }
-            addr = (uint16_t)((addr << 3) | (raster & 7));
-            uint8_t byte = (raster < 8 && addr < 0x8000) ? _bbc_vram(sys, addr) : 0;
-            memcpy(dst + x, sys->lut[byte], (size_t)out_bytes);
-            x += out_bytes;
-        }
-        if (x < BBC_SCREEN_WIDTH / 2) {
-            memset(dst + x, 0, (size_t)(BBC_SCREEN_WIDTH / 2 - x));
-        }
-        if (nev) {
-            // Back to the current (end-of-line) state
-            sys->ula_ctrl = end_ctrl;
-            memcpy(sys->ula_pal, end_pal, sizeof(end_pal));
-            sys->ula_dirty = true;
-        }
-        _bbc_draw_cursor(sys, y, out_bytes);
-        return;
-    }
-
-    // Pack into the 4-bit framebuffer
+#ifdef BBC_DEFER_RENDER
+    _bbc_capture_line(sys, &sys->lines[y]);
+#else
+    bbc_line_t ln;
+    _bbc_capture_line(sys, &ln);
+    uint8_t planes[3][BBC_SCREEN_WIDTH / 8];
+    uint8_t* pp[3] = {planes[0], planes[1], planes[2]};
+    bbc_render_line(sys, &ln, &sys->lut, pp);
+    // Colour planes -> 4 bpp framebuffer
     uint8_t* dst = &sys->fb[y * (BBC_SCREEN_WIDTH / 2)];
-    for (int x = 0; x < BBC_SCREEN_WIDTH; x += 2) {
-        *dst++ = (uint8_t)((line[x] << 4) | (line[x + 1] & 0x0F));
+    for (int i = 0; i < BBC_SCREEN_WIDTH / 8; i++) {
+        uint8_t rp = planes[0][i], gp = planes[1][i], bp = planes[2][i];
+        for (int k = 0; k < 8; k += 2) {
+            uint8_t c0 = (uint8_t)(((rp >> k) & 1) | (((gp >> k) & 1) << 1) | (((bp >> k) & 1) << 2));
+            uint8_t c1 = (uint8_t)(((rp >> (k + 1)) & 1) | (((gp >> (k + 1)) & 1) << 1) | (((bp >> (k + 1)) & 1) << 2));
+            *dst++ = (uint8_t)((c0 << 4) | c1);
+        }
     }
-    if (displayed && chars) {
-        _bbc_draw_cursor(sys, y, teletext ? 8 : ((sys->ula_ctrl & 0x10) ? 4 : 8));
-    }
+#endif
 }
 
 /*-- SN76489 -----------------------------------------------------------------*/
