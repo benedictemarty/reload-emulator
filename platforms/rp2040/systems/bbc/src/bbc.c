@@ -108,6 +108,54 @@ typedef struct {
 
 state_t __not_in_flash() state;
 
+#ifdef BBC_DIAG
+// Diagnostic overlay (bottom of the screen, hex groups): HID keys received,
+// last HID code, frame time (us), system VIA IFR, IER, IC32, CPU address,
+// pressed matrix columns, frame counter
+static volatile uint32_t diag_keys, diag_last_key;
+static char __not_in_flash() diag_text[48];
+static uint8_t __not_in_flash() diag_font[16][5] = {
+    {7, 5, 5, 5, 7}, {2, 6, 2, 2, 7}, {7, 1, 7, 4, 7}, {7, 1, 7, 1, 7}, {5, 5, 7, 1, 1}, {7, 4, 7, 1, 7},
+    {7, 4, 7, 5, 7}, {7, 1, 1, 1, 1}, {7, 5, 7, 5, 7}, {7, 5, 7, 1, 7}, {7, 5, 7, 5, 5}, {6, 5, 6, 5, 6},
+    {7, 4, 4, 4, 7}, {6, 5, 5, 5, 6}, {7, 4, 6, 4, 7}, {7, 4, 6, 4, 4},
+};
+
+static char *diag_hex(char *p, uint32_t v, int digits) {
+    for (int i = digits - 1; i >= 0; i--) *p++ = (char)((v >> (i * 4)) & 0xF);
+    *p++ = ' ';
+    return p;
+}
+
+static void diag_update(uint32_t frame) {
+    uint8_t cols = 0;
+    for (int i = 0; i < 16; i++) cols |= state.bbc.key_cols[i];
+    char *p = diag_text;
+    p = diag_hex(p, diag_keys, 2);
+    p = diag_hex(p, diag_last_key, 2);
+    p = diag_hex(p, state.frame_time_us, 5);
+    p = diag_hex(p, state.bbc.sysvia.intr.ifr, 2);
+    p = diag_hex(p, state.bbc.sysvia.intr.ier, 2);
+    p = diag_hex(p, state.bbc.ic32, 2);
+    p = diag_hex(p, state.bbc.cpu.addr, 4);
+    p = diag_hex(p, cols, 2);
+    p = diag_hex(p, frame, 4);
+    *p = (char)0xFF;
+}
+
+// Draw font row `row` of the overlay into the scanline buffer (white on black)
+static void __not_in_flash_func(diag_draw)(uint8_t *dst, int row) {
+    memset(dst, 0, 400);
+    for (int c = 0; c < (int)sizeof(diag_text) && diag_text[c] != (char)0xFF; c++) {
+        uint8_t ch = (uint8_t)diag_text[c];
+        if (ch == ' ') continue;
+        uint8_t bits = diag_font[ch & 0xF][row];
+        for (int b = 0; b < 3; b++) {
+            if (bits & (4 >> b)) dst[c * 8 + b * 2] = dst[c * 8 + b * 2 + 1] = 7;
+        }
+    }
+}
+#endif
+
 // Audio streaming callback
 static void audio_callback(const uint8_t sample, void *user_data) {
     (void)user_data;
@@ -377,7 +425,29 @@ void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_stat
     bbc_set_joystick(&state.bbc, 0, x, y, (button_state & GAMEPAD_BUTTON_A) != 0);
 }
 
+// HID reports are only serviced once per emulated frame: a quick tap can come
+// in as key down + key up in the same tuh_task() call, and would then be seen
+// by the BBC for zero cycles. Releases are deferred until the key has been
+// held for KEY_MIN_HOLD_FRAMES emulated frames.
+#define KEY_MIN_HOLD_FRAMES 2
+static uint32_t emu_frames;
+static uint32_t key_down_frame[128];
+static bool key_release_pending[128];
+
+static void release_pending_keys(void) {
+    for (int k = 0; k < 128; k++) {
+        if (key_release_pending[k] && emu_frames - key_down_frame[k] >= KEY_MIN_HOLD_FRAMES) {
+            key_release_pending[k] = false;
+            bbc_key_up(&state.bbc, (uint8_t)k);
+        }
+    }
+}
+
 void hid_raw_key_down(uint8_t keycode) {
+#ifdef BBC_DIAG
+    diag_keys++;
+    diag_last_key = keycode;
+#endif
     if (keycode == NEO_MULTIBOOT_RETURN_KEY) neo_multiboot_return();  // Pause : back to the Neo6502 firmware (multi-boot)
     if (keycode == HID_KEY_F11) {
         // Next disc image
@@ -386,6 +456,8 @@ void hid_raw_key_down(uint8_t keycode) {
     }
     int key = bbc_key_from_hid(keycode);
     if (key >= 0) {
+        key_release_pending[key & 0x7F] = false;
+        key_down_frame[key & 0x7F] = emu_frames;
         bbc_key_down(&state.bbc, (uint8_t)key);
     }
 }
@@ -393,7 +465,11 @@ void hid_raw_key_down(uint8_t keycode) {
 void hid_raw_key_up(uint8_t keycode) {
     int key = bbc_key_from_hid(keycode);
     if (key >= 0) {
-        bbc_key_up(&state.bbc, (uint8_t)key);
+        if (emu_frames - key_down_frame[key & 0x7F] < KEY_MIN_HOLD_FRAMES) {
+            key_release_pending[key & 0x7F] = true;
+        } else {
+            bbc_key_up(&state.bbc, (uint8_t)key);
+        }
     }
 }
 
@@ -420,6 +496,11 @@ static inline void __not_in_flash_func(render_frame)() {
         } else {
             memset(&scanbuf[BBC_EMPTY_COLUMNS], 0, BBC_SCREEN_WIDTH);
         }
+#ifdef BBC_DIAG
+        if (y >= BBC_DISPLAY_LINES - 6 && y < BBC_DISPLAY_LINES - 1) {
+            diag_draw(&scanbuf[BBC_EMPTY_COLUMNS], y - (BBC_DISPLAY_LINES - 6));
+        }
+#endif
         tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, BBC_PALETTE_BITS);
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
 
@@ -486,11 +567,17 @@ int main() {
             bbc_tick(&state.bbc);
         }
 
+        emu_frames++;
         tuh_task();
+        release_pending_keys();
         usb_poll();
 
         uint32_t execution_time = time_us_32() - start_time_in_micros;
         state.frame_time_us = execution_time;
+#ifdef BBC_DIAG
+        static uint32_t diag_frames;
+        diag_update(++diag_frames);
+#endif
         report_busy_us += execution_time;
         if (++report_frames == 250) {
             // Every 5 s: average time spent per 20 ms frame (>= 20000 means the bus cannot reach 2 MHz)

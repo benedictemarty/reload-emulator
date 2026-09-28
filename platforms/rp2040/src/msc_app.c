@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include "tusb.h"
+#include "pico/time.h"
 #include "ff.h"
 #include "diskio.h"
 
@@ -53,10 +54,22 @@ void tuh_msc_umount_cb(uint8_t dev_addr) {
     f_unmount(drive_path);
 }
 
-static void wait_for_disk_io(BYTE pdrv) {
+// Give up on a transfer after this long: on the RP2040 host a bulk transfer can
+// stay pending forever when it collides with interrupt endpoint polling (HID
+// keyboard), which would freeze the caller.
+#define MSC_IO_TIMEOUT_US 1000000
+
+static bool wait_for_disk_io(BYTE pdrv) {
+    uint32_t start = time_us_32();
     while (msc_volume_busy[pdrv]) {
         tuh_task();
-    };
+        if (time_us_32() - start > MSC_IO_TIMEOUT_US) {
+            msc_volume_busy[pdrv] = false;
+            printf("MSC transfer timeout\r\n");
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool disk_io_complete(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_data) {
@@ -79,18 +92,22 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
     uint8_t const dev_addr = pdrv;
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
-    tuh_msc_read10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0);
-    wait_for_disk_io(pdrv);
-    return RES_OK;
+    if (!tuh_msc_read10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
+        msc_volume_busy[pdrv] = false;
+        return RES_ERROR;
+    }
+    return wait_for_disk_io(pdrv) ? RES_OK : RES_ERROR;
 }
 
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
     uint8_t const dev_addr = pdrv;
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
-    tuh_msc_write10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0);
-    wait_for_disk_io(pdrv);
-    return RES_OK;
+    if (!tuh_msc_write10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
+        msc_volume_busy[pdrv] = false;
+        return RES_ERROR;
+    }
+    return wait_for_disk_io(pdrv) ? RES_OK : RES_ERROR;
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {

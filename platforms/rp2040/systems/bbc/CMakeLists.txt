@@ -28,6 +28,24 @@ neo_multiboot_slot(bbc "${NEO_SLOT_BBC}")
 pico_enable_stdio_usb(bbc 0)
 pico_enable_stdio_uart(bbc 1)
 
+#=== bbc_diag: Model B with an on-screen diagnostic overlay (board bring-up)
+add_executable(bbc_diag
+	${CMAKE_CURRENT_SOURCE_DIR}/src/bbc.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../oric/src/utils.S
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
+)
+target_compile_options(bbc_diag PRIVATE -Wall)
+target_compile_definitions(bbc_diag PRIVATE
+	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
+	BBC_DIAG=1
+)
+target_link_libraries(bbc_diag pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
+pico_add_extra_outputs(bbc_diag)
+pico_enable_stdio_usb(bbc_diag 0)
+pico_enable_stdio_uart(bbc_diag 1)
+
 #=== bbc_master: BBC Master 128 (MOS 3.20 in flash), needs src/roms/bbc_master_roms.h
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/roms/bbc_master_roms.h)
 add_executable(bbc_master
