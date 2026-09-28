@@ -126,6 +126,11 @@ typedef struct {
     uint8_t acr;  // Auxilary control register
     uint8_t pcr;  // Peripheral control register
     bool pb6_triggered;
+    // Lazy ticking (same results as ticking every call): while nothing can
+    // happen before a timer reaches zero, `idle` calls only add their cycles
+    // to `pending`, applied to the counters before any access
+    uint16_t idle;
+    uint16_t pending;
 } mos6522via_t;
 
 // Initialize a new 6522 instance
@@ -173,6 +178,19 @@ void mos6522via_set_cb2(mos6522via_t* c, bool state);
 #ifndef CHIPS_HOT
 #define CHIPS_HOT
 #endif
+
+// Apply the cycles of the skipped calls and leave the lazy mode
+static inline void _mos6522via_sync(mos6522via_t* c) {
+    if (c->pending) {
+        c->t1.counter -= c->pending;
+        if (!MOS6522VIA_ACR_T2_COUNT_PB6(c)) {
+            c->t2.counter -= c->pending;
+        }
+        c->pending = 0;
+    }
+    c->idle = 0;
+}
+
 
 #include <string.h>
 #ifndef CHIPS_ASSERT
@@ -229,6 +247,7 @@ void mos6522via_init(mos6522via_t* c) {
 // in the input state, disables the timers, shift registers etc. and
 // disables interrupting from the chip"
 void mos6522via_reset(mos6522via_t* c) {
+    _mos6522via_sync(c);
     CHIPS_ASSERT(c);
     _mos6522via_init_port(&c->pa);
     _mos6522via_init_port(&c->pb);
@@ -421,6 +440,12 @@ static CHIPS_HOT bool _mos6522via_update_irq(mos6522via_t* c) {
 
 // Perform a tick
 CHIPS_HOT bool mos6522via_tick(mos6522via_t* c, uint8_t cycles) {
+    if (c->idle) {
+        c->idle--;
+        c->pending = (uint16_t)(c->pending + cycles);
+        return (c->intr.ifr & 0x80) != 0;
+    }
+    _mos6522via_sync(c);
     // Fast path, same result as the full tick: no control line edge pending,
     // pipelines in their steady state (timers counting, no reload, no IRQ
     // being raised) and no timer reaching zero during these cycles
@@ -434,6 +459,11 @@ CHIPS_HOT bool mos6522via_tick(mos6522via_t* c, uint8_t cycles) {
         }
         c->t1.t_out = false;
         c->t2.t_out = false;
+        // The same holds for the next calls while both counters stay >= cycles
+        int32_t m = c->t1.counter;
+        if (!MOS6522VIA_ACR_T2_COUNT_PB6(c) && c->t2.counter < m) m = c->t2.counter;
+        int32_t k = (cycles ? m / cycles : 0) - 1;
+        c->idle = (uint16_t)(k < 0 ? 0 : (k > 0x7FFF ? 0x7FFF : k));
         return (c->intr.ifr & 0x80) != 0;
     }
     _mos6522via_update_cab(c);
@@ -446,6 +476,7 @@ CHIPS_HOT bool mos6522via_tick(mos6522via_t* c, uint8_t cycles) {
 
 // Read a register
 CHIPS_HOT uint8_t mos6522via_read(mos6522via_t* c, uint8_t reg) {
+    _mos6522via_sync(c);
     uint8_t data = 0;
     switch (reg) {
         case MOS6522VIA_REG_RB:
@@ -539,6 +570,7 @@ CHIPS_HOT uint8_t mos6522via_read(mos6522via_t* c, uint8_t reg) {
 
 // Write a register
 CHIPS_HOT void mos6522via_write(mos6522via_t* c, uint8_t reg, uint8_t data) {
+    _mos6522via_sync(c);
     switch (reg) {
         case MOS6522VIA_REG_RB:
             c->pb.outr = data;
@@ -655,6 +687,7 @@ CHIPS_HOT void mos6522via_set_pa(mos6522via_t* c, uint8_t data) {
 bool mos6522via_get_ca1(mos6522via_t* c) { return c->pa.c1_out; }
 
 CHIPS_HOT void mos6522via_set_ca1(mos6522via_t* c, bool state) {
+    _mos6522via_sync(c);
     c->pa.c1_triggered = (c->pa.c1_in != state) && ((state && MOS6522VIA_PCR_CA1_LOW_TO_HIGH(c)) ||
                                                     (!state && MOS6522VIA_PCR_CA1_HIGH_TO_LOW(c)));
     c->pa.c1_in = state;
@@ -663,6 +696,7 @@ CHIPS_HOT void mos6522via_set_ca1(mos6522via_t* c, bool state) {
 bool mos6522via_get_ca2(mos6522via_t* c) { return c->pa.c2_out; }
 
 CHIPS_HOT void mos6522via_set_ca2(mos6522via_t* c, bool state) {
+    _mos6522via_sync(c);
     c->pa.c2_triggered = (c->pa.c2_in != state) && ((state && MOS6522VIA_PCR_CA2_LOW_TO_HIGH(c)) ||
                                                     (!state && MOS6522VIA_PCR_CA2_HIGH_TO_LOW(c)));
     c->pa.c2_in = state;
@@ -673,6 +707,7 @@ uint8_t mos6522via_get_pb(mos6522via_t* c) {
 }
 
 void mos6522via_set_pb(mos6522via_t* c, uint8_t data) {
+    _mos6522via_sync(c);
     c->pb6_triggered = (c->pb.inpr & 0x40) && ((data & 0x40) == 0);
     // With latching enabled, only update input register when CB1 goes active
     if (MOS6522VIA_ACR_PB_LATCH_ENABLE(c)) {
@@ -687,6 +722,7 @@ void mos6522via_set_pb(mos6522via_t* c, uint8_t data) {
 bool mos6522via_get_cb1(mos6522via_t* c) { return c->pb.c1_out; }
 
 CHIPS_HOT void mos6522via_set_cb1(mos6522via_t* c, bool state) {
+    _mos6522via_sync(c);
     c->pb.c1_triggered = (c->pb.c1_in != state) && ((state && MOS6522VIA_PCR_CB1_LOW_TO_HIGH(c)) ||
                                                     (!state && MOS6522VIA_PCR_CB1_HIGH_TO_LOW(c)));
     c->pb.c1_in = state;
@@ -695,6 +731,7 @@ CHIPS_HOT void mos6522via_set_cb1(mos6522via_t* c, bool state) {
 bool mos6522via_get_cb2(mos6522via_t* c) { return c->pb.c2_out; }
 
 void mos6522via_set_cb2(mos6522via_t* c, bool state) {
+    _mos6522via_sync(c);
     c->pb.c2_triggered = (c->pb.c2_in != state) && ((state && MOS6522VIA_PCR_CB2_LOW_TO_HIGH(c)) ||
                                                     (!state && MOS6522VIA_PCR_CB2_HIGH_TO_LOW(c)));
     c->pb.c2_in = state;

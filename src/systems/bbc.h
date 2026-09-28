@@ -173,15 +173,32 @@ typedef struct {
 // BBC Micro emulator state
 typedef struct {
     MOS6502CPU_T cpu;
+    // Fields used on every emulated cycle first: small offsets keep the
+    // Cortex-M0+ loads single instructions
+    uint8_t stall;             // Remaining cycles during which the CPU clock is held (1 MHz bus access)
+    uint32_t system_ticks;
+    bool tube_enabled;
+    bool lynne_e;              // Master ACCCON E without X: VDU code sees LYNNE (checked per access)
+    bool irq_pin, nmi_pin;     // Last levels driven on the CPU pins
+    bool any_key;              // A key of rows 1-7 is down (auto-scan raises CA2)
+    bool kbd_ca2;              // Last CA2 level driven by the keyboard
+    bbc_model_t model;
+    uint8_t hcc;               // Horizontal character counter
+    uint8_t ula_ctrl;          // bit 0 flash, bit 1 teletext, bits 2-3 chars per line, bit 4 2 MHz CRTC clock, bits 5-7 cursor
+    bool vsync;
+    bool nmi;
+    uint32_t adc_timer;
+    uint8_t adc_status;
+    uint8_t crtc_reg[18];
     mos6522via_t sysvia;
     mos6522via_t uservia;
     mem_t mem;
+
     bool valid;
     chips_debug_t debug;
 
     chips_audio_callback_t audio_callback;
 
-    bbc_model_t model;
     uint8_t ram[0x8000];
     // Master 128
     uint8_t* lynne;            // Shadow screen RAM $3000-$7FFF (20 KB)
@@ -201,17 +218,11 @@ typedef struct {
     // System VIA peripherals
     uint8_t ic32;              // Addressable latch (bit 0: !sound write, bit 3: !keyboard write, bits 4-5: screen base, 6: caps LED, 7: shift LED)
     uint8_t sysvia_pb_old;
-    bool any_key;              // A key of rows 1-7 is down (auto-scan raises CA2)
-    bool kbd_ca2;              // Last CA2 level driven by the keyboard
-    bool irq_pin, nmi_pin;     // Last levels driven on the CPU pins
-    bool lynne_e;              // Master ACCCON E without X: VDU code sees LYNNE (checked per access)
     uint8_t key_cols[16];      // Keyboard matrix: one byte per column, bit n = row n pressed
     uint8_t key_scan_column;   // Hardware auto-scan column counter
 
     // 6845 CRTC
-    uint8_t crtc_reg[18];
     uint8_t crtc_addr;
-    uint8_t hcc;               // Horizontal character counter
     uint8_t vcc;               // Vertical character row counter
     uint8_t rc;                // Raster counter
     uint8_t adjust;            // Vertical adjust line counter (0 = not in adjust)
@@ -219,7 +230,6 @@ typedef struct {
     uint16_t ma;               // Current memory address
     uint16_t ma_row_start;     // Memory address at the start of the current character row
     uint8_t vsync_count;       // Remaining vsync scanlines (0 = no vsync)
-    bool vsync;
     bool field;                // Interlace field (odd/even)
     int display_y;             // Output scanline (0 = first displayed row)
     bool frame_done;           // Set at the end of each vsync
@@ -232,7 +242,6 @@ typedef struct {
     uint8_t ula_pal_start[16];
 
     // Video ULA
-    uint8_t ula_ctrl;          // bit 0 flash, bit 1 teletext, bits 2-3 chars per line, bit 4 2 MHz CRTC clock, bits 5-7 cursor
     uint8_t ula_pal[16];       // Logical -> physical colour (0-15, 8-15 flashing)
 
     // Sound
@@ -240,14 +249,11 @@ typedef struct {
 
     // Floppy disc controller
     wd1770_t fdc;
-    bool nmi;
 
     // uPD7002 ADC: status, 16-bit result, conversion timer in us, the 4 analogue
     // channels (joystick 1 = channels 0/1, joystick 2 = 2/3 ; left/up = $FFFF,
     // right/down = 0, centre $8000) and the fire buttons (bit 0/1 -> PB4/PB5)
-    uint8_t adc_status;
     uint16_t adc_value;
-    uint32_t adc_timer;
     uint16_t adc_channel[4];
     uint8_t joystick_fire;
 
@@ -263,11 +269,8 @@ typedef struct {
     uint8_t fb[BBC_FRAMEBUFFER_SIZE];
 #endif
 
-    uint32_t system_ticks;
-    uint8_t stall;             // Remaining cycles during which the CPU clock is held (1 MHz bus access)
 
     // Tube second processor
-    bool tube_enabled;
     tube_t tube;
     w65c02cpu_t para;          // Parasite 6502 (65C02) at 3 MHz
     uint8_t* para_ram;         // 64 KB
@@ -308,6 +311,25 @@ void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* lut, uin
 #ifndef BBC_HOT
 #define BBC_HOT
 #endif
+// Optional profiling hooks around the per-cycle blocks (board diagnostics)
+#ifndef BBC_PROF_ENTER
+#define BBC_PROF_ENTER(i)
+#define BBC_PROF_EXIT(i)
+#endif
+
+// Small copies in the per-cycle and per-line paths: plain loops (on the RP2040
+// memcpy/memset/memcmp are calls through flash)
+static inline void _bbc_copy(uint8_t* dst, const uint8_t* src, int n) {
+    for (int i = 0; i < n; i++) dst[i] = src[i];
+}
+static inline void _bbc_zero(uint8_t* dst, int n) {
+    for (int i = 0; i < n; i++) dst[i] = 0;
+}
+static inline bool _bbc_same16(const uint8_t* a, const uint8_t* b) {
+    uint8_t d = 0;
+    for (int i = 0; i < 16; i++) d |= (uint8_t)(a[i] ^ b[i]);
+    return d == 0;
+}
 
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -852,6 +874,7 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
         // CPU clock held: the access to a 1 MHz device is being stretched
         sys->stall--;
     } else {
+        BBC_PROF_ENTER(1);
         MOS6502CPU_TICK(&sys->cpu);
         uint16_t a = MOS6502CPU_GET_ADDR(&sys->cpu);
         if (MOS6502CPU_SYNC(&sys->cpu)) sys->last_pc = a;
@@ -869,21 +892,32 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
             }
             _bbc_mem_rw(sys, a, sys->cpu.rw);
         }
+        BBC_PROF_EXIT(1);
     }
 
     // CRTC: 2 MHz character clock in modes 0-3, 1 MHz otherwise
+{ BBC_PROF_ENTER(2);
     if ((sys->ula_ctrl & 0x10) || (sys->system_ticks & 1)) {
-        _bbc_crtc_tick(sys);
+        if (sys->hcc != 0 && sys->hcc < sys->crtc_reg[CRTC_R0_HTOTAL]) {
+            sys->hcc++;   // Middle of the line (the start and the last character have work)
+        } else {
+            _bbc_crtc_tick(sys);
+        }
     }
+BBC_PROF_EXIT(2); }
 
     // 1 MHz bus (VIAs, keyboard, latch, FDC): serviced every 2 us by 2 cycles,
     // which keeps the cost per CPU cycle low for the RP2040 (timers count in us)
+{ BBC_PROF_ENTER(3);
     if ((sys->system_ticks & 3) == 3) {
         // Auto-scan only matters while a key is down (or to drop CA2 after release)
         if (sys->any_key || sys->kbd_ca2) _bbc_update_keyboard(sys, true);
         // IC32 follows port B writes (see _bbc_mem_rw); the Master RTC also counts time
         if (sys->model == BBC_MODEL_MASTER) _bbc_update_ic32(sys);
-        mos6522via_set_ca1(&sys->sysvia, sys->vsync);
+        // Control lines: only on a level change, or to drop the edge seen last time
+        if (sys->sysvia.pa.c1_in != sys->vsync || sys->sysvia.pa.c1_triggered) {
+            mos6522via_set_ca1(&sys->sysvia, sys->vsync);
+        }
         if (sys->adc_timer) {
             sys->adc_timer = sys->adc_timer > 2 ? sys->adc_timer - 2 : 0;
             if (sys->adc_timer == 0) {
@@ -892,9 +926,16 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
                 sys->adc_status = (uint8_t)((sys->adc_status & 0x0F) | 0x40 | ((sys->adc_value >> 10) & 0x30));
             }
         }
-        mos6522via_set_cb1(&sys->sysvia, (sys->adc_status & 0x80) != 0);   // CB1 = not end of conversion
+        bool eoc = (sys->adc_status & 0x80) != 0;   // CB1 = not end of conversion
+        if (sys->sysvia.pb.c1_in != eoc || sys->sysvia.pb.c1_triggered) {
+            mos6522via_set_cb1(&sys->sysvia, eoc);
+        }
+        BBC_PROF_ENTER(5);
         bool irq = mos6522via_tick(&sys->sysvia, 2);
+        BBC_PROF_EXIT(5);
+        BBC_PROF_ENTER(6);
         irq |= mos6522via_tick(&sys->uservia, 2);
+        BBC_PROF_EXIT(6);
         if (sys->tube_enabled) irq |= sys->tube.hirq;
         if (irq != sys->irq_pin) {
             sys->irq_pin = irq;
@@ -910,11 +951,14 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
             MOS6502CPU_SET_NMI(&sys->cpu, sys->nmi);
         }
     }
+BBC_PROF_EXIT(3); }
 
     // Sound chip clock: 250 kHz
+{ BBC_PROF_ENTER(4);
     if ((sys->system_ticks & 7) == 7) {
         _bbc_sn_tick(sys);
     }
+BBC_PROF_EXIT(4); }
 
     // Tube second processor: 3 cycles per 2 host cycles
     if (sys->tube_enabled) {
@@ -1011,7 +1055,7 @@ static BBC_HOT void _bbc_crtc_tick(bbc_t* sys) {
     if (sys->hcc == 0) {
         // Start of a scanline: remember the ULA state, handle vsync
         sys->ula_ctrl_start = sys->ula_ctrl;
-        memcpy(sys->ula_pal_start, sys->ula_pal, sizeof(sys->ula_pal));
+        _bbc_copy(sys->ula_pal_start, sys->ula_pal, 16);
         sys->ula_event_count = 0;
         if (sys->vsync_count) {
             sys->vsync_count--;
@@ -1028,7 +1072,6 @@ static BBC_HOT void _bbc_crtc_tick(bbc_t* sys) {
         _bbc_render_scanline(sys);
     }
 
-    sys->ma++;
     sys->hcc++;
     if (sys->hcc > r[CRTC_R0_HTOTAL]) {
         // End of scanline
@@ -1266,7 +1309,7 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
     bbc_lut_slot_t* victim = &lut->slot[0];
     for (int i = 0; i < BBC_LUT_SLOTS; i++) {
         bbc_lut_slot_t* l = &lut->slot[i];
-        if (l->valid && l->ctrl == ctrl && memcmp(l->pal, pal, 16) == 0) {
+        if (l->valid && l->ctrl == ctrl && _bbc_same16(l->pal, pal)) {
             l->used = lut->clock;
             return l;
         }
@@ -1298,7 +1341,7 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
         l->px[b][2] = m2;
     }
     l->ctrl = ctrl;
-    memcpy(l->pal, pal, 16);
+    _bbc_copy(l->pal, pal, 16);
     l->valid = true;
     l->used = lut->clock;
     return l;
@@ -1308,7 +1351,7 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
     const int bytes = BBC_SCREEN_WIDTH / 8;
     int cell_px = 16;
     if (!(ln->flags & BBC_LINE_DISPLAYED) || ln->chars == 0) {
-        for (int ch = 0; ch < 3; ch++) memset(planes[ch], 0, bytes);
+        for (int ch = 0; ch < 3; ch++) _bbc_zero(planes[ch], bytes);
         return;
     }
     if (ln->flags & BBC_LINE_TELETEXT) {
@@ -1319,7 +1362,7 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
         bool lynne = ln->flags & BBC_LINE_LYNNE;
         uint8_t ctrl = ln->ctrl;
         uint8_t pal[16];
-        memcpy(pal, ln->pal, sizeof(pal));
+        _bbc_copy(pal, ln->pal, 16);
         const bbc_lut_slot_t* ls = _bbc_lut_use(lut, ctrl, pal);
         int out_px = (ctrl & 0x10) ? 8 : 16;
         int x = 0, ev = 0;
@@ -1351,7 +1394,7 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
             x += out_px;
         }
         for (int ch = 0; ch < 3; ch++) {
-            if (x < BBC_SCREEN_WIDTH) memset(&planes[ch][x >> 3], 0, (size_t)(bytes - (x >> 3)));
+            if (x < BBC_SCREEN_WIDTH) _bbc_zero(&planes[ch][x >> 3], bytes - (x >> 3));
         }
         cell_px = out_px;
     }
@@ -1398,11 +1441,11 @@ static BBC_HOT void _bbc_capture_line(bbc_t* sys, bbc_line_t* ln) {
     ln->nev = nev;
     if (nev) {
         ln->ctrl = sys->ula_ctrl_start;
-        memcpy(ln->pal, sys->ula_pal_start, sizeof(ln->pal));
-        memcpy(ln->ev, sys->ula_events, nev * sizeof(bbc_ula_event_t));
+        _bbc_copy(ln->pal, sys->ula_pal_start, 16);
+        _bbc_copy((uint8_t*)ln->ev, (const uint8_t*)sys->ula_events, nev * (int)sizeof(bbc_ula_event_t));
     } else {
         ln->ctrl = sys->ula_ctrl;
-        memcpy(ln->pal, sys->ula_pal, sizeof(ln->pal));
+        _bbc_copy(ln->pal, sys->ula_pal, 16);
     }
     ln->cursor_col = (displayed && ln->chars) ? _bbc_cursor_col(sys) : 0xFF;
     ln->cursor_w = ((sys->ula_ctrl & 0xA0) == 0xA0 && (sys->ula_ctrl & 0x10)) ? 2 : 1;   // Large cursor (MODE 0-2)
@@ -1414,7 +1457,9 @@ static BBC_HOT void _bbc_render_scanline(bbc_t* sys) {
         return;
     }
 #ifdef BBC_DEFER_RENDER
+BBC_PROF_ENTER(0);
     _bbc_capture_line(sys, &sys->lines[y]);
+BBC_PROF_EXIT(0);
 #else
     bbc_line_t ln;
     _bbc_capture_line(sys, &ln);

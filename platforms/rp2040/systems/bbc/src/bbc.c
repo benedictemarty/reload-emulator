@@ -136,6 +136,13 @@ static inline __attribute__((always_inline)) void bus_set_data(uint8_t data) {
 #define MOS6502CPU_SET_DATA(c, data) bus_set_data(data)
 #endif
 
+#if defined(BBC_DIAG) && defined(BBC_PROFILE)
+// Cycle counts of the bbc_tick blocks (build with -DBBC_PROFILE: the hooks slow the M0+ down) (SysTick counts CPU cycles down, 24 bits)
+#include "hardware/structs/systick.h"
+volatile uint32_t prof_cycles[8], prof_calls[8];
+#define BBC_PROF_ENTER(i) uint32_t _prof_t##i = systick_hw->cvr
+#define BBC_PROF_EXIT(i) do { prof_cycles[i] += (_prof_t##i - systick_hw->cvr) & 0xFFFFFF; prof_calls[i]++; } while (0)
+#endif
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
 
@@ -173,6 +180,10 @@ state_t __not_in_flash() state;
 // last HID code, frame time (us), system VIA IFR, IER, IC32, CPU address,
 // pressed matrix columns, frame counter
 volatile uint32_t diag_bench[4];
+volatile uint32_t diag_run_us;   // Time spent emulating (the rest of the loop: USB, keys)
+// On-screen line off by default (it overruns the core 1 line budget): the
+// values are read over SWD (tools/carte/carte.py)
+volatile bool diag_overlay = false;
 static volatile uint32_t diag_keys, diag_last_key, diag_late, diag_line_max, diag_line_sum, diag_line_count;
 static char __not_in_flash() diag_text[48];
 static uint8_t __not_in_flash() diag_font[16][5] = {
@@ -608,7 +619,7 @@ static inline void __not_in_flash_func(render_frame)() {
             for (int ch = 0; ch < 3; ch++) memset(pp[ch], 0, BBC_SCREEN_WIDTH / 8);
         }
 #ifdef BBC_DIAG
-        if (y >= BBC_DISPLAY_LINES - 6 && y < BBC_DISPLAY_LINES - 1) {
+        if (diag_overlay && y >= BBC_DISPLAY_LINES - 6 && y < BBC_DISPLAY_LINES - 1) {
             diag_draw(y - (BBC_DISPLAY_LINES - 6));
         }
 #endif
@@ -675,6 +686,10 @@ int main() {
     hw_set_bits(&bus_ctrl_hw->priority, BUSCTRL_BUS_PRIORITY_PROC1_BITS | BUSCTRL_BUS_PRIORITY_DMA_R_BITS | BUSCTRL_BUS_PRIORITY_DMA_W_BITS);
     multicore_launch_core1(core1_main);
 
+#if defined(BBC_DIAG) && defined(BBC_PROFILE)
+    systick_hw->rvr = 0xFFFFFF;
+    systick_hw->csr = 5;   // Enabled, processor clock
+#endif
     app_init();
 #ifdef BBC_DIAG
     {
@@ -707,7 +722,13 @@ int main() {
     while (1) {
         uint32_t start_time_in_micros = time_us_32();
 
+#ifdef BBC_DIAG
+        uint32_t t_run = time_us_32();
         run_ticks(num_ticks);
+        diag_run_us += time_us_32() - t_run;
+#else
+        run_ticks(num_ticks);
+#endif
 
         emu_frames++;
         tuh_task();
