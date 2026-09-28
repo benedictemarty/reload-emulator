@@ -162,6 +162,10 @@ typedef struct {
     // System VIA peripherals
     uint8_t ic32;              // Addressable latch (bit 0: !sound write, bit 3: !keyboard write, bits 4-5: screen base, 6: caps LED, 7: shift LED)
     uint8_t sysvia_pb_old;
+    bool any_key;              // A key of rows 1-7 is down (auto-scan raises CA2)
+    bool kbd_ca2;              // Last CA2 level driven by the keyboard
+    bool irq_pin, nmi_pin;     // Last levels driven on the CPU pins
+    bool lynne_e;              // Master ACCCON E without X: VDU code sees LYNNE (checked per access)
     uint8_t key_cols[16];      // Keyboard matrix: one byte per column, bit n = row n pressed
     uint8_t key_scan_column;   // Hardware auto-scan column counter
 
@@ -289,7 +293,6 @@ void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int side
 #define CRTC_R15_CURSOR_L   15
 
 // Unpopulated sideways ROM sockets read as $FF
-static uint8_t _bbc_empty_bank[0x4000];
 
 static void _bbc_init_memorymap(bbc_t* sys);
 static void _bbc_teletext_init(bbc_t* sys);
@@ -380,7 +383,6 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
     sys->adc_status = 0xC0;   // Not busy, no conversion
     sys->adc_value = 0x8000;
     for (int i = 0; i < 4; i++) sys->adc_channel[i] = 0x8000;
-    memset(_bbc_empty_bank, 0xFF, sizeof(_bbc_empty_bank));
 
     _bbc_init_memorymap(sys);
     _bbc_teletext_init(sys);
@@ -403,9 +405,13 @@ void bbc_reset(bbc_t* sys) {
     }
     sys->romsel = 0;
     sys->acccon = 0;
+    sys->lynne_e = false;
     sys->ic32 = 0xFF;
     _bbc_init_memorymap(sys);
     MOS6502CPU_RESET(&sys->cpu);
+    sys->irq_pin = sys->nmi_pin = false;
+    MOS6502CPU_SET_IRQ(&sys->cpu, false);
+    MOS6502CPU_SET_NMI(&sys->cpu, false);
 }
 
 // ROMSEL: select the sideways bank at $8000-$BFFF
@@ -417,7 +423,10 @@ static void _bbc_set_romsel(bbc_t* sys, uint8_t bank) {
     } else if (sys->banks[b]) {
         mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, sys->banks[b]);
     } else {
-        mem_map_rom(&sys->mem, 0, 0x8000, 0x4000, _bbc_empty_bank);
+        // Empty socket: reads $FF (mem.h's 4 KB unmapped page, mapped 4 times)
+        for (uint16_t a = 0x8000; a < 0xC000; a += MEM_PAGE_SIZE) {
+            mem_map_rom(&sys->mem, 0, a, MEM_PAGE_SIZE, _mem_unmapped_page);
+        }
     }
     if (sys->model == BBC_MODEL_MASTER && (sys->romsel & 0x80)) {
         mem_map_ram(&sys->mem, 0, 0x8000, 0x1000, sys->andy);   // ANDY
@@ -429,6 +438,7 @@ static void _bbc_set_romsel(bbc_t* sys, uint8_t bank) {
 // sees LYNNE) is applied per access in _bbc_mem_rw.
 static void _bbc_set_acccon(bbc_t* sys, uint8_t v) {
     sys->acccon = v;
+    sys->lynne_e = (sys->model == BBC_MODEL_MASTER) && ((v & 0x06) == 0x02);
     if (v & 0x08) {
         mem_map_ram(&sys->mem, 0, 0xC000, 0x2000, sys->hazel);
     } else {
@@ -470,6 +480,7 @@ static BBC_HOT void _bbc_update_keyboard(bbc_t* sys, bool advance) {
         }
     }
     mos6522via_set_ca2(&sys->sysvia, ca2);
+    sys->kbd_ca2 = ca2;
     if (!advance) {
         // Called from a VIA access: latch the CA2 edge into the IFR right away
         _mos6522via_update_cab(&sys->sysvia);
@@ -556,6 +567,15 @@ static BBC_HOT void _bbc_update_ic32(bbc_t* sys) {
 }
 
 static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
+    if ((uint16_t)(addr - 0xFC00) >= 0x300 && !sys->lynne_e) {
+        // Fast path: RAM, ROM and sideways banks (everything but FRED/JIM/SHEILA)
+        if (rw) {
+            MOS6502CPU_SET_DATA(&sys->cpu, mem_rd(&sys->mem, addr));
+        } else {
+            mem_wr(&sys->mem, addr, MOS6502CPU_GET_DATA(&sys->cpu));
+        }
+        return;
+    }
     if ((addr & 0xFF00) == 0xFE00) {
         // SHEILA
         uint8_t data = 0xFF;
@@ -646,6 +666,7 @@ static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                         if (sys->model == BBC_MODEL_MASTER) _bbc_update_rtc(sys, sys->ic32);
                         _bbc_update_keyboard(sys, false);
                     }
+                    if (port_b) _bbc_update_ic32(sys);          // Joystick fire buttons (PB4/PB5)
                     data = mos6522via_read(&sys->sysvia, reg);
                 } else {
                     mos6522via_write(&sys->sysvia, reg, MOS6502CPU_GET_DATA(&sys->cpu));
@@ -804,8 +825,10 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
     // 1 MHz bus (VIAs, keyboard, latch, FDC): serviced every 2 us by 2 cycles,
     // which keeps the cost per CPU cycle low for the RP2040 (timers count in us)
     if ((sys->system_ticks & 3) == 3) {
-        _bbc_update_keyboard(sys, true);
-        _bbc_update_ic32(sys);
+        // Auto-scan only matters while a key is down (or to drop CA2 after release)
+        if (sys->any_key || sys->kbd_ca2) _bbc_update_keyboard(sys, true);
+        // IC32 follows port B writes (see _bbc_mem_rw); the Master RTC also counts time
+        if (sys->model == BBC_MODEL_MASTER) _bbc_update_ic32(sys);
         mos6522via_set_ca1(&sys->sysvia, sys->vsync);
         if (sys->adc_timer) {
             sys->adc_timer = sys->adc_timer > 2 ? sys->adc_timer - 2 : 0;
@@ -819,11 +842,19 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
         bool irq = mos6522via_tick(&sys->sysvia, 2);
         irq |= mos6522via_tick(&sys->uservia, 2);
         if (sys->tube_enabled) irq |= sys->tube.hirq;
-        MOS6502CPU_SET_IRQ(&sys->cpu, irq);
-        wd1770_tick(&sys->fdc);
-        wd1770_tick(&sys->fdc);
+        if (irq != sys->irq_pin) {
+            sys->irq_pin = irq;
+            MOS6502CPU_SET_IRQ(&sys->cpu, irq);
+        }
+        if (sys->fdc.state != WD1770_IDLE) {
+            wd1770_tick(&sys->fdc);
+            wd1770_tick(&sys->fdc);
+        }
         sys->nmi = wd1770_nmi(&sys->fdc);
-        MOS6502CPU_SET_NMI(&sys->cpu, sys->nmi);
+        if (sys->nmi != sys->nmi_pin) {
+            sys->nmi_pin = sys->nmi;
+            MOS6502CPU_SET_NMI(&sys->cpu, sys->nmi);
+        }
     }
 
     // Sound chip clock: 250 kHz
@@ -859,12 +890,19 @@ uint32_t bbc_exec(bbc_t* sys, uint32_t micro_seconds) {
     return num_ticks;
 }
 
+static void _bbc_update_any_key(bbc_t* sys) {
+    uint8_t rows = 0;
+    for (int c = 0; c < 16; c++) rows |= sys->key_cols[c];
+    sys->any_key = (rows & 0xFE) != 0;
+}
+
 void bbc_key_down(bbc_t* sys, uint8_t key) {
     if (key == BBC_KEY_BREAK) {
         bbc_reset(sys);
         return;
     }
     sys->key_cols[key & 0x0F] |= (uint8_t)(1 << ((key >> 4) & 7));
+    _bbc_update_any_key(sys);
 }
 
 void bbc_key_up(bbc_t* sys, uint8_t key) {
@@ -872,6 +910,7 @@ void bbc_key_up(bbc_t* sys, uint8_t key) {
         return;
     }
     sys->key_cols[key & 0x0F] &= (uint8_t)~(1 << ((key >> 4) & 7));
+    _bbc_update_any_key(sys);
 }
 
 void bbc_set_joystick(bbc_t* sys, int n, uint16_t x, uint16_t y, bool fire) {

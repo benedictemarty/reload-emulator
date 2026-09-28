@@ -120,6 +120,7 @@ state_t __not_in_flash() state;
 // Diagnostic overlay (bottom of the screen, hex groups): HID keys received,
 // last HID code, frame time (us), system VIA IFR, IER, IC32, CPU address,
 // pressed matrix columns, frame counter
+volatile uint32_t diag_bench[4];
 static volatile uint32_t diag_keys, diag_last_key, diag_late, diag_line_max, diag_line_sum, diag_line_count;
 static char __not_in_flash() diag_text[48];
 static uint8_t __not_in_flash() diag_font[16][5] = {
@@ -622,6 +623,27 @@ int main() {
     multicore_launch_core1(core1_main);
 
     app_init();
+#ifdef BBC_DIAG
+    {
+        // Bus micro-benchmarks, 40 000 iterations each (cycles = us * 295.2 / 40000)
+        extern volatile uint32_t diag_bench[4];
+        wdc6502cpu_t c;
+        uint32_t t = time_us_32();
+        for (int i = 0; i < 40000; i++) wdc65C02cpu_tick(&c);
+        diag_bench[0] = time_us_32() - t;
+        t = time_us_32();
+        for (int i = 0; i < 40000; i++) {
+            wdc65C02cpu_tick(&c);
+            if (c.rw) wdc65C02cpu_set_data(state.bbc.ram[c.addr & 0x7FFF]);
+            else state.bbc.ram[c.addr & 0x7FFF] = wdc65C02cpu_get_data();
+        }
+        diag_bench[1] = time_us_32() - t;
+        t = time_us_32();
+        for (int i = 0; i < 40000; i++) bbc_tick(&state.bbc);
+        diag_bench[2] = time_us_32() - t;
+        bbc_reset(&state.bbc);
+    }
+#endif
 
     // One frame = 20 ms = 40 000 cycles at 2 MHz
     const uint32_t frame_us = 20000;
