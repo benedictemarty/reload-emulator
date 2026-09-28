@@ -656,8 +656,8 @@ void __not_in_flash_func(core1_main()) {
 /*-- Core 0: CPU bus ---------------------------------------------------------*/
 
 static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
-    for (uint32_t ticks = 0; ticks < n; ticks++) {
-        bbc_tick(&state.bbc);
+    for (uint32_t ticks = 0; ticks < n; ticks += 4) {
+        bbc_tick4(&state.bbc);
     }
 }
 

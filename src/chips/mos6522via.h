@@ -140,6 +140,16 @@ void mos6522via_reset(mos6522via_t* c);
 // Tick the mos6522via
 bool mos6522via_tick(mos6522via_t* c, uint8_t cycles);
 
+// Tick with the lazy (idle) case inlined in the caller
+static inline bool mos6522via_tick_inline(mos6522via_t* c, uint8_t cycles) {
+    if (c->idle) {
+        c->idle--;
+        c->pending = (uint16_t)(c->pending + cycles);
+        return (c->intr.ifr & 0x80) != 0;
+    }
+    return mos6522via_tick(c, cycles);
+}
+
 uint8_t mos6522via_read(mos6522via_t* c, uint8_t addr);
 
 void mos6522via_write(mos6522via_t* c, uint8_t addr, uint8_t data);

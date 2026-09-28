@@ -289,6 +289,8 @@ void bbc_reset(bbc_t* sys);
 void bbc_tick(bbc_t* sys);
 // Tick BBC instance for a given number of microseconds, return number of executed ticks
 uint32_t bbc_exec(bbc_t* sys, uint32_t micro_seconds);
+// Four cycles (faster on the RP2040; falls back to bbc_tick when needed)
+void bbc_tick4(bbc_t* sys);
 // Press / release a key, key = BBC internal key number (row << 4 | column), e.g. 0x41 = A
 void bbc_key_down(bbc_t* sys, uint8_t key);
 void bbc_key_up(bbc_t* sys, uint8_t key);
@@ -869,7 +871,8 @@ static void _bbc_parasite_tick(bbc_t* sys) {
     }
 }
 
-BBC_HOT void bbc_tick(bbc_t* sys) {
+// CPU cycle: bus access of the (real or emulated) 65C02, stretched on the 1 MHz bus
+static inline __attribute__((always_inline)) void _bbc_tick_cpu(bbc_t* sys) {
     if (sys->stall) {
         // CPU clock held: the access to a 1 MHz device is being stretched
         sys->stall--;
@@ -896,20 +899,22 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
     }
 
     // CRTC: 2 MHz character clock in modes 0-3, 1 MHz otherwise
-{ BBC_PROF_ENTER(2);
-    if ((sys->ula_ctrl & 0x10) || (sys->system_ticks & 1)) {
+}
+
+// CRTC: 2 MHz character clock in modes 0-3, 1 MHz otherwise (odd cycles)
+static inline __attribute__((always_inline)) void _bbc_tick_crtc(bbc_t* sys, bool odd) {
+    if (odd || (sys->ula_ctrl & 0x10)) {
         if (sys->hcc != 0 && sys->hcc < sys->crtc_reg[CRTC_R0_HTOTAL]) {
             sys->hcc++;   // Middle of the line (the start and the last character have work)
         } else {
             _bbc_crtc_tick(sys);
         }
     }
-BBC_PROF_EXIT(2); }
+}
 
-    // 1 MHz bus (VIAs, keyboard, latch, FDC): serviced every 2 us by 2 cycles,
-    // which keeps the cost per CPU cycle low for the RP2040 (timers count in us)
-{ BBC_PROF_ENTER(3);
-    if ((sys->system_ticks & 3) == 3) {
+// 1 MHz bus (VIAs, keyboard, latch, FDC): serviced every 2 us by 2 cycles,
+// which keeps the cost per CPU cycle low for the RP2040 (timers count in us)
+static inline __attribute__((always_inline)) void _bbc_tick_1mhz(bbc_t* sys) {
         // Auto-scan only matters while a key is down (or to drop CA2 after release)
         if (sys->any_key || sys->kbd_ca2) _bbc_update_keyboard(sys, true);
         // IC32 follows port B writes (see _bbc_mem_rw); the Master RTC also counts time
@@ -930,12 +935,8 @@ BBC_PROF_EXIT(2); }
         if (sys->sysvia.pb.c1_in != eoc || sys->sysvia.pb.c1_triggered) {
             mos6522via_set_cb1(&sys->sysvia, eoc);
         }
-        BBC_PROF_ENTER(5);
-        bool irq = mos6522via_tick(&sys->sysvia, 2);
-        BBC_PROF_EXIT(5);
-        BBC_PROF_ENTER(6);
-        irq |= mos6522via_tick(&sys->uservia, 2);
-        BBC_PROF_EXIT(6);
+        bool irq = mos6522via_tick_inline(&sys->sysvia, 2);
+        irq |= mos6522via_tick_inline(&sys->uservia, 2);
         if (sys->tube_enabled) irq |= sys->tube.hirq;
         if (irq != sys->irq_pin) {
             sys->irq_pin = irq;
@@ -951,15 +952,17 @@ BBC_PROF_EXIT(2); }
             MOS6502CPU_SET_NMI(&sys->cpu, sys->nmi);
         }
     }
-BBC_PROF_EXIT(3); }
 
+BBC_HOT void bbc_tick(bbc_t* sys) {
+    _bbc_tick_cpu(sys);
+    _bbc_tick_crtc(sys, sys->system_ticks & 1);
+    if ((sys->system_ticks & 3) == 3) {
+        _bbc_tick_1mhz(sys);
+    }
     // Sound chip clock: 250 kHz
-{ BBC_PROF_ENTER(4);
     if ((sys->system_ticks & 7) == 7) {
         _bbc_sn_tick(sys);
     }
-BBC_PROF_EXIT(4); }
-
     // Tube second processor: 3 cycles per 2 host cycles
     if (sys->tube_enabled) {
         sys->para_acc += 3;
@@ -972,11 +975,43 @@ BBC_PROF_EXIT(4); }
     sys->system_ticks++;
 }
 
+// Four cycles at once (same order of work as 4 x bbc_tick), from a multiple of 4
+BBC_HOT void bbc_tick4(bbc_t* sys) {
+    if (sys->tube_enabled || (sys->system_ticks & 3)) {
+        for (int i = 0; i < 4; i++) bbc_tick(sys);
+        return;
+    }
+    _bbc_tick_cpu(sys);
+    _bbc_tick_crtc(sys, false);
+    sys->system_ticks++;
+    _bbc_tick_cpu(sys);
+    _bbc_tick_crtc(sys, true);
+    sys->system_ticks++;
+    _bbc_tick_cpu(sys);
+    _bbc_tick_crtc(sys, false);
+    sys->system_ticks++;
+    _bbc_tick_cpu(sys);
+    _bbc_tick_crtc(sys, true);
+    _bbc_tick_1mhz(sys);
+    if ((sys->system_ticks & 7) == 7) {
+        _bbc_sn_tick(sys);
+    }
+    sys->system_ticks++;
+}
+
 uint32_t bbc_exec(bbc_t* sys, uint32_t micro_seconds) {
     CHIPS_ASSERT(sys && sys->valid);
     uint32_t num_ticks = clk_us_to_ticks(BBC_FREQUENCY, micro_seconds);
     if (0 == sys->debug.callback.func) {
-        for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
+        uint32_t ticks = 0;
+        while (ticks < num_ticks && (sys->system_ticks & 3)) {
+            bbc_tick(sys);
+            ticks++;
+        }
+        for (; ticks + 4 <= num_ticks; ticks += 4) {
+            bbc_tick4(sys);
+        }
+        for (; ticks < num_ticks; ticks++) {
             bbc_tick(sys);
         }
     } else {
