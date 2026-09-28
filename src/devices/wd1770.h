@@ -152,6 +152,11 @@ static inline bool wd1770_nmi(const wd1770_t* fdc) { return fdc->drq || fdc->int
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef CHIPS_HOT
+#define CHIPS_HOT
+#endif
+
 #include <string.h>
 
 static const uint16_t _wd1770_step_ms[4] = {6, 12, 20, 30};
@@ -351,7 +356,7 @@ static void _wd1770_command(wd1770_t* fdc, uint8_t cmd) {
     _wd1770_wait(fdc, delay + 2000, WD1770_END);
 }
 
-void wd1770_tick(wd1770_t* fdc) {
+CHIPS_HOT void wd1770_tick(wd1770_t* fdc) {
     switch (fdc->state) {
         case WD1770_IDLE:
             break;

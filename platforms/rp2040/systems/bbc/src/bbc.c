@@ -66,6 +66,11 @@
 #define BBC_NUM_IMAGES 0
 #endif
 
+// Code run every emulated cycle goes to RAM: from XIP flash it thrashes the
+// 16 KB cache (the Model B hot path alone is larger than that)
+#define BBC_HOT      __attribute__((section(".time_critical.bbc")))
+#define CHIPS_HOT    __attribute__((section(".time_critical.bbc")))
+#define WDC65C02_HOT __attribute__((section(".time_critical.bbc")))
 #include "chips/chips_common.h"
 #ifdef OLIMEX_NEO6502
 #include "chips/wdc65C02cpu.h"
@@ -584,6 +589,12 @@ void __not_in_flash_func(core1_main()) {
 
 /*-- Core 0: CPU bus ---------------------------------------------------------*/
 
+static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
+    for (uint32_t ticks = 0; ticks < n; ticks++) {
+        bbc_tick(&state.bbc);
+    }
+}
+
 int main() {
     vreg_set_voltage(VREG_VSEL);
     sleep_ms(10);
@@ -621,9 +632,7 @@ int main() {
     while (1) {
         uint32_t start_time_in_micros = time_us_32();
 
-        for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
-            bbc_tick(&state.bbc);
-        }
+        run_ticks(num_ticks);
 
         emu_frames++;
         tuh_task();

@@ -74,6 +74,10 @@ void wdc65C02cpu_set_nmi(bool state);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the bus functions (called every emulated cycle)
+#ifndef WDC65C02_HOT
+#define WDC65C02_HOT
+#endif
 #include <string.h>
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -156,7 +160,7 @@ void wdc65C02cpu_nmi() {
 #endif  // OLIMEX_NEO6502
 }
 
-void wdc65C02cpu_tick(wdc6502cpu_t* c) {
+WDC65C02_HOT void wdc65C02cpu_tick(wdc6502cpu_t* c) {
     gpio_put(_CLOCK_PIN, 0);
 
     c->addr = wdc65C02cpu_get_addr();
@@ -165,7 +169,7 @@ void wdc65C02cpu_tick(wdc6502cpu_t* c) {
     gpio_put(_CLOCK_PIN, 1);
 }
 
-uint16_t wdc65C02cpu_get_addr() {
+WDC65C02_HOT uint16_t wdc65C02cpu_get_addr() {
     gpio_set_dir_masked(_GPIO_MASK, 0);
 
     gpio_put(_OE1_PIN, 0);
@@ -205,7 +209,7 @@ uint16_t wdc65C02cpu_get_addr() {
     return addr;
 }
 
-uint8_t wdc65C02cpu_get_data() {
+WDC65C02_HOT uint8_t wdc65C02cpu_get_data() {
     gpio_set_dir_masked(_GPIO_MASK, 0);
 
     gpio_put(_OE3_PIN, 0);
@@ -229,7 +233,7 @@ uint8_t wdc65C02cpu_get_data() {
     return data;
 }
 
-void wdc65C02cpu_set_data(uint8_t data) {
+WDC65C02_HOT void wdc65C02cpu_set_data(uint8_t data) {
     gpio_set_dir_masked(_GPIO_MASK, _GPIO_MASK);
 
     gpio_put_masked(_GPIO_MASK, data << _GPIO_SHIFT_BITS);
@@ -243,9 +247,9 @@ void wdc65C02cpu_set_data(uint8_t data) {
     // printf("set data: %02x\n", data);
 }
 
-void wdc65C02cpu_set_irq(bool state) { gpio_put(_IRQ_PIN, state ? 0 : 1); }
+WDC65C02_HOT void wdc65C02cpu_set_irq(bool state) { gpio_put(_IRQ_PIN, state ? 0 : 1); }
 
-void wdc65C02cpu_set_nmi(bool state) {
+WDC65C02_HOT void wdc65C02cpu_set_nmi(bool state) {
 #ifdef OLIMEX_NEO6502
     gpio_put(_NMI_PIN, state ? 0 : 1);
 #else

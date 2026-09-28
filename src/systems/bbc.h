@@ -254,6 +254,11 @@ void bbc_insert_disc(bbc_t* sys, int drive, uint8_t* data, size_t size, int side
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
 #include <string.h> /* memcpy, memset */
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef BBC_HOT
+#define BBC_HOT
+#endif
+
 #ifndef CHIPS_ASSERT
 #include <assert.h>
 #define CHIPS_ASSERT(c) assert(c)
@@ -437,7 +442,7 @@ static void _bbc_set_acccon(bbc_t* sys, uint8_t v) {
 }
 
 // System VIA port A: keyboard (out: column/row select, in: PA7 key state), SN76489 data
-static void _bbc_update_keyboard(bbc_t* sys, bool advance) {
+static BBC_HOT void _bbc_update_keyboard(bbc_t* sys, bool advance) {
     // CA2 is high when a key is pressed in the scanned column (rows 1-7,
     // row 0 = SHIFT/CTRL/links never raises the interrupt).
     bool ca2 = false;
@@ -524,7 +529,7 @@ static void _bbc_update_rtc(bbc_t* sys, uint8_t old_ic32) {
 }
 
 // System VIA port B: IC32 addressable latch (PB0-2 = bit, PB3 = value), joystick buttons (PB4-5 in)
-static void _bbc_update_ic32(bbc_t* sys) {
+static BBC_HOT void _bbc_update_ic32(bbc_t* sys) {
     uint8_t pb = mos6522via_get_pb(&sys->sysvia);
     uint8_t old = sys->ic32;
     if (pb != sys->sysvia_pb_old) {
@@ -550,7 +555,7 @@ static void _bbc_update_ic32(bbc_t* sys) {
     }
 }
 
-static void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
+static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
     if ((addr & 0xFF00) == 0xFE00) {
         // SHEILA
         uint8_t data = 0xFF;
@@ -775,7 +780,7 @@ static void _bbc_parasite_tick(bbc_t* sys) {
     }
 }
 
-void bbc_tick(bbc_t* sys) {
+BBC_HOT void bbc_tick(bbc_t* sys) {
     if (sys->stall) {
         // CPU clock held: the access to a 1 MHz device is being stretched
         sys->stall--;
@@ -904,7 +909,7 @@ static inline uint8_t _bbc_vram(const bbc_t* sys, uint16_t addr) {
 // Screen address wrap-around per IC32 bits 4-5 (values in 8-byte units, MA is a byte/8 address)
 static const uint16_t _bbc_screen_wrap[4] = {0x4000 >> 3, 0x2000 >> 3, 0x5000 >> 3, 0x2800 >> 3};
 
-static void _bbc_crtc_new_frame(bbc_t* sys) {
+static BBC_HOT void _bbc_crtc_new_frame(bbc_t* sys) {
     sys->vcc = 0;
     sys->rc = 0;
     sys->in_adjust = false;
@@ -913,7 +918,7 @@ static void _bbc_crtc_new_frame(bbc_t* sys) {
     sys->display_y = 0;
 }
 
-static void _bbc_crtc_tick(bbc_t* sys) {
+static BBC_HOT void _bbc_crtc_tick(bbc_t* sys) {
     const uint8_t* r = sys->crtc_reg;
     bool interlace = (r[CRTC_R8_INTERLACE] & 3) == 3;
 
@@ -1048,7 +1053,7 @@ static inline void _bbc_tt_put(uint8_t* p, uint16_t bits, uint8_t fg, uint8_t bg
     }
 }
 
-static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint16_t ma, int raster) {
+static BBC_HOT void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint16_t ma, int raster) {
     _bbc_tt_state_t st = {.fg = 7, .bg = 0};
     bool flash_off = (sys->field_count & 63) >= 48;
     // A row following a row that used double height shows the bottom halves
@@ -1141,7 +1146,7 @@ static void _bbc_render_teletext_line(bbc_t* sys, uint8_t* line, int chars, uint
 // ULA chars per line (bits 2-3): 0 = 10, 1 = 20, 2 = 40, 3 = 80 ; with the 2 MHz
 // clock (bit 4) a byte covers 8 output pixels, else 16.
 // MODE 0/3: 1 bpp, MODE 1: 2 bpp, MODE 2: 4 bpp, MODE 4/6: 1 bpp, MODE 5: 2 bpp.
-static void _bbc_ula_build_lut(bbc_t* sys) {
+static BBC_HOT void _bbc_ula_build_lut(bbc_t* sys) {
     int cpl_sel = (sys->ula_ctrl >> 2) & 3;
     bool fast = sys->ula_ctrl & 0x10;
     int px_per_byte = fast ? 8 : 16;
@@ -1170,7 +1175,7 @@ static void _bbc_ula_build_lut(bbc_t* sys) {
 // from R10 bits 5-6 (00 steady, 01 off, 10 = 16 fields, 11 = 32 fields). The
 // ULA inverts the colours of the cell (width: one character, ULA control bits
 // 5-7 select 1 or 2 characters in the 2 MHz modes).
-static void _bbc_draw_cursor(bbc_t* sys, int y, int cell_bytes) {
+static BBC_HOT void _bbc_draw_cursor(bbc_t* sys, int y, int cell_bytes) {
     const uint8_t* r = sys->crtc_reg;
     uint8_t mode = (r[CRTC_R10_CURSOR_START] >> 5) & 3;
     if (mode == 1) return;
@@ -1190,7 +1195,7 @@ static void _bbc_draw_cursor(bbc_t* sys, int y, int cell_bytes) {
     }
 }
 
-static void _bbc_render_scanline(bbc_t* sys) {
+static BBC_HOT void _bbc_render_scanline(bbc_t* sys) {
     const uint8_t* r = sys->crtc_reg;
     int y = sys->display_y;
     if (y < 0 || y >= BBC_SCREEN_HEIGHT) {
@@ -1272,7 +1277,7 @@ static void _bbc_render_scanline(bbc_t* sys) {
 
 /*-- SN76489 -----------------------------------------------------------------*/
 
-static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value) {
+static BBC_HOT void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value) {
 #ifdef BBC_SN_TRACE
     fprintf(stderr, "sn76489: write %02X\n", value);
 #endif
@@ -1305,7 +1310,7 @@ static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value) {
 // Volume table: 2 dB steps, 15 = max
 static const uint8_t _bbc_sn_volume[16] = {0, 1, 1, 2, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25, 31};
 
-static void _bbc_sn_tick(bbc_t* sys) {
+static BBC_HOT void _bbc_sn_tick(bbc_t* sys) {
     bbc_sn76489_t* sn = &sys->sn;
 
     // Called at 250 kHz
