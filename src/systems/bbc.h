@@ -168,6 +168,7 @@ typedef struct {
     uint16_t noise_seed;
     int32_t sample_accum;   // Sample generation accumulator
     int32_t sample_period;
+    uint32_t pending;       // 250 kHz steps not applied yet (run at each sample and before a write)
 } bbc_sn76489_t;
 
 // BBC Micro emulator state
@@ -373,7 +374,8 @@ static void _bbc_update_rtc(bbc_t* sys, uint8_t old_ic32);
 static void _bbc_render_scanline(bbc_t* sys);
 static void _bbc_crtc_tick(bbc_t* sys);
 static void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value);
-static void _bbc_sn_tick(bbc_t* sys);
+static void _bbc_sn_run(bbc_sn76489_t* sn);
+static inline void _bbc_sn_tick(bbc_t* sys);
 
 void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
     CHIPS_ASSERT(sys && desc);
@@ -915,6 +917,21 @@ static inline __attribute__((always_inline)) void _bbc_tick_crtc(bbc_t* sys, boo
 // 1 MHz bus (VIAs, keyboard, latch, FDC): serviced every 2 us by 2 cycles,
 // which keeps the cost per CPU cycle low for the RP2040 (timers count in us)
 static inline __attribute__((always_inline)) void _bbc_tick_1mhz(bbc_t* sys) {
+    // Quiet case (nearly always): both VIAs idle, no key, no conversion ending, disc
+    // controller idle, control lines unchanged -> only the VIA idle counts move
+    mos6522via_t* sv = &sys->sysvia;
+    mos6522via_t* uv = &sys->uservia;
+    if (sv->idle && uv->idle && !(sys->any_key | sys->kbd_ca2 | sys->tube_enabled) && (sys->adc_timer == 0 || sys->adc_timer > 2) &&
+        sys->model == BBC_MODEL_B && sys->fdc.state == WD1770_IDLE && !sys->nmi_pin && sv->pa.c1_in == sys->vsync &&
+        sv->pb.c1_in == ((sys->adc_status & 0x80) != 0)) {
+        // (no edge can be pending: an edge makes the VIA leave its idle state)
+        sv->idle--;
+        sv->pending = (uint16_t)(sv->pending + 2);
+        uv->idle--;
+        uv->pending = (uint16_t)(uv->pending + 2);
+        if (sys->adc_timer) sys->adc_timer -= 2;   // Conversion running (the MOS keeps one going)
+        return;
+    }
         // Auto-scan only matters while a key is down (or to drop CA2 after release)
         if (sys->any_key || sys->kbd_ca2) _bbc_update_keyboard(sys, true);
         // IC32 follows port B writes (see _bbc_mem_rw); the Master RTC also counts time
@@ -1517,6 +1534,7 @@ BBC_PROF_EXIT(0);
 /*-- SN76489 -----------------------------------------------------------------*/
 
 static BBC_HOT void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value) {
+    _bbc_sn_run(sn);   // Steps so far use the old settings
 #ifdef BBC_SN_TRACE
     fprintf(stderr, "sn76489: write %02X\n", value);
 #endif
@@ -1549,52 +1567,60 @@ static BBC_HOT void _bbc_sn_write(bbc_sn76489_t* sn, uint8_t value) {
 // Volume table: 2 dB steps, 15 = max
 static const uint8_t _bbc_sn_volume[16] = {0, 1, 1, 2, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25, 31};
 
-static BBC_HOT void _bbc_sn_tick(bbc_t* sys) {
-    bbc_sn76489_t* sn = &sys->sn;
-
-    // Called at 250 kHz
-    {
-        for (int i = 0; i < 3; i++) {
-            if (sn->counter[i] > 0) {
-                sn->counter[i]--;
-            }
-            if (sn->counter[i] == 0) {
-                sn->mask[i] = ~sn->mask[i];
-                sn->counter[i] = sn->freq[i] ? sn->freq[i] : 1024;
-            }
-        }
-        if (sn->counter[3] > 0) {
-            sn->counter[3]--;
-        }
-        if (sn->counter[3] == 0) {
-            sn->noise_toggle = !sn->noise_toggle;
-            if (sn->noise_toggle) {
-                bool bit;
-                if (sn->freq[3] & 4) {
-                    // White noise: 15-bit LFSR, taps 0 and 1
-                    bit = sn->noise_seed & 1;
-                    uint16_t fb = ((sn->noise_seed & 1) ^ ((sn->noise_seed >> 1) & 1)) & 1;
-                    sn->noise_seed = (uint16_t)((sn->noise_seed >> 1) | (fb << 14));
-                } else {
-                    // Periodic noise
-                    bit = sn->noise_seed & 1;
-                    sn->noise_seed = (uint16_t)((sn->noise_seed >> 1) | ((sn->noise_seed & 1) << 14));
-                }
-                sn->mask[3] = bit ? 0xFF : 0x00;
-            }
-            switch (sn->freq[3] & 3) {
-                case 3: sn->counter[3] = sn->freq[2] ? sn->freq[2] : 1024; break;
-                case 2: sn->counter[3] = 0x40; break;
-                case 1: sn->counter[3] = 0x20; break;
-                default: sn->counter[3] = 0x10; break;
-            }
+// Apply `pending` 250 kHz steps at once: same final state as stepping them one
+// by one (each channel counts down, toggles and reloads at zero)
+static BBC_HOT void _bbc_sn_run(bbc_sn76489_t* sn) {
+    int32_t n = (int32_t)sn->pending;
+    if (n == 0) return;
+    sn->pending = 0;
+    for (int i = 0; i < 3; i++) {
+        int32_t c = sn->counter[i] > 0 ? sn->counter[i] : 1;
+        int32_t period = sn->freq[i] ? sn->freq[i] : 1024;
+        if (n < c) {
+            sn->counter[i] = c - n;
+        } else {
+            int32_t rest = n - c;
+            if (((rest / period) & 1) == 0) sn->mask[i] = (uint8_t)~sn->mask[i];   // 1 + rest / period toggles
+            sn->counter[i] = period - rest % period;
         }
     }
+    // Noise: few toggles per sample, stepped one by one
+    int32_t c = sn->counter[3] > 0 ? sn->counter[3] : 1;
+    while (n >= c) {
+        n -= c;
+        sn->noise_toggle = !sn->noise_toggle;
+        if (sn->noise_toggle) {
+            bool bit = sn->noise_seed & 1;
+            if (sn->freq[3] & 4) {
+                // White noise: 15-bit LFSR, taps 0 and 1
+                uint16_t fb = ((sn->noise_seed & 1) ^ ((sn->noise_seed >> 1) & 1)) & 1;
+                sn->noise_seed = (uint16_t)((sn->noise_seed >> 1) | (fb << 14));
+            } else {
+                // Periodic noise
+                sn->noise_seed = (uint16_t)((sn->noise_seed >> 1) | ((sn->noise_seed & 1) << 14));
+            }
+            sn->mask[3] = bit ? 0xFF : 0x00;
+        }
+        switch (sn->freq[3] & 3) {
+            case 3: c = sn->freq[2] ? sn->freq[2] : 1024; break;
+            case 2: c = 0x40; break;
+            case 1: c = 0x20; break;
+            default: c = 0x10; break;
+        }
+    }
+    sn->counter[3] = c - n;
+}
 
+// Called at 250 kHz (every 8 CPU cycles): the channels are only stepped when a
+// sample is due
+static inline __attribute__((always_inline)) void _bbc_sn_tick(bbc_t* sys) {
+    bbc_sn76489_t* sn = &sys->sn;
+    sn->pending++;
     // Output sample (sample_period is in 1/256 CPU cycles; 8 cycles per call)
     sn->sample_accum += 8 * 256;
     if (sn->sample_accum >= sn->sample_period) {
         sn->sample_accum -= sn->sample_period;
+        _bbc_sn_run(sn);
         int level = 0;
         for (int i = 0; i < 4; i++) {
             level += sn->mask[i] ? _bbc_sn_volume[sn->vol[i]] : 0;
