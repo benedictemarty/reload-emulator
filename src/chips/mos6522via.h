@@ -421,6 +421,21 @@ static CHIPS_HOT bool _mos6522via_update_irq(mos6522via_t* c) {
 
 // Perform a tick
 CHIPS_HOT bool mos6522via_tick(mos6522via_t* c, uint8_t cycles) {
+    // Fast path, same result as the full tick: no control line edge pending,
+    // pipelines in their steady state (timers counting, no reload, no IRQ
+    // being raised) and no timer reaching zero during these cycles
+    if (!(c->pa.c1_triggered | c->pa.c2_triggered | c->pb.c1_triggered | c->pb.c2_triggered) &&
+        c->t1.pip == 0x03 && c->t2.pip == 0x03 && c->intr.pip == 0 && !(c->intr.ifr & c->intr.ier) &&
+        c->t1.counter >= cycles &&
+        (MOS6522VIA_ACR_T2_COUNT_PB6(c) ? (!c->pb6_triggered && c->t2.counter >= 0) : (c->t2.counter >= cycles))) {
+        c->t1.counter -= cycles;
+        if (!MOS6522VIA_ACR_T2_COUNT_PB6(c)) {
+            c->t2.counter -= cycles;   // Counting PB6 pulses: none this time
+        }
+        c->t1.t_out = false;
+        c->t2.t_out = false;
+        return (c->intr.ifr & 0x80) != 0;
+    }
     _mos6522via_update_cab(c);
     _mos6522via_tick_t1(c, cycles);
     _mos6522via_tick_t2(c, cycles);

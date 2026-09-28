@@ -87,6 +87,55 @@
 #include "devices/tube.h"
 #define W65C02_NO_MACROS
 #include "chips/w65c02cpu.h"
+
+#ifdef OLIMEX_NEO6502
+// Bus cycle of the real 65C02 inlined in bbc_tick(), with direct SIO register
+// accesses (same sequence and delays as wdc65C02cpu.h, without the calls)
+#include "hardware/structs/sio.h"
+#define BUS_NOP6() __asm volatile("nop\nnop\nnop\nnop\nnop\nnop\n")
+
+static inline __attribute__((always_inline)) void bus_tick(wdc6502cpu_t *c) {
+    sio_hw->gpio_clr = 1u << _CLOCK_PIN;
+    sio_hw->gpio_oe_clr = _GPIO_MASK;
+    sio_hw->gpio_clr = 1u << _OE1_PIN;
+    BUS_NOP6();
+    uint32_t lo = sio_hw->gpio_in & 0xFF;
+    sio_hw->gpio_set = 1u << _OE1_PIN;
+    sio_hw->gpio_clr = 1u << _OE2_PIN;
+    BUS_NOP6();
+    uint32_t hi = sio_hw->gpio_in & 0xFF;
+    sio_hw->gpio_set = 1u << _OE2_PIN;
+    c->addr = (uint16_t)(lo | (hi << 8));
+    c->rw = (sio_hw->gpio_in >> _RW_PIN) & 1;
+    sio_hw->gpio_set = 1u << _CLOCK_PIN;
+}
+
+static inline __attribute__((always_inline)) uint8_t bus_get_data(void) {
+    sio_hw->gpio_oe_clr = _GPIO_MASK;
+    sio_hw->gpio_clr = 1u << _OE3_PIN;
+    BUS_NOP6();
+    uint8_t data = (uint8_t)(sio_hw->gpio_in & 0xFF);
+    sio_hw->gpio_set = 1u << _OE3_PIN;
+    return data;
+}
+
+static inline __attribute__((always_inline)) void bus_set_data(uint8_t data) {
+    sio_hw->gpio_oe_set = _GPIO_MASK;
+    sio_hw->gpio_togl = (sio_hw->gpio_out ^ data) & _GPIO_MASK;
+    sio_hw->gpio_clr = 1u << _OE3_PIN;
+    sio_hw->gpio_set = 1u << _OE3_PIN;
+}
+
+#undef MOS6502CPU_TICK
+#undef MOS6502CPU_GET_ADDR
+#undef MOS6502CPU_GET_DATA
+#undef MOS6502CPU_SET_DATA
+#define MOS6502CPU_TICK(c)           bus_tick(c)
+#define MOS6502CPU_GET_ADDR(c)       ((c)->addr)
+#define MOS6502CPU_GET_DATA(c)       bus_get_data()
+#define MOS6502CPU_SET_DATA(c, data) bus_set_data(data)
+#endif
+
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
 

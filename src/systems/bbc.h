@@ -855,12 +855,20 @@ BBC_HOT void bbc_tick(bbc_t* sys) {
         MOS6502CPU_TICK(&sys->cpu);
         uint16_t a = MOS6502CPU_GET_ADDR(&sys->cpu);
         if (MOS6502CPU_SYNC(&sys->cpu)) sys->last_pc = a;
-        if (_bbc_is_1mhz(a)) {
-            // Stretched to the next 1 MHz edge, then one full 1 MHz cycle: 1 or 2 extra cycles
-            sys->stall = (uint8_t)((sys->system_ticks & 1) ? 1 : 2);
+        if ((uint16_t)(a - 0xFC00) >= 0x300 && !sys->lynne_e) {
+            // RAM, ROM and sideways banks (all 2 MHz)
+            if (sys->cpu.rw) {
+                MOS6502CPU_SET_DATA(&sys->cpu, mem_rd(&sys->mem, a));
+            } else {
+                mem_wr(&sys->mem, a, MOS6502CPU_GET_DATA(&sys->cpu));
+            }
+        } else {
+            if (_bbc_is_1mhz(a)) {
+                // Stretched to the next 1 MHz edge, then one full 1 MHz cycle: 1 or 2 extra cycles
+                sys->stall = (uint8_t)((sys->system_ticks & 1) ? 1 : 2);
+            }
+            _bbc_mem_rw(sys, a, sys->cpu.rw);
         }
-
-        _bbc_mem_rw(sys, a, sys->cpu.rw);
     }
 
     // CRTC: 2 MHz character clock in modes 0-3, 1 MHz otherwise
