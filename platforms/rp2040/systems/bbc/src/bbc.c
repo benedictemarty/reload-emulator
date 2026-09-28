@@ -9,8 +9,11 @@
 // flash (src/images/bbc_images.h, read-only);
 // F11 = next image (USB files first, then flash images).
 // Core 1: DVI 800x480 @ 60 Hz, BBC 640x256 framebuffer centred, lines
-//         BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP+239 doubled (256 lines do not
-//         fit twice in 480; policy: crop 8 lines top and bottom).
+//         BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP+239 doubled by PicoDVI (256 lines
+//         do not fit twice in 480; policy: crop 8 lines top and bottom).
+//         Each line is split into 3 bit planes and encoded by the 1 bpp TMDS
+//         encoder (the BBC colours are 0x00/0xFF per channel): ~34 us per line
+//         for a 63 us budget.
 //
 // ## zlib/libpng license
 //
@@ -112,7 +115,7 @@ state_t __not_in_flash() state;
 // Diagnostic overlay (bottom of the screen, hex groups): HID keys received,
 // last HID code, frame time (us), system VIA IFR, IER, IC32, CPU address,
 // pressed matrix columns, frame counter
-static volatile uint32_t diag_keys, diag_last_key;
+static volatile uint32_t diag_keys, diag_last_key, diag_late, diag_line_max, diag_line_sum, diag_line_count;
 static char __not_in_flash() diag_text[48];
 static uint8_t __not_in_flash() diag_font[16][5] = {
     {7, 5, 5, 5, 7}, {2, 6, 2, 2, 7}, {7, 1, 7, 4, 7}, {7, 1, 7, 1, 7}, {5, 5, 7, 1, 1}, {7, 4, 7, 1, 7},
@@ -139,21 +142,10 @@ static void diag_update(uint32_t frame) {
     p = diag_hex(p, state.bbc.cpu.addr, 4);
     p = diag_hex(p, cols, 2);
     p = diag_hex(p, frame, 4);
+    p = diag_hex(p, diag_late, 4);
     *p = (char)0xFF;
 }
 
-// Draw font row `row` of the overlay into the scanline buffer (white on black)
-static void __not_in_flash_func(diag_draw)(uint8_t *dst, int row) {
-    memset(dst, 0, 400);
-    for (int c = 0; c < (int)sizeof(diag_text) && diag_text[c] != (char)0xFF; c++) {
-        uint8_t ch = (uint8_t)diag_text[c];
-        if (ch == ' ') continue;
-        uint8_t bits = diag_font[ch & 0xF][row];
-        for (int b = 0; b < 3; b++) {
-            if (bits & (4 >> b)) dst[c * 8 + b * 2] = dst[c * 8 + b * 2 + 1] = 7;
-        }
-    }
-}
 #endif
 
 // Audio streaming callback
@@ -308,20 +300,22 @@ void app_init(void) {
 #define VREG_VSEL    VREG_VOLTAGE_1_20
 #define DVI_TIMING   dvi_timing_800x480p_60hz
 
-// First BBC line shown (lines BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP + 239 are doubled)
+// First BBC line shown (lines BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP + 239, one TMDS buffer each:
+// PicoDVI shows every buffer on two output lines, DVI_VERTICAL_REPEAT = 2)
 #ifndef BBC_DISPLAY_TOP
 #define BBC_DISPLAY_TOP 8
 #endif
 #define BBC_DISPLAY_LINES (FRAME_HEIGHT / 2)
 #define BBC_EMPTY_COLUMNS ((FRAME_WIDTH - BBC_SCREEN_WIDTH) / 2)
 
-uint32_t __not_in_flash() tmds_palette[BBC_PALETTE_SIZE * 6];
-
-uint8_t __not_in_flash() scanbuf[FRAME_WIDTH];
+// The 8 BBC colours only use 0x00/0xFF per channel: each TMDS lane is a 1 bpp
+// image, encoded by PicoDVI's fast 1 bpp encoder (2.125 cycles per pixel).
+// Bit planes of one output line, LSB = leftmost pixel; bit n of a palette
+// index is plane n (0 red, 1 green, 2 blue).
+#define PLANE_WORDS (FRAME_WIDTH / 32)
+static uint32_t __not_in_flash() planes[3][PLANE_WORDS + 1];
 
 struct dvi_inst dvi0;
-
-void tmds_palette_init() { tmds_setup_palette24_symbols(bbc_palette, tmds_palette, BBC_PALETTE_SIZE); }
 
 /*-- Keyboard: HID usage codes -> BBC matrix ---------------------------------*/
 
@@ -475,40 +469,103 @@ void hid_raw_key_up(uint8_t keycode) {
 
 /*-- Core 1: DVI -------------------------------------------------------------*/
 
-extern void copy_tmdsbuf(uint32_t *dest, const uint32_t *src);
+#ifdef BBC_DIAG
+// Draw font row `row` of the overlay into the bit planes (white on black)
+static void __not_in_flash_func(diag_draw)(int row) {
+    for (int ch = 0; ch < 3; ch++) {
+        uint16_t *h = (uint16_t *)planes[ch] + BBC_EMPTY_COLUMNS / 16;
+        for (int i = 0; i < 25; i++) h[i] = 0;
+    }
+    for (int c = 0; c < (int)sizeof(diag_text) && diag_text[c] != (char)0xFF; c++) {
+        uint8_t ch = (uint8_t)diag_text[c];
+        if (ch == ' ') continue;
+        uint8_t bits = diag_font[ch & 0xF][row];
+        for (int b = 0; b < 3; b++) {
+            if (bits & (4 >> b)) {
+                int p = BBC_EMPTY_COLUMNS + c * 8 + b * 2;   // Even: both pixels in the same word
+                uint32_t m = 3u << (p & 31);
+                planes[0][p >> 5] |= m;
+                planes[1][p >> 5] |= m;
+                planes[2][p >> 5] |= m;
+            }
+        }
+    }
+}
+#endif
 
-// Unpack one 4 bpp BBC line (320 bytes) into 640 palette indices
-static inline void __not_in_flash_func(unpack_scanline)(const uint8_t *src, uint8_t *dst) {
-    for (int i = 0; i < BBC_SCREEN_WIDTH / 2; i++) {
-        uint8_t b = src[i];
-        dst[i * 2] = b >> 4;
-        dst[i * 2 + 1] = b & 0x0F;
+// One 4 bpp framebuffer byte (2 pixels, high nibble first) -> 2 bits per
+// plane: red plane in bits 0-1, green in bits 8-9, blue in bits 16-17
+static uint32_t __not_in_flash() plane_lut[256];
+
+static void plane_lut_init(void) {
+    for (int b = 0; b < 256; b++) {
+        uint32_t v = 0;
+        for (int px = 0; px < 2; px++) {
+            uint8_t c = (uint8_t)((px ? b : (b >> 4)) & 7);   // Bit 3 (flash) resolved by the ULA already
+            for (int ch = 0; ch < 3; ch++) {
+                if (c & (1 << ch)) v |= 1u << (ch * 8 + px);
+            }
+        }
+        plane_lut[b] = v;
     }
 }
 
+// Split one BBC line (320 bytes, 640 pixels) into the three planes, starting
+// at pixel BBC_EMPTY_COLUMNS (a multiple of 16): 16 pixels per iteration
+static inline void __not_in_flash_func(split_scanline)(const uint8_t *src) {
+    uint16_t *r = (uint16_t *)planes[0] + BBC_EMPTY_COLUMNS / 16;
+    uint16_t *g = (uint16_t *)planes[1] + BBC_EMPTY_COLUMNS / 16;
+    uint16_t *b = (uint16_t *)planes[2] + BBC_EMPTY_COLUMNS / 16;
+    for (int i = 0; i < BBC_SCREEN_WIDTH / 16; i++, src += 8) {
+        uint32_t w0 = plane_lut[src[0]] | (plane_lut[src[1]] << 2) | (plane_lut[src[2]] << 4) | (plane_lut[src[3]] << 6);
+        uint32_t w1 = plane_lut[src[4]] | (plane_lut[src[5]] << 2) | (plane_lut[src[6]] << 4) | (plane_lut[src[7]] << 6);
+        r[i] = (uint16_t)((w0 & 0xFF) | ((w1 & 0xFF) << 8));
+        g[i] = (uint16_t)(((w0 >> 8) & 0xFF) | (w1 & 0xFF00));
+        b[i] = (uint16_t)(((w0 >> 16) & 0xFF) | ((w1 >> 8) & 0xFF00));
+    }
+}
+
+static inline void __not_in_flash_func(clear_scanline)(void) {
+    for (int ch = 0; ch < 3; ch++) {
+        uint16_t *p = (uint16_t *)planes[ch] + BBC_EMPTY_COLUMNS / 16;
+        for (int i = 0; i < BBC_SCREEN_WIDTH / 16; i++) p[i] = 0;
+    }
+}
+
+// One TMDS buffer per BBC line: PicoDVI shows each buffer on two output lines
+// (DVI_VERTICAL_REPEAT = 2), so a line must be ready every 2 x 31.7 us
 static inline void __not_in_flash_func(render_frame)() {
     for (int y = 0; y < BBC_DISPLAY_LINES; y++) {
         int src_line = BBC_DISPLAY_TOP + y;
         uint32_t *tmdsbuf;
         queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
+#ifdef BBC_DIAG
+        uint32_t t0 = time_us_32();
+#endif
         if (src_line < BBC_SCREEN_HEIGHT) {
-            unpack_scanline(&state.bbc.fb[src_line * (BBC_SCREEN_WIDTH / 2)], &scanbuf[BBC_EMPTY_COLUMNS]);
+            split_scanline(&state.bbc.fb[src_line * (BBC_SCREEN_WIDTH / 2)]);
         } else {
-            memset(&scanbuf[BBC_EMPTY_COLUMNS], 0, BBC_SCREEN_WIDTH);
+            clear_scanline();
         }
 #ifdef BBC_DIAG
         if (y >= BBC_DISPLAY_LINES - 6 && y < BBC_DISPLAY_LINES - 1) {
-            diag_draw(&scanbuf[BBC_EMPTY_COLUMNS], y - (BBC_DISPLAY_LINES - 6));
+            diag_draw(y - (BBC_DISPLAY_LINES - 6));
         }
 #endif
-        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, BBC_PALETTE_BITS);
+        // TMDS lanes: 0 blue, 1 green, 2 red
+        tmds_encode_1bpp(planes[2], tmdsbuf, FRAME_WIDTH);
+        tmds_encode_1bpp(planes[1], tmdsbuf + FRAME_WIDTH / DVI_SYMBOLS_PER_WORD, FRAME_WIDTH);
+        tmds_encode_1bpp(planes[0], tmdsbuf + 2 * FRAME_WIDTH / DVI_SYMBOLS_PER_WORD, FRAME_WIDTH);
+#ifdef BBC_DIAG
+        uint32_t dt = time_us_32() - t0;
+        if (dt > diag_line_max) diag_line_max = dt;
+        diag_line_sum += dt;
+        diag_line_count++;
+#endif
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
-
-        // Same line again (vertical doubling)
-        uint32_t *tmdsbuf2;
-        queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf2);
-        copy_tmdsbuf(tmdsbuf2, tmdsbuf);
-        queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf2);
+#ifdef BBC_DIAG
+        if (dvi0.late_scanline_ctr) diag_late++;
+#endif
     }
 }
 
@@ -545,11 +602,12 @@ int main() {
     dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
     dvi_init(&dvi0, next_striped_spin_lock_num(), next_striped_spin_lock_num());
 
-    tmds_palette_init();
-    memset(scanbuf, 0, sizeof(scanbuf));
+    plane_lut_init();
+    memset(planes, 0, sizeof(planes));
 
     printf("Core 1 start\n");
-    hw_set_bits(&bus_ctrl_hw->priority, BUSCTRL_BUS_PRIORITY_PROC1_BITS);
+    // DVI DMA first: the core 0 bus traffic (emulated memory, XIP) must not starve the TMDS stream
+    hw_set_bits(&bus_ctrl_hw->priority, BUSCTRL_BUS_PRIORITY_PROC1_BITS | BUSCTRL_BUS_PRIORITY_DMA_R_BITS | BUSCTRL_BUS_PRIORITY_DMA_W_BITS);
     multicore_launch_core1(core1_main);
 
     app_init();

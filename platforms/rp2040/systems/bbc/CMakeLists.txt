@@ -1,7 +1,6 @@
 add_executable(bbc
 	${CMAKE_CURRENT_SOURCE_DIR}/src/bbc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
-	${CMAKE_CURRENT_SOURCE_DIR}/../oric/src/utils.S
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 )
@@ -32,7 +31,6 @@ pico_enable_stdio_uart(bbc 1)
 add_executable(bbc_diag
 	${CMAKE_CURRENT_SOURCE_DIR}/src/bbc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
-	${CMAKE_CURRENT_SOURCE_DIR}/../oric/src/utils.S
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 )
@@ -51,7 +49,6 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/roms/bbc_master_roms.h)
 add_executable(bbc_master
 	${CMAKE_CURRENT_SOURCE_DIR}/src/bbc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
-	${CMAKE_CURRENT_SOURCE_DIR}/../oric/src/utils.S
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 )

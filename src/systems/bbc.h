@@ -214,7 +214,7 @@ typedef struct {
     uint16_t tt_glyphs[96][20];
 
     // Framebuffer, 4 bits per pixel, 640x256
-    uint8_t fb[BBC_FRAMEBUFFER_SIZE];
+    uint8_t fb[BBC_FRAMEBUFFER_SIZE] __attribute__((aligned(4)));   // Word aligned: read 16 bits at a time by the RP2040 display
 
     uint32_t system_ticks;
     uint8_t stall;             // Remaining cycles during which the CPU clock is held (1 MHz bus access)
