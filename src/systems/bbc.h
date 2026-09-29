@@ -134,6 +134,8 @@ typedef struct {
     bbc_lut_slot_t slot[BBC_LUT_SLOTS];
     uint32_t clock;
     bool chunk_done;           // BBC_LUT_PROGRESSIVE: one slice per line drawn
+    bool idx_ready;
+    uint32_t idx[8][256];      // Per ULA mode (ctrl bits 2-4): logical colour of each pixel of a byte (4 bits each)
 } bbc_lut_t;
 
 typedef enum {
@@ -1477,11 +1479,8 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
         if (b->ctrl == ctrl && _bbc_same16(b->pal, pal)) return b;
         if (!recent) recent = b;
     }
-    if (recent) {
-        recent->used = lut->clock;
-        return recent;
-    }
-    return b;   // No complete table yet (start): entries not built yet are stale
+    (void)recent;
+    return 0;   // Not ready: the line is drawn pixel by pixel (right colours)
 #else
     bbc_lut_slot_t* l = victim;
 #ifdef BBC_LUT_BUILD_HOOK
@@ -1494,6 +1493,50 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
     l->used = lut->clock;
     return l;
 #endif
+}
+
+// Logical colour of each pixel of every screen byte, per ULA mode (palette
+// independent, built once): draws a line without a byte -> pixels table
+static void _bbc_lut_idx_init(bbc_lut_t* lut) {
+    for (int k = 0; k < 8; k++) {
+        uint8_t ctrl = (uint8_t)(k << 2);
+        int cpl_sel = (ctrl >> 2) & 3;
+        bool fast = ctrl & 0x10;
+        int bpp = fast ? ((cpl_sel == 3) ? 1 : (cpl_sel == 2) ? 2 : 4) : ((cpl_sel == 2) ? 1 : (cpl_sel == 1) ? 2 : 4);
+        int ppb = 8 / bpp;
+        for (int b = 0; b < 256; b++) {
+            uint32_t w = 0;
+            uint8_t byte = (uint8_t)b;
+            for (int p = 0; p < ppb; p++) {
+                w |= (uint32_t)_bbc_ula_index(byte) << (4 * p);
+                byte = (uint8_t)((byte << 1) | 1);
+            }
+            lut->idx[k][b] = w;
+        }
+    }
+    lut->idx_ready = true;
+}
+
+// Pixels of one byte into the 3 planes without a table (8 or 16 pixels)
+static inline void _bbc_px_direct(const bbc_lut_t* lut, uint8_t ctrl, const uint8_t* phys, uint8_t byte, uint16_t m[3]) {
+    int cpl_sel = (ctrl >> 2) & 3;
+    bool fast = ctrl & 0x10;
+    int bpp = fast ? ((cpl_sel == 3) ? 1 : (cpl_sel == 2) ? 2 : 4) : ((cpl_sel == 2) ? 1 : (cpl_sel == 1) ? 2 : 4);
+    int ppb = 8 / bpp;
+    int px_w = (fast ? 8 : 16) / ppb;
+    uint16_t wmask = (uint16_t)((1 << px_w) - 1);
+    uint32_t w = lut->idx[(ctrl >> 2) & 7][byte];
+    uint16_t m0 = 0, m1 = 0, m2 = 0;
+    for (int p = 0, x = 0; p < ppb; p++, x += px_w, w >>= 4) {
+        uint8_t col = phys[w & 15];
+        uint16_t bits = (uint16_t)(wmask << x);
+        if (col & 1) m0 |= bits;
+        if (col & 2) m1 |= bits;
+        if (col & 4) m2 |= bits;
+    }
+    m[0] = m0;
+    m[1] = m1;
+    m[2] = m2;
 }
 
 BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* lut, uint8_t* planes[3]) {
@@ -1512,7 +1555,12 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
         uint8_t ctrl = ln->ctrl;
         uint8_t pal[16];
         _bbc_copy(pal, ln->pal, 16);
+        if (!lut->idx_ready) _bbc_lut_idx_init(lut);
         const bbc_lut_slot_t* ls = _bbc_lut_use(lut, ctrl, pal);
+        uint8_t phys[16];
+        if (!ls) {
+            for (int i = 0; i < 16; i++) phys[i] = _bbc_phys_colour(ctrl, pal, (uint8_t)i);
+        }
         int out_px = (ctrl & 0x10) ? 8 : 16;
         int x = 0, ev = 0;
         for (int c = 0; c < ln->chars && x + out_px <= BBC_SCREEN_WIDTH; c++) {
@@ -1523,9 +1571,19 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
                     ev++;
                 }
                 ls = _bbc_lut_use(lut, ctrl, pal);
+                if (!ls) {
+                    for (int i = 0; i < 16; i++) phys[i] = _bbc_phys_colour(ctrl, pal, (uint8_t)i);
+                }
                 out_px = (ctrl & 0x10) ? 8 : 16;
             }
-            const uint16_t* m = ls->px[ln->data[c]];
+            uint16_t md[3];
+            const uint16_t* m;
+            if (ls) {
+                m = ls->px[ln->data[c]];
+            } else {
+                _bbc_px_direct(lut, ctrl, phys, ln->data[c], md);
+                m = md;
+            }
             int i = x >> 3;
             for (int ch = 0; ch < 3; ch++) {
                 planes[ch][i] = (uint8_t)m[ch];
