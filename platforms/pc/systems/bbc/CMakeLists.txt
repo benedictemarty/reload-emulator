@@ -24,3 +24,12 @@ if (MSVC)
 else()
     target_compile_options(bbc_headless PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
+
+#=== EXECUTABLE: bbc_headless_lut (tests: byte -> pixels tables built as on the RP2040)
+
+add_executable(bbc_headless_lut ./src/bbc_headless.c)
+target_include_directories(bbc_headless_lut PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+target_compile_definitions(bbc_headless_lut PRIVATE BBC_LUT_PROGRESSIVE=16 BBC_LUT_SLOTS=8)
+if (NOT MSVC)
+    target_compile_options(bbc_headless_lut PUBLIC -Wall -Wextra -Wsign-compare)
+endif()
