@@ -72,8 +72,14 @@
 #define BBC_HOT      __attribute__((section(".time_critical.bbc")))
 // Core 0 only captures each display line; core 1 draws it (no framebuffer)
 #define BBC_DEFER_RENDER 1
-// At most one byte -> pixels table built every 8 lines (core 1 line budget)
-#define BBC_LUT_THROTTLE 8
+// Byte -> pixels tables built 64 entries per line (core 1 line budget)
+#define BBC_LUT_PROGRESSIVE 64
+// 8 cached tables: title screens often use several palettes per frame
+#define BBC_LUT_SLOTS 8
+#ifdef BBC_DIAG
+volatile uint32_t diag_lut_builds;
+#define BBC_LUT_BUILD_HOOK() (diag_lut_builds++)
+#endif
 #define CHIPS_HOT    __attribute__((section(".time_critical.bbc")))
 #define WDC65C02_HOT __attribute__((section(".time_critical.bbc")))
 #include <stddef.h>
@@ -500,16 +506,16 @@ static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_372)
 // cycle (161 needed) with a TMDS bit rate only 12 % higher. DVDD 1.25V.
 static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_330) = {   // In RAM, as PicoDVI's timings
     .h_sync_polarity = false,
-    .h_front_porch = 124,
-    .h_sync_width = 80,
-    .h_back_porch = 106,
+    .h_front_porch = 164,
+    .h_sync_width = 84,
+    .h_back_porch = 112,
     .h_active_pixels = 800,
     .v_sync_polarity = true,
     .v_front_porch = 3,
     .v_sync_width = 10,
     .v_back_porch = 7,
     .v_active_lines = 480,
-    .bit_clk_khz = 330000,
+    .bit_clk_khz = 345000,
 };
 #define FRAME_WIDTH  800
 #define FRAME_HEIGHT 480
@@ -836,7 +842,11 @@ int main() {
 
     dvi0.timing = &DVI_TIMING;
     dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
-    dvi_init(&dvi0, next_striped_spin_lock_num(), next_striped_spin_lock_num());
+    // Dedicated spin locks for the DVI queues: next_striped_spin_lock_num() shares
+    // 16-23 round-robin with the other SDK users (critical sections of the audio
+    // queue, FatFs, TinyUSB); core 1 then waited for core 0 with interrupts
+    // masked and a scanline came late (found by the Neo6502Trinity project, T-77)
+    dvi_init(&dvi0, spin_lock_claim_unused(true), spin_lock_claim_unused(true));
 
     memset(planes, 0, sizeof(planes));
 

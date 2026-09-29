@@ -116,18 +116,21 @@ typedef struct {
 // Screen byte -> pixels of the 3 colour planes (bit n = pixel n from the left),
 // cached for the last few ULA control/palette states (the MOS flips the flash
 // bit twice a second: both states stay cached)
+#ifndef BBC_LUT_SLOTS
 #define BBC_LUT_SLOTS 4
+#endif
 typedef struct {
-    bool valid;
+    bool valid;                // Complete table for ctrl/pal
+    bool building;             // Being filled (BBC_LUT_PROGRESSIVE)
     uint8_t ctrl;
     uint8_t pal[16];
+    uint16_t fill;             // Entries built so far
     uint32_t used;
     uint16_t px[256][3];
 } bbc_lut_slot_t;
 typedef struct {
     bbc_lut_slot_t slot[BBC_LUT_SLOTS];
     uint32_t clock;
-    uint32_t last_build;       // clock of the last table built (BBC_LUT_THROTTLE)
 } bbc_lut_t;
 
 typedef enum {
@@ -1399,34 +1402,9 @@ static BBC_HOT void _bbc_render_teletext_line(const bbc_t* sys, const bbc_line_t
     }
 }
 
-// Byte -> pixels table for a ULA control/palette (only the bits that shape pixels)
-static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, const uint8_t* pal) {
-    ctrl &= 0x1D;   // Flash, characters per line, 2 MHz clock
-    lut->clock++;
-    bbc_lut_slot_t* victim = &lut->slot[0];
-    for (int i = 0; i < BBC_LUT_SLOTS; i++) {
-        bbc_lut_slot_t* l = &lut->slot[i];
-        if (l->valid && l->ctrl == ctrl && _bbc_same16(l->pal, pal)) {
-            l->used = lut->clock;
-            return l;
-        }
-        if (!l->valid || l->used < victim->used) victim = l;
-    }
-#if defined(BBC_LUT_THROTTLE) && BBC_LUT_THROTTLE > 0
-    // Real-time drawing: while the palette is being rewritten (MODE change) a
-    // table per line would overrun the line budget; reuse the latest table
-    // (a few lines in transient colours) and build again a few lines later
-    if (lut->clock - lut->last_build < BBC_LUT_THROTTLE) {
-        bbc_lut_slot_t* recent = 0;
-        for (int i = 0; i < BBC_LUT_SLOTS; i++) {
-            bbc_lut_slot_t* c = &lut->slot[i];
-            if (c->valid && (!recent || c->used > recent->used)) recent = c;
-        }
-        if (recent) return recent;
-    }
-    lut->last_build = lut->clock;
-#endif
-    bbc_lut_slot_t* l = victim;
+// Entries [from, to) of a byte -> pixels table (ctrl and pal already set)
+static BBC_HOT void _bbc_lut_fill(bbc_lut_slot_t* l, int from, int to) {
+    uint8_t ctrl = l->ctrl;
     int cpl_sel = (ctrl >> 2) & 3;
     bool fast = ctrl & 0x10;
     int px_per_byte = fast ? 8 : 16;
@@ -1435,8 +1413,8 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
     int px_w = px_per_byte / pixels_per_byte;
     uint16_t wmask = (uint16_t)((1 << px_w) - 1);
     uint8_t phys[16];
-    for (int i = 0; i < 16; i++) phys[i] = _bbc_phys_colour(ctrl, pal, (uint8_t)i);
-    for (int b = 0; b < 256; b++) {
+    for (int i = 0; i < 16; i++) phys[i] = _bbc_phys_colour(ctrl, l->pal, (uint8_t)i);
+    for (int b = from; b < to; b++) {
         uint16_t m0 = 0, m1 = 0, m2 = 0;
         uint8_t byte = (uint8_t)b;
         for (int p = 0, x = 0; p < pixels_per_byte; p++, x += px_w) {
@@ -1451,11 +1429,74 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
         l->px[b][1] = m1;
         l->px[b][2] = m2;
     }
+    l->fill = (uint16_t)to;
+}
+
+// Byte -> pixels table for a ULA control/palette (only the bits that shape pixels)
+static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, const uint8_t* pal) {
+    ctrl &= 0x1D;   // Flash, characters per line, 2 MHz clock
+    lut->clock++;
+    bbc_lut_slot_t* victim = &lut->slot[0];
+    bbc_lut_slot_t* recent = 0;
+    for (int i = 0; i < BBC_LUT_SLOTS; i++) {
+        bbc_lut_slot_t* l = &lut->slot[i];
+        if (l->valid) {
+            if (l->ctrl == ctrl && _bbc_same16(l->pal, pal)) {
+                l->used = lut->clock;
+                return l;
+            }
+            if (!recent || l->used > recent->used) recent = l;
+        }
+        if (!l->valid || l->used < victim->used) victim = l;
+    }
+#if defined(BBC_LUT_PROGRESSIVE) && BBC_LUT_PROGRESSIVE > 0
+    // Real-time drawing: a whole table costs more than a line (~80 us). It is
+    // built BBC_LUT_PROGRESSIVE entries per line; meanwhile the latest complete
+    // table draws the line (a few lines in transient colours when the palette
+    // changes, e.g. MODE change, new room)
+    // One table at a time is built, to the end (other palettes wait their turn
+    // and use the latest complete table meanwhile)
+    bbc_lut_slot_t* b = 0;
+    for (int i = 0; i < BBC_LUT_SLOTS; i++) {
+        if (lut->slot[i].building) b = &lut->slot[i];
+    }
+    if (!b) {
+        b = victim;
+#ifdef BBC_LUT_BUILD_HOOK
+        BBC_LUT_BUILD_HOOK();
+#endif
+        b->valid = false;
+        b->building = true;
+        b->ctrl = ctrl;
+        _bbc_copy(b->pal, pal, 16);
+        b->fill = 0;
+    }
+    int to = b->fill + BBC_LUT_PROGRESSIVE;
+    _bbc_lut_fill(b, b->fill, to > 256 ? 256 : to);
+    if (b->fill == 256) {
+        b->building = false;
+        b->valid = true;
+        b->used = lut->clock;
+        if (b->ctrl == ctrl && _bbc_same16(b->pal, pal)) return b;
+        if (!recent) recent = b;
+    }
+    if (recent) {
+        recent->used = lut->clock;
+        return recent;
+    }
+    return b;   // No complete table yet (start): entries not built yet are stale
+#else
+    bbc_lut_slot_t* l = victim;
+#ifdef BBC_LUT_BUILD_HOOK
+    BBC_LUT_BUILD_HOOK();
+#endif
     l->ctrl = ctrl;
     _bbc_copy(l->pal, pal, 16);
+    _bbc_lut_fill(l, 0, 256);
     l->valid = true;
     l->used = lut->clock;
     return l;
+#endif
 }
 
 BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* lut, uint8_t* planes[3]) {
