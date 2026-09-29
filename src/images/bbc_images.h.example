@@ -11,8 +11,9 @@ typedef struct {
     const uint8_t* data;
     size_t size;
     int sides;
+    const char* name;   // Shown by the disc menu (F11)
 } bbc_disc_image_t;
 
 static const bbc_disc_image_t bbc_disc_images[] = {
-    // {game_ssd, sizeof(game_ssd), 1},
+    // {game_ssd, sizeof(game_ssd), 1, "Game"},
 };

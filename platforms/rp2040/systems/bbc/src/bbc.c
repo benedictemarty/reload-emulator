@@ -447,6 +447,124 @@ static void insert_image(int index) {
     current_image = index;
 }
 
+/*-- Disc menu (F11) -----------------------------------------------------------*/
+// Full-screen list of the disc images (USB drive, then flash), drawn by core 1
+// in place of the BBC picture with the teletext character set (40 x 25).
+// Core 0 builds the text (menu_text/menu_fg/menu_bg), core 1 only draws it.
+#define MENU_ROWS 25
+#define MENU_COLS 40
+#define MENU_LIST_TOP 2
+#define MENU_LIST_ROWS 19
+static volatile bool menu_open;
+static int menu_sel, menu_top;
+static char __not_in_flash() menu_text[MENU_ROWS][MENU_COLS];
+static uint8_t __not_in_flash() menu_fg[MENU_ROWS], menu_bg[MENU_ROWS];
+static uint32_t boot_shift_release;   // emu_frames value at which SHIFT goes up (SHIFT+BREAK)
+static uint32_t emu_frames;
+
+static const char* image_name(int index) {
+    if (index < usb_num_files) return usb_files[index];
+#ifdef BBC_HAVE_IMAGES
+    const char* n = bbc_disc_images[index - usb_num_files].name;
+    return n ? n : "(flash)";
+#else
+    return "";
+#endif
+}
+
+static void menu_row(int row, uint8_t fg, uint8_t bg, const char* text) {
+    int i = 0;
+    for (; i < MENU_COLS && text[i]; i++) menu_text[row][i] = text[i];
+    for (; i < MENU_COLS; i++) menu_text[row][i] = ' ';
+    menu_fg[row] = fg;
+    menu_bg[row] = bg;
+}
+
+static void menu_build(void) {
+    char line[64];
+    int n = num_images();
+    menu_row(0, 3, 1, " BBC Micro - disques (F11)");
+    menu_row(1, 7, 0, "");
+    if (menu_sel < menu_top) menu_top = menu_sel;
+    if (menu_sel >= menu_top + MENU_LIST_ROWS) menu_top = menu_sel - MENU_LIST_ROWS + 1;
+    for (int r = 0; r < MENU_LIST_ROWS; r++) {
+        int i = menu_top + r;
+        if (i < n) {
+            snprintf(line, sizeof(line), " %c %-5s %s", i == current_image ? '*' : ' ', i < usb_num_files ? "USB" : "flash",
+                     image_name(i));
+            menu_row(MENU_LIST_TOP + r, i == menu_sel ? 4 : 7, i == menu_sel ? 7 : 4, line);
+        } else {
+            menu_row(MENU_LIST_TOP + r, 7, 4, n == 0 && r == 0 ? " (aucune image)" : "");
+        }
+    }
+    menu_row(21, 7, 0, "");
+    menu_row(22, 6, 0, " Entree : inserer et demarrer");
+    menu_row(23, 6, 0, " Espace : inserer   Echap : fermer");
+    snprintf(line, sizeof(line), " Lecteur 0 : %s", current_image >= 0 ? image_name(current_image) : "vide");
+    menu_row(24, 2, 0, line);
+}
+
+// Keys while the menu is open (HID usage codes); true when consumed
+static bool menu_key(uint8_t keycode) {
+    int n = num_images();
+    switch (keycode) {
+        case HID_KEY_ARROW_UP: if (menu_sel > 0) menu_sel--; break;
+        case HID_KEY_ARROW_DOWN: if (menu_sel < n - 1) menu_sel++; break;
+        case HID_KEY_PAGE_UP: menu_sel = menu_sel > MENU_LIST_ROWS ? menu_sel - MENU_LIST_ROWS : 0; break;
+        case HID_KEY_PAGE_DOWN: menu_sel = menu_sel + MENU_LIST_ROWS < n ? menu_sel + MENU_LIST_ROWS : (n > 0 ? n - 1 : 0); break;
+        case HID_KEY_ENTER:
+        case HID_KEY_KEYPAD_ENTER:
+        case HID_KEY_SPACE:
+            if (n > 0) {
+                insert_image(menu_sel);
+                if (keycode != HID_KEY_SPACE) {
+                    // SHIFT+BREAK: SHIFT held while the MOS restarts (auto-boot from !BOOT)
+                    bbc_key_down(&state.bbc, BBC_KEY_Shift);
+                    bbc_reset(&state.bbc);
+                    boot_shift_release = emu_frames + 50;
+                }
+            }
+            menu_open = false;
+            return true;
+        case HID_KEY_ESCAPE:
+        case HID_KEY_F11:
+            menu_open = false;
+            return true;
+        default: return true;   // Other keys: ignored while the menu is open
+    }
+    menu_build();
+    return true;
+}
+
+static void menu_toggle(void) {
+    if (menu_open) {
+        menu_open = false;
+        return;
+    }
+    menu_sel = current_image >= 0 ? current_image : 0;
+    menu_top = 0;
+    menu_build();
+    menu_open = true;
+}
+
+// Core 1: draw BBC line y (0..255) of the menu (10 lines per text row)
+static void __not_in_flash_func(menu_draw_line)(int y, uint8_t *planes[3]) {
+    int row = y / 10, raster = y % 10;
+    if (y < 0 || row >= MENU_ROWS) {
+        for (int ch = 0; ch < 3; ch++) _bbc_zero(planes[ch], BBC_SCREEN_WIDTH / 8);
+        return;
+    }
+    uint8_t fg = menu_fg[row], bg = menu_bg[row];
+    for (int c = 0; c < MENU_COLS; c++) {
+        uint8_t ch = (uint8_t)menu_text[row][c];
+        uint16_t bits = 0;
+        if (ch > 0x20 && ch < 0x80) {
+            bits = (uint16_t)(state.bbc.tt_glyphs[ch - 0x20][raster * 2] | state.bbc.tt_glyphs[ch - 0x20][raster * 2 + 1]);
+        }
+        _bbc_tt_put(planes, c, bits, fg, bg);
+    }
+}
+
 // Called every frame: once the USB drive is mounted, list its images and insert the first one
 static void usb_poll(void) {
     if (usb_scanned || !msc_inquiry_complete) return;
@@ -650,19 +768,20 @@ void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_stat
 // by the BBC for zero cycles. Releases are deferred until the key has been
 // held for KEY_MIN_HOLD_FRAMES emulated frames.
 #define KEY_MIN_HOLD_FRAMES 2
-static uint32_t emu_frames;
 static uint32_t key_down_frame[128];
 static bool key_release_pending[128];
 
 #ifdef BBC_DIAG
 // Remote typing for bench tests over SWD: the host writes BBC key codes into
-// diag_keyq (bit 7 = with SHIFT, 0x7F = BREAK, 0x7E = F11 next disc) and advances diag_keyq_tail; each key is held
+// diag_keyq (bit 7 = with SHIFT, 0x7F = BREAK, 0x7E = next disc, 0x7D = F11 menu) and advances diag_keyq_tail; each key is held
 // then released for DIAG_KEY_FRAMES emulated frames
 #define DIAG_KEY_FRAMES 4
 volatile uint8_t diag_keyq[256];
 volatile uint32_t diag_keyq_head, diag_keyq_tail;
 // Layout for the host-side screen capture (RAM and captured lines of bbc_t)
 volatile uint32_t diag_layout[4] = {offsetof(bbc_t, ram), offsetof(bbc_t, lines), sizeof(bbc_line_t), offsetof(bbc_t, crtc_reg)};
+
+void hid_raw_key_down(uint8_t keycode);
 
 static void diag_key_service(void) {
     static int phase, timer;
@@ -693,8 +812,17 @@ static void diag_key_service(void) {
         key = diag_keyq[diag_keyq_head & 255];
         diag_keyq_head++;
         if (key == 0x7E) {
-            // F11: next disc image
+            // Next disc image
             if (num_images() > 0) insert_image((current_image + 1) % num_images());
+            timer = DIAG_KEY_FRAMES;
+            return;
+        }
+        if (key == 0x7D || menu_open) {
+            // 0x7D = F11 (disc menu); while it is open, BBC keys drive it
+            uint8_t hid = key == 0x7D ? HID_KEY_F11 : key == BBC_KEY_Up ? HID_KEY_ARROW_UP
+                        : key == BBC_KEY_Down ? HID_KEY_ARROW_DOWN : key == BBC_KEY_Return ? HID_KEY_ENTER
+                        : key == BBC_KEY_Space ? HID_KEY_SPACE : key == BBC_KEY_Escape ? HID_KEY_ESCAPE : 0;
+            if (hid) hid_raw_key_down(hid);
             timer = DIAG_KEY_FRAMES;
             return;
         }
@@ -724,9 +852,12 @@ void hid_raw_key_down(uint8_t keycode) {
     diag_last_key = keycode;
 #endif
     if (keycode == NEO_MULTIBOOT_RETURN_KEY) neo_multiboot_return();  // Pause : back to the Neo6502 firmware (multi-boot)
+    if (menu_open) {
+        menu_key(keycode);
+        return;
+    }
     if (keycode == HID_KEY_F11) {
-        // Next disc image
-        if (num_images() > 0) insert_image((current_image + 1) % num_images());
+        menu_toggle();   // Disc menu
         return;
     }
     int key = bbc_key_from_hid(keycode);
@@ -790,7 +921,9 @@ static inline void __not_in_flash_func(render_frame)() {
 #endif
         uint8_t *pp[3] = {(uint8_t *)planes[0] + BBC_EMPTY_COLUMNS / 8, (uint8_t *)planes[1] + BBC_EMPTY_COLUMNS / 8,
                           (uint8_t *)planes[2] + BBC_EMPTY_COLUMNS / 8};
-        if (src_line >= 0 && src_line < BBC_SCREEN_HEIGHT) {
+        if (menu_open) {
+            menu_draw_line(src_line, pp);
+        } else if (src_line >= 0 && src_line < BBC_SCREEN_HEIGHT) {
             bbc_render_line(&state.bbc, &state.bbc.lines[src_line], &core1_lut, pp);
         } else {
             for (int ch = 0; ch < 3; ch++) memset(pp[ch], 0, BBC_SCREEN_WIDTH / 8);
@@ -921,6 +1054,10 @@ int main() {
         emu_frames++;
         tuh_task();
         release_pending_keys();
+        if (boot_shift_release && emu_frames >= boot_shift_release) {
+            bbc_key_up(&state.bbc, BBC_KEY_Shift);
+            boot_shift_release = 0;
+        }
 #ifdef BBC_DIAG
         diag_key_service();
 #endif
