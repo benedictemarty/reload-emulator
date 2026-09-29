@@ -131,6 +131,7 @@ typedef struct {
 typedef struct {
     bbc_lut_slot_t slot[BBC_LUT_SLOTS];
     uint32_t clock;
+    bool chunk_done;           // BBC_LUT_PROGRESSIVE: one slice per line drawn
 } bbc_lut_t;
 
 typedef enum {
@@ -1471,8 +1472,12 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
         _bbc_copy(b->pal, pal, 16);
         b->fill = 0;
     }
-    int to = b->fill + BBC_LUT_PROGRESSIVE;
-    _bbc_lut_fill(b, b->fill, to > 256 ? 256 : to);
+    if (!lut->chunk_done) {
+        // One slice per line, however many palette writes the line has
+        lut->chunk_done = true;
+        int to = b->fill + BBC_LUT_PROGRESSIVE;
+        _bbc_lut_fill(b, b->fill, to > 256 ? 256 : to);
+    }
     if (b->fill == 256) {
         b->building = false;
         b->valid = true;
@@ -1500,6 +1505,7 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
 }
 
 BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* lut, uint8_t* planes[3]) {
+    lut->chunk_done = false;
     const int bytes = BBC_SCREEN_WIDTH / 8;
     int cell_px = 16;
     if (!(ln->flags & BBC_LINE_DISPLAYED) || ln->chars == 0) {

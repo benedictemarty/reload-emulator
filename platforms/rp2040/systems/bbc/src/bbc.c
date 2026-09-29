@@ -72,8 +72,9 @@
 #define BBC_HOT      __attribute__((section(".time_critical.bbc")))
 // Core 0 only captures each display line; core 1 draws it (no framebuffer)
 #define BBC_DEFER_RENDER 1
-// Byte -> pixels tables built 64 entries per line (core 1 line budget)
-#define BBC_LUT_PROGRESSIVE 64
+// Byte -> pixels tables built 16 entries per line (~5 us; a whole table
+// costs ~90 us in the 1 bpp modes, the core 1 budget is 67 us per line)
+#define BBC_LUT_PROGRESSIVE 16
 // 8 cached tables: title screens often use several palettes per frame
 #define BBC_LUT_SLOTS 8
 #ifdef BBC_DIAG
