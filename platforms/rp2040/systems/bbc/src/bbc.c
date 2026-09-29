@@ -8,7 +8,7 @@
 // demand through FatFs, writes go back to the file) or images compiled in
 // flash (src/images/bbc_images.h, read-only);
 // F11 = next image (USB files first, then flash images).
-// Core 1: DVI 960x544 (or 800x480) @ 60 Hz, BBC 640x256 centred, lines
+// Core 1: DVI 800x480 (or 960x544) @ 60 Hz, BBC 640x256 centred, lines
 //         doubled by PicoDVI: 800x480 at 345 MHz (default, stretched blanking)
 //         or 295.2 MHz (-DBBC_VIDEO_480) crops 8 lines top and bottom;
 //         960x544 at 372 MHz (-DBBC_VIDEO_544) shows the 256 lines.
