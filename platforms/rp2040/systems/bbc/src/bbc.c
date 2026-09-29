@@ -60,6 +60,7 @@
 #endif
 #if __has_include("images/bbc_images.h")
 #include "images/bbc_images.h"
+#define BBC_HAVE_IMAGES 1   // (the preprocessor cannot evaluate BBC_NUM_IMAGES)
 #define BBC_NUM_IMAGES ((int)(sizeof(bbc_disc_images) / sizeof(bbc_disc_images[0])))
 #else
 #define BBC_NUM_IMAGES 0
@@ -425,7 +426,7 @@ static void insert_image(int index) {
                                usb_write_sector, 0);
         printf("Disc inserted: %s (%u bytes)\n", name, (unsigned)f_size(&usb_fil));
     } else {
-#if BBC_NUM_IMAGES > 0
+#ifdef BBC_HAVE_IMAGES
         const bbc_disc_image_t* im = &bbc_disc_images[index - usb_num_files];
         bbc_insert_disc(&state.bbc, 0, (uint8_t*)im->data, im->size, im->sides, true);
         printf("Flash disc %d inserted (%u bytes)\n", index - usb_num_files, (unsigned)im->size);
@@ -448,7 +449,7 @@ void app_init(void) {
     bbc_desc_t desc = bbc_desc();
     bbc_init(&state.bbc, &desc);
     bbc_reset(&state.bbc);
-#if BBC_NUM_IMAGES > 0
+#ifdef BBC_HAVE_IMAGES
     insert_image(0);   // Flash image until a USB drive shows up
 #endif
 }
