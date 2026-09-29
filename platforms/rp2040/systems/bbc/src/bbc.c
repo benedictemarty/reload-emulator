@@ -8,12 +8,11 @@
 // demand through FatFs, writes go back to the file) or images compiled in
 // flash (src/images/bbc_images.h, read-only);
 // F11 = next image (USB files first, then flash images).
-// Core 1: DVI 800x480 @ 60 Hz, BBC 640x256 framebuffer centred, lines
-//         BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP+239 doubled by PicoDVI (256 lines
-//         do not fit twice in 480; policy: crop 8 lines top and bottom).
+// Core 1: DVI 960x544 (or 800x480) @ 60 Hz, BBC 640x256 centred, lines
+//         doubled by PicoDVI: 960x544 at 372 MHz shows the 256 lines (default),
+//         800x480 at 295.2 MHz (-DBBC_VIDEO_480) crops 8 lines top and bottom.
 //         Each line is split into 3 bit planes and encoded by the 1 bpp TMDS
-//         encoder (the BBC colours are 0x00/0xFF per channel): ~34 us per line
-//         for a 63 us budget.
+//         encoder (the BBC colours are 0x00/0xFF per channel).
 //
 // ## zlib/libpng license
 //
@@ -447,17 +446,26 @@ void app_init(void) {
 #endif
 }
 
-// TMDS bit clock 295.2 MHz, DVDD 1.2V (Neo6502 timing shared with the Oric build)
+#ifdef BBC_VIDEO_480
+// TMDS bit clock 295.2 MHz, DVDD 1.2V (Neo6502 timing shared with the Oric build):
+// 240 of the 256 BBC lines fit, 8 are cropped at the top and at the bottom
 #define FRAME_WIDTH  800
 #define FRAME_HEIGHT 480
 #define VREG_VSEL    VREG_VOLTAGE_1_20
 #define DVI_TIMING   dvi_timing_800x480p_60hz
-
-// First BBC line shown (lines BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP + 239, one TMDS buffer each:
-// PicoDVI shows every buffer on two output lines, DVI_VERTICAL_REPEAT = 2)
-#ifndef BBC_DISPLAY_TOP
 #define BBC_DISPLAY_TOP 8
+#else
+// TMDS bit clock (and system clock) 372 MHz, DVDD 1.3V (reload-emulator's
+// setting for the other RP2040 boards): 26 % more CPU for the 2 MHz bus, and
+// the 256 BBC lines all fit (8 blank lines above and below)
+#define FRAME_WIDTH  960
+#define FRAME_HEIGHT 544
+#define VREG_VSEL    VREG_VOLTAGE_1_30
+#define DVI_TIMING   dvi_timing_960x544p_60hz
+#define BBC_DISPLAY_TOP (-8)
 #endif
+// First BBC line shown (lines BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP + FRAME_HEIGHT / 2 - 1,
+// one TMDS buffer each: PicoDVI shows every buffer on two output lines, DVI_VERTICAL_REPEAT = 2)
 #define BBC_DISPLAY_LINES (FRAME_HEIGHT / 2)
 #define BBC_EMPTY_COLUMNS ((FRAME_WIDTH - BBC_SCREEN_WIDTH) / 2)
 
@@ -686,7 +694,8 @@ static void __not_in_flash_func(diag_draw)(int row) {
 static bbc_lut_t __not_in_flash() core1_lut;
 
 // One TMDS buffer per BBC line: PicoDVI shows each buffer on two output lines
-// (DVI_VERTICAL_REPEAT = 2), so a line must be ready every 2 x 31.7 us
+// (DVI_VERTICAL_REPEAT = 2), so a line must be ready every two output lines
+// (2 x 29.7 us at 960x544, 2 x 31.7 us at 800x480)
 static inline void __not_in_flash_func(render_frame)() {
     for (int y = 0; y < BBC_DISPLAY_LINES; y++) {
         int src_line = BBC_DISPLAY_TOP + y;
@@ -697,7 +706,7 @@ static inline void __not_in_flash_func(render_frame)() {
 #endif
         uint8_t *pp[3] = {(uint8_t *)planes[0] + BBC_EMPTY_COLUMNS / 8, (uint8_t *)planes[1] + BBC_EMPTY_COLUMNS / 8,
                           (uint8_t *)planes[2] + BBC_EMPTY_COLUMNS / 8};
-        if (src_line < BBC_SCREEN_HEIGHT) {
+        if (src_line >= 0 && src_line < BBC_SCREEN_HEIGHT) {
             bbc_render_line(&state.bbc, &state.bbc.lines[src_line], &core1_lut, pp);
         } else {
             for (int ch = 0; ch < 3; ch++) memset(pp[ch], 0, BBC_SCREEN_WIDTH / 8);
