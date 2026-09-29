@@ -84,6 +84,11 @@ typedef struct {
 
 state_t __not_in_flash() state;
 
+// Layout for host tools (SWD capture, co-simulation), in every build: offset of
+// the Oric RAM in `state` (text screen at $BB80, 40 x 28), size of oric_t
+#include <stddef.h>
+volatile uint32_t diag_layout[2] = {offsetof(state_t, oric) + offsetof(oric_t, ram), sizeof(oric_t)};
+
 // Audio streaming callback
 static void audio_callback(const uint8_t sample, void *user_data) {
     (void)user_data;
@@ -109,6 +114,7 @@ oric_desc_t oric_desc(void) {
 }
 
 void app_init(void) {
+    (void)diag_layout[0];   // Kept by the linker for the host tools
     oric_desc_t desc = oric_desc();
     oric_init(&state.oric, &desc);
 }
@@ -209,12 +215,9 @@ void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_stat
 // Bench tests over SWD (-DORIC_DIAG): the host writes key codes as a PC
 // keyboard gives them (lower case = unshifted, '*' = SHIFT+8, 0x0D = RETURN)
 // into diag_keyq and advances diag_keyq_tail; each key is held then released
-// for 4 frames. diag_layout: offset of the Oric RAM in `state` (text screen at
-// $BB80, 40 x 28).
-#include <stddef.h>
+// for 4 frames.
 volatile uint16_t diag_keyq[256];
 volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames, diag_exec_us, diag_exec_max;
-volatile uint32_t diag_layout[2] = {offsetof(state_t, oric) + offsetof(oric_t, ram), sizeof(oric_t)};
 
 static void diag_key_service(void) {
     static int phase, timer;

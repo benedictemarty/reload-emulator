@@ -576,7 +576,10 @@ static void usb_poll(void) {
     }
 }
 
+extern volatile uint32_t diag_layout[4];
+
 void app_init(void) {
+    (void)diag_layout[0];   // Kept by the linker for the host tools
     bbc_desc_t desc = bbc_desc();
     bbc_init(&state.bbc, &desc);
     bbc_reset(&state.bbc);
@@ -772,6 +775,10 @@ void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_stat
 static uint32_t key_down_frame[128];
 static bool key_release_pending[128];
 
+// Layout for host tools (SWD screen capture, co-simulation): RAM and captured
+// lines of bbc_t, in every build
+volatile uint32_t diag_layout[4] = {offsetof(bbc_t, ram), offsetof(bbc_t, lines), sizeof(bbc_line_t), offsetof(bbc_t, crtc_reg)};
+
 #ifdef BBC_DIAG
 // Remote typing for bench tests over SWD: the host writes BBC key codes into
 // diag_keyq (bit 7 = with SHIFT, 0x7F = BREAK, 0x7E = next disc, 0x7D = F11 menu) and advances diag_keyq_tail; each key is held
@@ -779,8 +786,6 @@ static bool key_release_pending[128];
 #define DIAG_KEY_FRAMES 4
 volatile uint8_t diag_keyq[256];
 volatile uint32_t diag_keyq_head, diag_keyq_tail;
-// Layout for the host-side screen capture (RAM and captured lines of bbc_t)
-volatile uint32_t diag_layout[4] = {offsetof(bbc_t, ram), offsetof(bbc_t, lines), sizeof(bbc_line_t), offsetof(bbc_t, crtc_reg)};
 
 void hid_raw_key_down(uint8_t keycode);
 
