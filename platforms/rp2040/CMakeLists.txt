@@ -5,6 +5,19 @@ set(PICO_TINYUSB_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/tinyusb)
 
 include(pico_sdk_import.cmake)
 
+# Local fixes to the TinyUSB submodule (applied once, left in its working tree):
+# pause interrupt endpoint polling during EPX transfers (USB drive + keyboard)
+foreach(patch ${CMAKE_CURRENT_SOURCE_DIR}/patches/tinyusb-epx-pause-int-eps.patch)
+    execute_process(COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/lib/tinyusb apply --reverse --check ${patch}
+                    RESULT_VARIABLE already OUTPUT_QUIET ERROR_QUIET)
+    if(NOT already EQUAL 0)
+        execute_process(COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/lib/tinyusb apply ${patch} RESULT_VARIABLE applied)
+        if(NOT applied EQUAL 0)
+            message(WARNING "TinyUSB patch not applied: ${patch}")
+        endif()
+    endif()
+endforeach()
+
 project(rp2040 C CXX ASM)
 
 # Neo6502 multi-boot (Neo6502firmware/multiboot, F-80) : link a system for a flash slot.

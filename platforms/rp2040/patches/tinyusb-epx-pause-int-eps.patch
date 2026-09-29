@@ -1,0 +1,77 @@
+diff --git a/src/portable/raspberrypi/rp2040/hcd_rp2040.c b/src/portable/raspberrypi/rp2040/hcd_rp2040.c
+index 21dc3f6..2329cd3 100644
+--- a/src/portable/raspberrypi/rp2040/hcd_rp2040.c
++++ b/src/portable/raspberrypi/rp2040/hcd_rp2040.c
+@@ -88,8 +88,36 @@ TU_ATTR_ALWAYS_INLINE static inline bool need_pre(uint8_t dev_addr)
+   return hcd_port_speed_get(0) != tuh_speed_get(dev_addr);
+ }
+ 
++// EPX (bulk/control) and the interrupt endpoints share the SIE handshake
++// latches: an interrupt endpoint polled right after an EPX transaction can
++// overwrite its result, and a bulk transfer then never completes (USB drive +
++// HID keyboard, hathach/tinyusb#3533). Interrupt endpoint polling is paused
++// during each EPX transfer (int_ep_ctrl saved, restored when it completes).
++static uint32_t epx_saved_int_ep_ctrl;
++static bool epx_int_paused;
++
++static void __tusb_irq_path_func(epx_pause_int_eps)(void)
++{
++  if (!epx_int_paused)
++  {
++    epx_saved_int_ep_ctrl = usb_hw->int_ep_ctrl;
++    usb_hw->int_ep_ctrl = 0;
++    epx_int_paused = true;
++  }
++}
++
++static void __tusb_irq_path_func(epx_resume_int_eps)(void)
++{
++  if (epx_int_paused)
++  {
++    epx_int_paused = false;
++    usb_hw->int_ep_ctrl = epx_saved_int_ep_ctrl;
++  }
++}
++
+ static void __tusb_irq_path_func(hw_xfer_complete)(struct hw_endpoint *ep, xfer_result_t xfer_result)
+ {
++  if (ep == &epx) epx_resume_int_eps();
+   // Mark transfer as done before we tell the tinyusb stack
+   uint8_t dev_addr = ep->dev_addr;
+   uint8_t ep_addr = ep->ep_addr;
+@@ -366,8 +394,9 @@ static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t
+     }
+     usb_hw->int_ep_addr_ctrl[ep->interrupt_num] = reg;
+ 
+-    // Finally, enable interrupt that endpoint
+-    usb_hw_set->int_ep_ctrl = 1 << (ep->interrupt_num + 1);
++    // Finally, enable interrupt that endpoint (later if EPX has paused polling)
++    if (epx_int_paused) epx_saved_int_ep_ctrl |= 1u << (ep->interrupt_num + 1);
++    else usb_hw_set->int_ep_ctrl = 1 << (ep->interrupt_num + 1);
+ 
+     // If it's an interrupt endpoint we need to set up the buffer control
+     // register
+@@ -465,6 +494,7 @@ void hcd_device_close(uint8_t rhport, uint8_t dev_addr)
+     if (ep->dev_addr == dev_addr && ep->configured)
+     {
+       // in case it is an interrupt endpoint, disable it
++      epx_saved_int_ep_ctrl &= ~(1u << (ep->interrupt_num + 1));
+       usb_hw_clear->int_ep_ctrl = (1 << (ep->interrupt_num + 1));
+       usb_hw->int_ep_addr_ctrl[ep->interrupt_num] = 0;
+ 
+@@ -553,6 +583,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t *
+   // already be configured
+   if ( ep == &epx )
+   {
++    epx_pause_int_eps();
+     hw_endpoint_xfer_start(ep, buffer, buflen);
+ 
+     // That has set up buffer control, endpoint control etc
+@@ -607,6 +638,7 @@ bool hcd_setup_send(uint8_t rhport, uint8_t dev_addr, uint8_t const setup_packet
+ 
+   ep->remaining_len = 8;
+   ep->active = true;
++  epx_pause_int_eps();
+ 
+   // Set device address
+   usb_hw->dev_addr_ctrl = dev_addr;
