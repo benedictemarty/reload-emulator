@@ -2,7 +2,7 @@
 //
 // Headless BBC Micro runner for automated tests: no window, no audio.
 //
-//   bbc_headless [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-0 disc.ssd] [-b]
+//   bbc_headless [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-0 disc.ssd] [-b] [-1]
 //
 //   -f N      run N frames of 20 ms (default 100)
 //   -t TEXT   type TEXT after -w frames (default 50; \n = RETURN), one key per 2 frames;
@@ -83,6 +83,19 @@
 #include "systems/bbc_keys.h"
 
 static bbc_t bbc;
+
+// -1: every cycle through bbc_tick() instead of bbc_exec()/bbc_tick4() (the two
+// paths must give identical results: tests/test_bbc_pc.py compares them)
+static bool single_tick;
+
+static void run_frame(void) {
+    if (single_tick) {
+        uint32_t n = clk_us_to_ticks(BBC_FREQUENCY, 20000);
+        for (uint32_t i = 0; i < n; i++) bbc_tick(&bbc);
+    } else {
+        bbc_exec(&bbc, 20000);
+    }
+}
 
 /*-- MOS call tracing (US-01: which MOS services a program uses) ------------*/
 static bool mos_summary;
@@ -294,6 +307,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-0") && i + 1 < argc) disc = argv[++i];
         else if (!strcmp(argv[i], "-W") && i + 1 < argc) disc_out = argv[++i];
         else if (!strcmp(argv[i], "-b")) boot = true;
+        else if (!strcmp(argv[i], "-1")) single_tick = true;
         else if (!strcmp(argv[i], "-a") && i + 1 < argc) wav_path = argv[++i];
         else if (!strcmp(argv[i], "-M")) mos_summary = true;
         else if (!strcmp(argv[i], "-H")) hw_summary = true;
@@ -302,7 +316,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") && i + 1 < argc) hold_frames = atoi(argv[++i]);
         else {
-            fprintf(stderr, "usage: %s [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-d] [-0 disc.ssd] [-b]\n", argv[0]);
+            fprintf(stderr, "usage: %s [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-d] [-0 disc.ssd] [-b] [-1]\n", argv[0]);
             return 2;
         }
     }
@@ -416,7 +430,7 @@ int main(int argc, char** argv) {
                     if (pending_shift) {
                         // SHIFT goes down one frame before the key, as on a real keyboard
                         bbc_key_down(&bbc, BBC_KEY_SHIFT);
-                        bbc_exec(&bbc, 20000);
+                        run_frame();
                     }
                     bbc_key_down(&bbc, (uint8_t)key);
                     pending_key = key;
@@ -425,7 +439,7 @@ int main(int argc, char** argv) {
                 tp = NULL;
             }
         }
-        bbc_exec(&bbc, 20000);
+        run_frame();
     }
 
     if (disc_out && disc_size) {
