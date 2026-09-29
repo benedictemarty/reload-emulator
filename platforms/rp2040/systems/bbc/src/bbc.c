@@ -126,6 +126,90 @@ static inline __attribute__((always_inline)) void bus_set_data(uint8_t data) {
     sio_hw->gpio_set = 1u << _OE3_PIN;
 }
 
+#ifdef BBC_BUS_PIO
+// Option (-DBBC_BUS_PIO): measured 158-162 M0+ cycles per emulated cycle, as
+// the bit-banged bus (161): the core's own work is the limit, not the bus.
+// Bus cycles sequenced by PIO1 (bus6502.pio): the core only exchanges FIFO
+// words, the transceiver delays overlap with the emulation work. Exactly one
+// command per 65C02 cycle: an access nobody answered is closed at the next one.
+#include "hardware/pio.h"
+#include "bus6502.pio.h"
+#define BUS_PIO   pio1
+#define BUS_SM    0
+static bool bus_open;         // Address taken, command not sent yet
+static bool bus_rw_cycle;     // 65C02 read cycle
+static uint8_t bus_wdata;     // Data of the last write cycle
+
+static inline __attribute__((always_inline)) uint32_t bus_rx(void) {
+    while (BUS_PIO->fstat & (1u << (PIO_FSTAT_RXEMPTY_LSB + BUS_SM))) {
+    }
+    return BUS_PIO->rxf[BUS_SM];
+}
+
+static inline __attribute__((always_inline)) void bus_close(void) {
+    if (bus_open) {
+        bus_open = false;
+        if (bus_rw_cycle) {
+            BUS_PIO->txf[BUS_SM] = 0x1FF;   // Open bus
+        } else {
+            BUS_PIO->txf[BUS_SM] = 0;
+            bus_wdata = (uint8_t)bus_rx();
+        }
+    }
+}
+
+static inline __attribute__((always_inline)) void bus_tick_pio(wdc6502cpu_t *c) {
+    bus_close();
+    uint32_t v = bus_rx();
+    c->addr = (uint16_t)(((v >> 12) & 0xFF) | ((v & 0xFF) << 8));
+    c->rw = (v >> _RW_PIN) & 1;
+    bus_rw_cycle = c->rw;
+    bus_open = true;
+}
+
+static inline __attribute__((always_inline)) uint8_t bus_get_data_pio(void) {
+    if (bus_open) {
+        bus_open = false;
+        BUS_PIO->txf[BUS_SM] = 0;
+        bus_wdata = (uint8_t)bus_rx();
+    }
+    return bus_wdata;
+}
+
+static inline __attribute__((always_inline)) void bus_set_data_pio(uint8_t data) {
+    if (bus_open) {
+        bus_open = false;
+        BUS_PIO->txf[BUS_SM] = 0x100u | data;
+    }
+}
+
+// Hand GPIO 0-10 and PHI2 over to the state machine (after wdc65C02cpu_init)
+static void bus_pio_start(void) {
+    uint offset = pio_add_program(BUS_PIO, &bus6502_program);
+    pio_sm_config cfg = bus6502_program_get_default_config(offset);
+    sm_config_set_in_pins(&cfg, 0);
+    sm_config_set_out_pins(&cfg, 0, 8);
+    sm_config_set_set_pins(&cfg, _CLOCK_PIN, 1);
+    sm_config_set_sideset_pins(&cfg, _OE1_PIN);
+    sm_config_set_in_shift(&cfg, false, false, 32);   // Shift left, no autopush
+    sm_config_set_out_shift(&cfg, true, false, 32);   // Shift right, no autopull
+    sm_config_set_clkdiv(&cfg, 1.0f);
+    pio_sm_set_pins_with_mask(BUS_PIO, BUS_SM, (1u << _OE1_PIN) | (1u << _OE2_PIN) | (1u << _OE3_PIN) | (1u << _CLOCK_PIN),
+                              (1u << _OE1_PIN) | (1u << _OE2_PIN) | (1u << _OE3_PIN) | (1u << _CLOCK_PIN));
+    pio_sm_set_pindirs_with_mask(BUS_PIO, BUS_SM, (1u << _OE1_PIN) | (1u << _OE2_PIN) | (1u << _OE3_PIN) | (1u << _CLOCK_PIN),
+                                 0xFFu | (1u << _OE1_PIN) | (1u << _OE2_PIN) | (1u << _OE3_PIN) | (1u << _CLOCK_PIN));
+    for (uint pin = 0; pin <= _OE3_PIN; pin++) pio_gpio_init(BUS_PIO, pin);
+    pio_gpio_init(BUS_PIO, _CLOCK_PIN);
+    BUS_PIO->input_sync_bypass |= 0xFFFu;   // GPIO 0-11 sampled directly (stable after the delays)
+    pio_sm_init(BUS_PIO, BUS_SM, offset + bus6502_offset_entry, &cfg);
+    pio_sm_set_enabled(BUS_PIO, BUS_SM, true);
+}
+
+#define bus_tick     bus_tick_pio
+#define bus_get_data bus_get_data_pio
+#define bus_set_data bus_set_data_pio
+#endif
+
 #undef MOS6502CPU_TICK
 #undef MOS6502CPU_GET_ADDR
 #undef MOS6502CPU_GET_DATA
@@ -706,11 +790,17 @@ int main() {
             else state.bbc.ram[c.addr & 0x7FFF] = wdc65C02cpu_get_data();
         }
         diag_bench[1] = time_us_32() - t;
+#ifndef BBC_BUS_PIO
         t = time_us_32();
         for (int i = 0; i < 40000; i++) bbc_tick(&state.bbc);
         diag_bench[2] = time_us_32() - t;
+#endif
         bbc_reset(&state.bbc);
     }
+#endif
+
+#ifdef BBC_BUS_PIO
+    bus_pio_start();
 #endif
 
     // One frame = 20 ms = 40 000 cycles at 2 MHz

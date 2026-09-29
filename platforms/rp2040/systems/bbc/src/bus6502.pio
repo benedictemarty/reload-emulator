@@ -1,0 +1,50 @@
+; bus6502.pio
+;
+; Bus cycle of the real 65C02 on the Olimex Neo6502, sequenced by a PIO state
+; machine so that the transceiver delays overlap with the emulation work of
+; the CPU (same order and delays as the bit-banged wdc65C02cpu.h):
+;
+;   GPIO 0-7   shared lines: A0-A7 (OE1), A8-A15 (OE2) or D0-D7 (OE3)
+;   GPIO 8-10  OE1, OE2, OE3 of the 74HC245 transceivers (active low, side-set)
+;   GPIO 11    R/W (input)
+;   GPIO 21    PHI2 (set)
+;
+; RX FIFO: per cycle one word (A0-A7 << 12) | GPIO 0-11 of the second read
+; (A8-A15 in bits 0-7, R/W in bit 11); for a write cycle, then the data byte.
+; TX FIFO: per cycle one command: bit 8 = drive the data lines with bits 0-7
+; (65C02 read cycle), 0 = sample the data lines (65C02 write cycle).
+; PHI2 stays high until the command comes: the CPU stretches a cycle by
+; answering later (the W65C02S is fully static).
+
+.program bus6502
+.side_set 3                                 ; bit 0 OE1, bit 1 OE2, bit 2 OE3 (1 = off)
+
+public entry:
+.wrap_target
+    set pins, 0             side 0b111      ; PHI2 low
+    mov osr, null           side 0b111
+    out pindirs, 8          side 0b111      ; shared lines as inputs first
+    nop                     side 0b110 [3]  ; OE1 low: A0-A7
+    nop                     side 0b110 [2]
+    in pins, 8              side 0b110      ; sampled 7 cycles after OE1 (input synchroniser bypassed)
+    nop                     side 0b101 [3]  ; OE1 high, OE2 low: A8-A15
+    nop                     side 0b101 [2]
+    in pins, 12             side 0b101      ; A8-A15, OE lines, R/W
+    push block              side 0b111
+    set pins, 1             side 0b111      ; PHI2 high
+    pull block              side 0b111      ; command from the CPU
+    out x, 8                side 0b111
+    out y, 1                side 0b111
+    jmp !y, sample          side 0b111
+    mov osr, ~null          side 0b111
+    out pindirs, 8          side 0b111      ; drive the shared lines
+    mov pins, x             side 0b111
+    nop                     side 0b011 [3]  ; OE3 low: data onto the 65C02 bus
+    nop                     side 0b011 [2]  ; (the 74HC245 needs ~20 ns to drive)
+    jmp entry               side 0b111      ; OE3 high, PHI2 falls next (bus capacitance holds the data)
+sample:
+    nop                     side 0b011 [3]  ; OE3 low: D0-D7 from the 65C02
+    nop                     side 0b011 [2]
+    in pins, 8              side 0b011      ; sampled 7 cycles after OE3
+    push block              side 0b111
+.wrap

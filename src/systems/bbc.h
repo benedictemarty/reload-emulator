@@ -319,6 +319,10 @@ void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* lut, uin
 #ifndef BBC_HOT
 #define BBC_HOT
 #endif
+// Store the data of a 65C02 write cycle (a bus may complete it later)
+#ifndef MOS6502CPU_WRITE_TO
+#define MOS6502CPU_WRITE_TO(c, ptr) (*(ptr) = MOS6502CPU_GET_DATA(c))
+#endif
 // Optional profiling hooks around the per-cycle blocks (board diagnostics)
 #ifndef BBC_PROF_ENTER
 #define BBC_PROF_ENTER(i)
@@ -921,7 +925,7 @@ static inline __attribute__((always_inline)) void _bbc_tick_cpu(bbc_t* sys) {
             if (sys->cpu.rw) {
                 MOS6502CPU_SET_DATA(&sys->cpu, mem_rd(&sys->mem, a));
             } else {
-                mem_wr(&sys->mem, a, MOS6502CPU_GET_DATA(&sys->cpu));
+                MOS6502CPU_WRITE_TO(&sys->cpu, &sys->mem.page_table[a >> MEM_PAGE_SHIFT].write_ptr[a & MEM_PAGE_MASK]);
             }
         } else {
             if (_bbc_is_1mhz(a)) {

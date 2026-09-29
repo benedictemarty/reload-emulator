@@ -39,7 +39,8 @@ target_compile_definitions(bbc_diag PRIVATE
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 	BBC_DIAG=1
 )
-target_link_libraries(bbc_diag pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
+target_link_libraries(bbc_diag pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs hardware_pio)
+pico_generate_pio_header(bbc_diag ${CMAKE_CURRENT_SOURCE_DIR}/src/bus6502.pio)
 pico_add_extra_outputs(bbc_diag)
 pico_enable_stdio_usb(bbc_diag 0)
 pico_enable_stdio_uart(bbc_diag 1)
