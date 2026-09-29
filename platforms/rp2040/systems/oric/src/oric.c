@@ -213,7 +213,7 @@ void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_stat
 // $BB80, 40 x 28).
 #include <stddef.h>
 volatile uint16_t diag_keyq[256];
-volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames;
+volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames, diag_exec_us, diag_exec_max;
 volatile uint32_t diag_layout[2] = {offsetof(state_t, oric) + offsetof(oric_t, ram), sizeof(oric_t)};
 
 static void diag_key_service(void) {
@@ -334,6 +334,7 @@ int main() {
 
     app_init();
 
+    uint32_t deadline = time_us_32();
     while (1) {
         uint32_t start_time_in_micros = time_us_32();
 
@@ -351,11 +352,22 @@ int main() {
 
         uint32_t end_time_in_micros = time_us_32();
         uint32_t execution_time = end_time_in_micros - start_time_in_micros;
+        (void)execution_time;
+#ifdef ORIC_DIAG
+        diag_exec_us += execution_time;
+        if (execution_time > diag_exec_max) diag_exec_max = execution_time;
+#endif
         // printf("%d us\n", execution_time);
 
-        int sleep_time = 19968 - execution_time;
-        if (sleep_time > 0) {
-            sleep_us(sleep_time);
+        // Absolute deadlines: a frame that ran late is caught up by the next
+        // ones (the average speed stays exact); more than 5 frames behind, the
+        // schedule restarts from now instead of racing
+        deadline += 19968;
+        int32_t ahead = (int32_t)(deadline - time_us_32());
+        if (ahead > 0) {
+            sleep_us((uint64_t)ahead);
+        } else if (ahead < -5 * (int32_t)19968) {
+            deadline = time_us_32();
         }
     }
 
