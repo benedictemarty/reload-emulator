@@ -95,6 +95,7 @@
 
 static inline __attribute__((always_inline)) void bus_tick(wdc6502cpu_t *c) {
     sio_hw->gpio_clr = 1u << _CLOCK_PIN;
+    sio_hw->gpio_set = 1u << _OE3_PIN;   // End of the data of a read cycle, after PHI2 fell (see bus_set_data)
     sio_hw->gpio_oe_clr = _GPIO_MASK;
     sio_hw->gpio_clr = 1u << _OE1_PIN;
     BUS_NOP6();
@@ -118,11 +119,15 @@ static inline __attribute__((always_inline)) uint8_t bus_get_data(void) {
     return data;
 }
 
+// Read cycle: the data stays driven (OE3 low) until PHI2 falls at the next
+// bus_tick, where the 65C02 latches it. A brief OE3 pulse left the byte on the
+// bus capacitance only, and it leaked away when the emulation paused with PHI2
+// high (end of a frame: milliseconds). OE3 goes high right after PHI2 falls,
+// before the 65C02 changes R/W for the next cycle (tADS ~30 ns).
 static inline __attribute__((always_inline)) void bus_set_data(uint8_t data) {
     sio_hw->gpio_oe_set = _GPIO_MASK;
     sio_hw->gpio_togl = (sio_hw->gpio_out ^ data) & _GPIO_MASK;
     sio_hw->gpio_clr = 1u << _OE3_PIN;
-    sio_hw->gpio_set = 1u << _OE3_PIN;
 }
 
 #ifdef BBC_BUS_PIO

@@ -391,7 +391,8 @@ void oric_tick(oric_t* sys) {
         uint8_t line = pb & 7;
         if (line >= 0 && line <= 7) {
             uint8_t line_mask = 1 << line;
-            if (kbd_scan_lines(&sys->kbd) == line_mask) {
+            // Any key of this line (another line may have a key down too, e.g. SHIFT)
+            if (kbd_scan_lines(&sys->kbd) & line_mask) {
                 mos6522via_set_pb(&sys->via, pb | (1 << 3));
             } else {
                 mos6522via_set_pb(&sys->via, pb & ~(1 << 3));
