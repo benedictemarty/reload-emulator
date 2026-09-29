@@ -98,6 +98,7 @@ typedef struct { uint8_t hcc, reg, value; } bbc_ula_event_t;
 #define BBC_LINE_TELETEXT      0x02
 #define BBC_LINE_NOT_FIRST_ROW 0x04
 #define BBC_LINE_LYNNE         0x08   // Master: screen read from LYNNE (ACCCON D)
+#define BBC_LINE_TT_BOTTOM     0x10   // Teletext row after a double-height row
 typedef struct {
     uint16_t ma;               // CRTC address at the start of the character row
     uint8_t chars;             // Displayed characters (0 = blank line)
@@ -109,6 +110,7 @@ typedef struct {
     uint8_t cursor_col;        // Cursor character on this line (0xFF: none)
     uint8_t cursor_w;          // Cursor width in characters
     uint8_t nev;               // ULA writes during the line
+    uint8_t data[80];          // Screen bytes of the line, read when the line was scanned
     uint8_t pal[16];           // ULA palette at the start of the line
     bbc_ula_event_t ev[BBC_LINE_EVENTS];
 } bbc_line_t;
@@ -190,6 +192,7 @@ typedef struct {
     bool kbd_ca2;              // Last CA2 level driven by the keyboard
     bbc_model_t model;
     uint8_t hcc;               // Horizontal character counter
+    bool tt_bottom_row;        // Current teletext row follows a double-height row
     bool crtc_lazy;            // Middle of a line: hcc = crtc_base_hcc + characters since crtc_base_tick
     bool crtc_fast;            // Character clock of the lazy span (2 MHz)
     uint8_t crtc_base_hcc;
@@ -1309,26 +1312,15 @@ static inline void _bbc_tt_put(uint8_t* planes[3], int c, uint16_t bits, uint8_t
 }
 
 static BBC_HOT void _bbc_render_teletext_line(const bbc_t* sys, const bbc_line_t* ln, uint8_t* planes[3], int raster) {
+    (void)sys;
     int chars = ln->chars;
-    uint16_t ma = ln->ma;
-    bool lynne = ln->flags & BBC_LINE_LYNNE;
     _bbc_tt_state_t st = {.fg = 7, .bg = 0};
     bool flash_off = (ln->field & 63) >= 48;
     // A row following a row that used double height shows the bottom halves
-    bool bottom_row = false;
-    if (ln->flags & BBC_LINE_NOT_FIRST_ROW) {
-        uint16_t prev = (uint16_t)(ma - chars);
-        for (int c = 0; c < chars && c < 40; c++) {
-            if ((_bbc_vram(sys, lynne, (uint16_t)(((prev + c) & 0x3FF) | 0x7C00)) & 0x7F) == 0x0D) {
-                bottom_row = true;
-                break;
-            }
-        }
-    }
+    bool bottom_row = ln->flags & BBC_LINE_TT_BOTTOM;
     int c = 0;
     for (; c < chars && c < 40; c++) {
-        uint16_t a = (uint16_t)((ma + c) & 0x3FF) | 0x7C00;
-        uint8_t ch = _bbc_vram(sys, lynne, a) & 0x7F;
+        uint8_t ch = ln->data[c] & 0x7F;
         uint8_t fg = st.fg, bg = st.bg;
         uint16_t bits = 0;
         bool draw_sixels = false;
@@ -1517,7 +1509,6 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
     } else {
         // Bitmap modes: ULA writes made during the line are replayed at the
         // character position where they happened (US-48)
-        bool lynne = ln->flags & BBC_LINE_LYNNE;
         uint8_t ctrl = ln->ctrl;
         uint8_t pal[16];
         _bbc_copy(pal, ln->pal, 16);
@@ -1534,16 +1525,7 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
                 ls = _bbc_lut_use(lut, ctrl, pal);
                 out_px = (ctrl & 0x10) ? 8 : 16;
             }
-            uint16_t ma = (uint16_t)((ln->ma + c) & 0x3FFF);
-            uint16_t addr;
-            if (ma & 0x1000) {
-                addr = (uint16_t)((ma - _bbc_screen_wrap[ln->wrap]) & ~0x1000u);
-            } else {
-                addr = ma;
-            }
-            addr = (uint16_t)((addr << 3) | (ln->rc & 7));
-            uint8_t byte = (ln->rc < 8 && addr < 0x8000) ? _bbc_vram(sys, lynne, addr) : 0;
-            const uint16_t* m = ls->px[byte];
+            const uint16_t* m = ls->px[ln->data[c]];
             int i = x >> 3;
             for (int ch = 0; ch < 3; ch++) {
                 planes[ch][i] = (uint8_t)m[ch];
@@ -1606,6 +1588,39 @@ static BBC_HOT void _bbc_capture_line(bbc_t* sys, bbc_line_t* ln) {
         _bbc_copy(ln->pal, sys->ula_pal, 16);
     }
     ln->cursor_col = (displayed && ln->chars) ? _bbc_cursor_col(sys) : 0xFF;
+    // Screen bytes as the ULA reads them now (the line is drawn later on the
+    // RP2040: a double-buffered game may already be redrawing this memory)
+    if (displayed && ln->chars) {
+        bool lynne = ln->flags & BBC_LINE_LYNNE;
+        int n = ln->chars < 80 ? ln->chars : 80;
+        uint16_t ma = ln->ma;
+        if (ln->flags & BBC_LINE_TELETEXT) {
+            if (n > 40) n = 40;
+            for (int c = 0; c < n; c++) ln->data[c] = _bbc_vram(sys, lynne, (uint16_t)(((ma + c) & 0x3FF) | 0x7C00));
+            if (sys->rc == 0) {
+                // First raster of the row: does the previous row use double height?
+                sys->tt_bottom_row = false;
+                if (sys->vcc > 0) {
+                    uint16_t prev = (uint16_t)(ma - ln->chars);
+                    for (int c = 0; c < n; c++) {
+                        if ((_bbc_vram(sys, lynne, (uint16_t)(((prev + c) & 0x3FF) | 0x7C00)) & 0x7F) == 0x0D) {
+                            sys->tt_bottom_row = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (sys->tt_bottom_row) ln->flags |= BBC_LINE_TT_BOTTOM;
+        } else {
+            uint8_t rc = ln->rc;
+            for (int c = 0; c < n; c++) {
+                uint16_t m = (uint16_t)((ma + c) & 0x3FFF);
+                uint16_t addr = (m & 0x1000) ? (uint16_t)((m - _bbc_screen_wrap[ln->wrap]) & ~0x1000u) : m;
+                addr = (uint16_t)((addr << 3) | (rc & 7));
+                ln->data[c] = (rc < 8 && addr < 0x8000) ? _bbc_vram(sys, lynne, addr) : 0;
+            }
+        }
+    }
     ln->cursor_w = ((sys->ula_ctrl & 0xA0) == 0xA0 && (sys->ula_ctrl & 0x10)) ? 2 : 1;   // Large cursor (MODE 0-2)
 }
 
