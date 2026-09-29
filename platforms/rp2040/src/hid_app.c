@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "tusb.h"
 #include "class/hid/hid.h"
 

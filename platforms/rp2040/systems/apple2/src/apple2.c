@@ -378,11 +378,13 @@ void __not_in_flash_func(core1_main()) {
 }
 
 extern bool msc_inquiry_complete;
+extern void msc_poll(void);
 
 void wait_for_msc_ready(void) {
     while (!msc_inquiry_complete) {
         sleep_us(16666);
         tuh_task();
+        msc_poll();   // Mounts the volume outside tuh_task
     }
 }
 

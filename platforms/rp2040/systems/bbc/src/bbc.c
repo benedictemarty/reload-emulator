@@ -370,6 +370,7 @@ static bool usb_fil_open = false;
 static int current_image = -1;               // 0.. usb files, then flash images
 
 extern bool msc_inquiry_complete;
+extern void msc_poll(void);
 
 static bool has_ext(const char* name, const char* ext) {
     size_t n = strlen(name), e = strlen(ext);
@@ -1053,6 +1054,7 @@ int main() {
 
         emu_frames++;
         tuh_task();
+        msc_poll();   // Mounts a USB drive outside tuh_task
         release_pending_keys();
         if (boot_shift_release && emu_frames >= boot_shift_release) {
             bbc_key_up(&state.bbc, BBC_KEY_Shift);

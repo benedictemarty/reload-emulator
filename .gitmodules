@@ -16,4 +16,4 @@
 	url = https://github.com/vsladkov/PicoDVI.git
 [submodule "platforms/rp2040/lib/tinyusb"]
 	path = platforms/rp2040/lib/tinyusb
-	url = https://github.com/vsladkov/tinyusb.git
+	url = https://github.com/hathach/tinyusb.git

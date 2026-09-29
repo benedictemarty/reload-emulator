@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <inttypes.h>
 #include "tusb.h"
 #include "pico/time.h"
@@ -10,6 +11,10 @@ static scsi_inquiry_resp_t msc_inquiry_resp;
 
 bool msc_inquiry_complete = false;
 
+// The volume is mounted from the main loop (msc_poll), not inside this TinyUSB
+// callback: f_mount reads sectors, which runs tuh_task again from within it
+static volatile uint8_t msc_pending_mount;   // dev_addr + 1, 0 = none
+
 bool inquiry_complete_cb(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_data) {
     if (cb_data->csw->status != 0) {
         printf("MSC SCSI inquiry failed\r\n");
@@ -18,17 +23,26 @@ bool inquiry_complete_cb(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_dat
 
     uint32_t block_count = tuh_msc_get_block_count(dev_addr, cb_data->cbw->lun);
     uint32_t block_size = tuh_msc_get_block_size(dev_addr, cb_data->cbw->lun);
-    uint32_t size = block_count / ((1024 * 1024) / block_size);
+    uint32_t size = block_size ? block_count / ((1024 * 1024) / block_size) : 0;
 
-    printf("MSC %luMB %.8s %.16s rev %.4s\r\n", size, msc_inquiry_resp.vendor_id, msc_inquiry_resp.product_id,
+    printf("MSC %luMB %.8s %.16s rev %.4s\r\n", (unsigned long)size, msc_inquiry_resp.vendor_id, msc_inquiry_resp.product_id,
            msc_inquiry_resp.product_rev);
+    msc_pending_mount = (uint8_t)(dev_addr + 1);
+    return true;
+}
+
+// Call from the main loop (outside tuh_task): mounts a volume that answered INQUIRY
+void msc_poll(void) {
+    if (!msc_pending_mount) return;
+    uint8_t dev_addr = (uint8_t)(msc_pending_mount - 1);
+    msc_pending_mount = 0;
 
     char drive_path[3] = "0:";
     drive_path[0] += dev_addr;
     FRESULT result = f_mount(&msc_fatfs_volumes[dev_addr], drive_path, 1);
     if (result != FR_OK) {
         printf("MSC filesystem mount failed (%d)\r\n", result);
-        return false;
+        return;
     }
 
     char s[2];
@@ -38,8 +52,6 @@ bool inquiry_complete_cb(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_dat
     }
 
     msc_inquiry_complete = true;
-
-    return true;
 }
 
 void tuh_msc_mount_cb(uint8_t dev_addr) {
