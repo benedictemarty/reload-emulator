@@ -599,7 +599,7 @@ static bool key_release_pending[128];
 
 #ifdef BBC_DIAG
 // Remote typing for bench tests over SWD: the host writes BBC key codes into
-// diag_keyq (bit 7 = with SHIFT) and advances diag_keyq_tail; each key is held
+// diag_keyq (bit 7 = with SHIFT, 0x7F = BREAK) and advances diag_keyq_tail; each key is held
 // then released for DIAG_KEY_FRAMES emulated frames
 #define DIAG_KEY_FRAMES 4
 volatile uint8_t diag_keyq[256];
@@ -615,16 +615,19 @@ static void diag_key_service(void) {
         timer--;
         return;
     }
+    // Code 0x7F (no such matrix position) = BREAK
+    uint8_t k = ((key & 0x7F) == 0x7F) ? BBC_KEY_Break : (key & 0x7F);
     if (phase == 1) {
-        bbc_key_up(&state.bbc, key & 0x7F);
+        bbc_key_up(&state.bbc, k);
         if (key & 0x80) bbc_key_up(&state.bbc, BBC_KEY_Shift);
         phase = 2;
         timer = DIAG_KEY_FRAMES;
     } else if (diag_keyq_head != diag_keyq_tail) {
         key = diag_keyq[diag_keyq_head & 255];
         diag_keyq_head++;
+        k = ((key & 0x7F) == 0x7F) ? BBC_KEY_Break : (key & 0x7F);
         if (key & 0x80) bbc_key_down(&state.bbc, BBC_KEY_Shift);
-        bbc_key_down(&state.bbc, key & 0x7F);
+        bbc_key_down(&state.bbc, k);
         phase = 1;
         timer = DIAG_KEY_FRAMES;
     } else {
