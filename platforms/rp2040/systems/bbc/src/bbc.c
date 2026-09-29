@@ -664,7 +664,17 @@ static void diag_key_service(void) {
     uint8_t k = ((key & 0x7F) == 0x7F) ? BBC_KEY_Break : (key & 0x7F);
     if (phase == 1) {
         bbc_key_up(&state.bbc, k);
+        if (key == 0xFF) {
+            // SHIFT+BREAK: SHIFT stays down while the MOS restarts (auto-boot)
+            phase = 3;
+            timer = 50;
+            return;
+        }
         if (key & 0x80) bbc_key_up(&state.bbc, BBC_KEY_Shift);
+        phase = 2;
+        timer = DIAG_KEY_FRAMES;
+    } else if (phase == 3) {
+        bbc_key_up(&state.bbc, BBC_KEY_Shift);
         phase = 2;
         timer = DIAG_KEY_FRAMES;
     } else if (diag_keyq_head != diag_keyq_tail) {
