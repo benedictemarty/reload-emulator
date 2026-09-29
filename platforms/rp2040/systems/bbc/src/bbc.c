@@ -9,7 +9,7 @@
 // flash (src/images/bbc_images.h, read-only);
 // F11 = next image (USB files first, then flash images).
 // Core 1: DVI 960x544 (or 800x480) @ 60 Hz, BBC 640x256 centred, lines
-//         doubled by PicoDVI: 800x480 at 372 MHz (default, stretched blanking)
+//         doubled by PicoDVI: 800x480 at 345 MHz (default, stretched blanking)
 //         or 295.2 MHz (-DBBC_VIDEO_480) crops 8 lines top and bottom;
 //         960x544 at 372 MHz (-DBBC_VIDEO_544) shows the 256 lines.
 //         Each line is split into 3 bit planes and encoded by the 1 bpp TMDS
@@ -501,10 +501,11 @@ static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_372)
 #define BBC_DISPLAY_TOP 8
 #else
 // Default: the 800x480 mode of the Neo6502 builds (same line and frame rates,
-// same 800 active pixels and 480 lines) at 330 MHz instead of 295.2, the
-// horizontal blanking stretched to 1110 pixels per line: 165 cycles per 2 MHz
-// cycle (161 needed) with a TMDS bit rate only 12 % higher. DVDD 1.25V.
-static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_330) = {   // In RAM, as PicoDVI's timings
+// same 800 active pixels and 480 lines) at 345 MHz instead of 295.2, the
+// horizontal blanking stretched to 1160 pixels per line: 172 cycles per 2 MHz
+// cycle (~165 needed), TMDS bit rate 17 % higher (bmarty's screen accepts 330
+// and 345 MHz, not 372). DVDD 1.25V.
+static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_345) = {   // In RAM, as PicoDVI's timings
     .h_sync_polarity = false,
     .h_front_porch = 164,
     .h_sync_width = 84,
@@ -520,7 +521,7 @@ static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_330)
 #define FRAME_WIDTH  800
 #define FRAME_HEIGHT 480
 #define VREG_VSEL    VREG_VOLTAGE_1_25
-#define DVI_TIMING   dvi_timing_800x480p_60hz_330
+#define DVI_TIMING   dvi_timing_800x480p_60hz_345
 #define BBC_DISPLAY_TOP 8
 #endif
 // First BBC line shown (lines BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP + FRAME_HEIGHT / 2 - 1,
