@@ -577,7 +577,7 @@ static void _oric_init_key_map(oric_t* sys) {
         "JTRF  QD"   // row 1
         "M6B4 Z2C"   // row 2
         "K9;-  \\'"  // row 3
-        " <>     "   // row 4
+        " ,.     "   // row 4 (unshifted , and .)
         "UIOP  ]["   // row 5
         "YHGE ASW"   // row 6
         "8L0/   ="   // row 7
@@ -587,7 +587,7 @@ static void _oric_init_key_map(oric_t* sys) {
         "jtrf  qd"
         "m^b$ z@c"
         "k(:_  |\""
-        " ,.     "
+        " <>     "
         "uiop  }{"
         "yhge asw"
         "*l)?   +";

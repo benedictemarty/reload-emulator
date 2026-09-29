@@ -162,6 +162,7 @@ void wdc65C02cpu_nmi() {
 
 WDC65C02_HOT void wdc65C02cpu_tick(wdc6502cpu_t* c) {
     gpio_put(_CLOCK_PIN, 0);
+    gpio_put(_OE3_PIN, 1);  // End of the data of a read cycle, after PHI2 fell (see wdc65C02cpu_set_data)
 
     c->addr = wdc65C02cpu_get_addr();
     c->rw = gpio_get(_RW_PIN);
@@ -237,12 +238,11 @@ WDC65C02_HOT void wdc65C02cpu_set_data(uint8_t data) {
     gpio_set_dir_masked(_GPIO_MASK, _GPIO_MASK);
 
     gpio_put_masked(_GPIO_MASK, data << _GPIO_SHIFT_BITS);
+    // The data stays driven (OE3 low) until PHI2 falls at the next tick, where
+    // the 65C02 latches it: a brief OE3 pulse left the byte on the bus
+    // capacitance only, and it leaked away while the emulation paused with
+    // PHI2 high (end of a frame). OE3 goes high right after PHI2 falls.
     gpio_put(_OE3_PIN, 0);
-#ifndef OLIMEX_NEO6502
-    __asm volatile("nop\n");
-    __asm volatile("nop\n");
-#endif
-    gpio_put(_OE3_PIN, 1);
 
     // printf("set data: %02x\n", data);
 }
