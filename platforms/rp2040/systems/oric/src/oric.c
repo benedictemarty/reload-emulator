@@ -205,6 +205,38 @@ void kbd_raw_key_up(int code) {
 
 void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_state) {}
 
+#ifdef ORIC_DIAG
+// Bench tests over SWD (-DORIC_DIAG): the host writes key codes as a PC
+// keyboard gives them (lower case = unshifted, '*' = SHIFT+8, 0x0D = RETURN)
+// into diag_keyq and advances diag_keyq_tail; each key is held then released
+// for 4 frames. diag_layout: offset of the Oric RAM in `state` (text screen at
+// $BB80, 40 x 28).
+#include <stddef.h>
+volatile uint16_t diag_keyq[256];
+volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames;
+volatile uint32_t diag_layout[2] = {offsetof(state_t, oric) + offsetof(oric_t, ram), sizeof(oric_t)};
+
+static void diag_key_service(void) {
+    static int phase, timer;
+    static int key;
+    (void)diag_layout[0];
+    diag_frames++;
+    if (timer > 0) {
+        timer--;
+    } else if (phase == 1) {
+        kbd_raw_key_up(key);
+        phase = 0;
+        timer = 4;
+    } else if (diag_keyq_head != diag_keyq_tail) {
+        key = diag_keyq[diag_keyq_head & 255];
+        diag_keyq_head++;
+        kbd_raw_key_down(key);
+        phase = 1;
+        timer = 4;
+    }
+}
+#endif
+
 // extern void oric_render_scanline_2x(const uint32_t *pixbuf, uint32_t *scanbuf, size_t n_pix);
 extern void oric_render_scanline_3x(const uint32_t *pixbuf, uint32_t *scanbuf, size_t n_pix);
 extern void copy_tmdsbuf(uint32_t *dest, const uint32_t *src);
@@ -288,7 +320,10 @@ int main() {
 
     dvi0.timing = &DVI_TIMING;
     dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
-    dvi_init(&dvi0, next_striped_spin_lock_num(), next_striped_spin_lock_num());
+    // Dedicated spin locks for the DVI queues: next_striped_spin_lock_num() shares
+    // 16-23 with the other SDK users, and core 1 could then wait for core 0 with
+    // interrupts masked (a late scanline; found by the Neo6502Trinity project)
+    dvi_init(&dvi0, spin_lock_claim_unused(true), spin_lock_claim_unused(true));
 
     tmds_palette_init();
     tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, empty_tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
@@ -310,6 +345,9 @@ int main() {
         oric_screen_update(&state.oric);
         kbd_update(&state.oric.kbd, 19968);
         tuh_task();
+#ifdef ORIC_DIAG
+        diag_key_service();
+#endif
 
         uint32_t end_time_in_micros = time_us_32();
         uint32_t execution_time = end_time_in_micros - start_time_in_micros;
