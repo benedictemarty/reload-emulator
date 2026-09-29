@@ -70,6 +70,8 @@
 #define BBC_HOT      __attribute__((section(".time_critical.bbc")))
 // Core 0 only captures each display line; core 1 draws it (no framebuffer)
 #define BBC_DEFER_RENDER 1
+// At most one byte -> pixels table built every 8 lines (core 1 line budget)
+#define BBC_LUT_THROTTLE 8
 #define CHIPS_HOT    __attribute__((section(".time_critical.bbc")))
 #define WDC65C02_HOT __attribute__((section(".time_critical.bbc")))
 #include <stddef.h>

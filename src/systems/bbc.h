@@ -127,6 +127,7 @@ typedef struct {
 typedef struct {
     bbc_lut_slot_t slot[BBC_LUT_SLOTS];
     uint32_t clock;
+    uint32_t last_build;       // clock of the last table built (BBC_LUT_THROTTLE)
 } bbc_lut_t;
 
 typedef enum {
@@ -1411,6 +1412,20 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
         }
         if (!l->valid || l->used < victim->used) victim = l;
     }
+#if defined(BBC_LUT_THROTTLE) && BBC_LUT_THROTTLE > 0
+    // Real-time drawing: while the palette is being rewritten (MODE change) a
+    // table per line would overrun the line budget; reuse the latest table
+    // (a few lines in transient colours) and build again a few lines later
+    if (lut->clock - lut->last_build < BBC_LUT_THROTTLE) {
+        bbc_lut_slot_t* recent = 0;
+        for (int i = 0; i < BBC_LUT_SLOTS; i++) {
+            bbc_lut_slot_t* c = &lut->slot[i];
+            if (c->valid && (!recent || c->used > recent->used)) recent = c;
+        }
+        if (recent) return recent;
+    }
+    lut->last_build = lut->clock;
+#endif
     bbc_lut_slot_t* l = victim;
     int cpl_sel = (ctrl >> 2) & 3;
     bool fast = ctrl & 0x10;
