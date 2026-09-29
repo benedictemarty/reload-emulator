@@ -18,7 +18,9 @@ target_link_libraries(bbc
 	libdvi
 	tinyusb_host
 	fatfs
+	hardware_pio
 )
+pico_generate_pio_header(bbc ${CMAKE_CURRENT_SOURCE_DIR}/src/bus6502.pio)
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(bbc)
@@ -59,7 +61,8 @@ target_compile_definitions(bbc_master PRIVATE
 	BBC_MASTER=1
 	BBC_ROMS_IN_FLASH=1
 )
-target_link_libraries(bbc_master pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
+target_link_libraries(bbc_master pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs hardware_pio)
+pico_generate_pio_header(bbc_master ${CMAKE_CURRENT_SOURCE_DIR}/src/bus6502.pio)
 pico_add_extra_outputs(bbc_master)
 neo_multiboot_slot(bbc_master "${NEO_SLOT_BBC_MASTER}")
 pico_enable_stdio_usb(bbc_master 0)

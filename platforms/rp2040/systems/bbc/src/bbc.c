@@ -141,9 +141,13 @@ static inline __attribute__((always_inline)) void bus_set_data(uint8_t data) {
     sio_hw->gpio_clr = 1u << _OE3_PIN;
 }
 
+#ifndef BBC_BUS_SIO
+#define BBC_BUS_PIO 1
+#endif
 #ifdef BBC_BUS_PIO
-// Option (-DBBC_BUS_PIO): measured 158-162 M0+ cycles per emulated cycle, as
-// the bit-banged bus (161): the core's own work is the limit, not the bus.
+// Default (-DBBC_BUS_SIO for the bit-banged bus): the transceiver delays run
+// on the PIO while the core works. BASIC at rest: same speed as SIO; Knight
+// Lore (many write cycles): 17.97 ms per 20 ms frame instead of 20.69.
 // Bus cycles sequenced by PIO1 (bus6502.pio): the core only exchanges FIFO
 // words, the transceiver delays overlap with the emulation work. Exactly one
 // command per 65C02 cycle: an access nobody answered is closed at the next one.
@@ -652,7 +656,7 @@ static bool key_release_pending[128];
 
 #ifdef BBC_DIAG
 // Remote typing for bench tests over SWD: the host writes BBC key codes into
-// diag_keyq (bit 7 = with SHIFT, 0x7F = BREAK) and advances diag_keyq_tail; each key is held
+// diag_keyq (bit 7 = with SHIFT, 0x7F = BREAK, 0x7E = F11 next disc) and advances diag_keyq_tail; each key is held
 // then released for DIAG_KEY_FRAMES emulated frames
 #define DIAG_KEY_FRAMES 4
 volatile uint8_t diag_keyq[256];
@@ -688,6 +692,12 @@ static void diag_key_service(void) {
     } else if (diag_keyq_head != diag_keyq_tail) {
         key = diag_keyq[diag_keyq_head & 255];
         diag_keyq_head++;
+        if (key == 0x7E) {
+            // F11: next disc image
+            if (num_images() > 0) insert_image((current_image + 1) % num_images());
+            timer = DIAG_KEY_FRAMES;
+            return;
+        }
         k = ((key & 0x7F) == 0x7F) ? BBC_KEY_Break : (key & 0x7F);
         if (key & 0x80) bbc_key_down(&state.bbc, BBC_KEY_Shift);
         bbc_key_down(&state.bbc, k);
