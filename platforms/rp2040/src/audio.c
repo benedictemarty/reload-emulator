@@ -9,6 +9,7 @@
 #include "pico/critical_section.h"
 
 #include "audio.h"
+#include "devices/hid_media.h"
 
 #define SAMPLES_BUFFER_SIZE    2048
 #define SAMPLES_CHUNK_SIZE     32
@@ -166,4 +167,29 @@ void audio_init(uint8_t audio_pin, uint16_t sample_freq) {
     dma_channel_start(trigger_dma_channel);
 }
 
-void audio_push_sample(const uint8_t sample) { audio_buffer_enqueue(&audio_buffer, sample); }
+/*-- Volume -------------------------------------------------------------------*/
+
+static hid_volume_t volume = {HID_VOLUME_MAX, false};
+static uint16_t audio_gain = 256;   // In 256ths (hid_volume_gain)
+static volatile uint32_t volume_serial;
+
+void __not_in_flash_func(audio_push_sample)(const uint8_t sample) {
+    audio_buffer_enqueue(&audio_buffer, (uint8_t)((sample * audio_gain) >> 8));
+}
+
+void audio_set_volume(uint8_t level, bool muted) {
+    volume.level = level > HID_VOLUME_MAX ? HID_VOLUME_MAX : level;
+    volume.muted = muted;
+    audio_gain = hid_volume_gain(&volume);
+}
+
+uint8_t audio_volume_level(void) { return volume.level; }
+bool audio_volume_muted(void) { return volume.muted; }
+uint32_t audio_volume_serial(void) { return volume_serial; }
+
+// Multimedia keys of the keyboard (hid_app.c)
+void hid_media_key_down(uint8_t keys) {
+    hid_volume_keys(&volume, keys);
+    audio_gain = hid_volume_gain(&volume);
+    if (keys & (HID_MEDIA_VOL_UP | HID_MEDIA_VOL_DOWN | HID_MEDIA_MUTE)) volume_serial++;
+}

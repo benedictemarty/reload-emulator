@@ -1,6 +1,11 @@
+// hid_app.c — USB keyboard and gamepads (TinyUSB host); multimedia keys (Volume +,
+// Volume −, Mute) of the HID interfaces that describe them (devices/hid_media.h,
+// taken from ~/Neo6502TeleStrat), handed to hid_media_key_down(); these
+// interfaces are not taken for gamepads.
 #include <stdio.h>
 #include "tusb.h"
 #include "class/hid/hid.h"
+#include "devices/hid_media.h"
 
 #define GAMEPAD_MAX_DEVICES 2
 
@@ -28,6 +33,35 @@ extern void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t butt
 __attribute__((weak)) void hid_raw_key_down(uint8_t keycode) { (void)keycode; }
 __attribute__((weak)) void hid_raw_key_up(uint8_t keycode) { (void)keycode; }
 __attribute__((weak)) bool hid_raw_keys_enabled(void) { return false; }
+// Multimedia keys just pressed (HID_MEDIA_*); audio.c handles the volume
+__attribute__((weak)) void hid_media_key_down(uint8_t keys) { (void)keys; }
+
+// HID interfaces carrying multimedia keys
+typedef struct {
+    bool used;
+    uint8_t dev_addr, instance;
+    uint8_t prev;  // Keys down in the previous report
+    hid_media_t desc;
+} media_itf_t;
+
+#define MEDIA_ITFS 2  // Multimedia keyboards plugged at the same time
+static media_itf_t media_itfs[MEDIA_ITFS];
+
+static bool find_media_id(const hid_media_t* m, uint8_t id) {
+    for (int i = 0; i < m->num_fields; i++) {
+        if (m->field[i].report_id == id) return true;
+    }
+    return false;
+}
+
+static media_itf_t* find_media(uint8_t dev_addr, uint8_t instance) {
+    for (int i = 0; i < MEDIA_ITFS; i++) {
+        if (media_itfs[i].used && media_itfs[i].dev_addr == dev_addr && media_itfs[i].instance == instance) {
+            return &media_itfs[i];
+        }
+    }
+    return NULL;
+}
 
 static void process_kbd_report_raw(hid_keyboard_report_t const* r1, hid_keyboard_report_t const* r2,
                                    void (*cb)(uint8_t keycode)) {
@@ -729,13 +763,29 @@ static void process_gamepad_report(uint8_t dev_addr, uint8_t instance, uint8_t c
 }
 
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len) {
-    (void)desc_len;
-    (void)desc_report;
-
     uint16_t vid, pid;
     tuh_vid_pid_get(dev_addr, &vid, &pid);
 
     uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+
+    // Multimedia keys: on an interface other than the boot keyboard
+    if (desc_report && itf_protocol != HID_ITF_PROTOCOL_KEYBOARD) {
+        for (int i = 0; i < MEDIA_ITFS; i++) {
+            media_itf_t* m = &media_itfs[i];
+            if (m->used) continue;
+            if (hid_media_parse(&m->desc, desc_report, desc_len)) {
+                m->used = true;
+                m->dev_addr = dev_addr;
+                m->instance = instance;
+                m->prev = 0;
+                printf("Multimedia keys: VID %04X PID %04X, interface %u\n", vid, pid, instance);
+                tuh_hid_receive_report(dev_addr, instance);
+                return;
+            }
+            break;
+        }
+    }
+
     switch (itf_protocol) {
         case HID_ITF_PROTOCOL_KEYBOARD:
             break;
@@ -767,6 +817,19 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 
     uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
 
+    media_itf_t* media = find_media(dev_addr, instance);
+    if (media) {
+        const uint8_t keys = hid_media_keys(&media->desc, report, len);
+        // Report of another ID (mouse, power keys…): state kept
+        const bool ours = !media->desc.ids || (len && find_media_id(&media->desc, report[0]));
+        if (ours) {
+            if (keys & ~media->prev) hid_media_key_down(keys & ~media->prev);
+            media->prev = keys;
+        }
+        tuh_hid_receive_report(dev_addr, instance);
+        return;
+    }
+
     switch (itf_protocol) {
         case HID_ITF_PROTOCOL_KEYBOARD:
             find_pressed_keys((const hid_keyboard_report_t*)report);
@@ -786,6 +849,6 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
-    (void)dev_addr;
-    (void)instance;
+    media_itf_t* media = find_media(dev_addr, instance);
+    if (media) media->used = false;
 }

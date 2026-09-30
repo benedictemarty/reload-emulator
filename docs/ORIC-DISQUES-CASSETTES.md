@@ -49,6 +49,9 @@ même ergonomie) :
   un fichier en lecture seule donne une disquette protégée ;
 - **Cassette** : sélecteur des `.tap` (la même cassette : rembobinée), position et
   moteur affichés ; lue en flux ;
+- **Son** : volume de 0 à 8 (Gauche / Droite ; Entrée coupe ou rétablit le son),
+  environ 3 dB par pas, 8 = échantillons inchangés ; commun à tous les systèmes
+  (`platforms/rp2040/src/audio.c`) ;
 - **Redémarrer**, **Enregistrer la configuration** (`ORIC.CFG`), **Reprendre** (Échap).
 
 Touches : flèches, Entrée, Suppr (éjecter), Échap, Page préc./suiv., Début/Fin,
@@ -56,7 +59,7 @@ une lettre saute au fichier suivant qui commence par elle. F2 à F9 insèrent le
 images intégrées au firmware (F1 à F8 auparavant).
 
 `ORIC.CFG` (racine de la clé, une clé par ligne) : `fdc=aucune|pravetz|microdisc|jasmin`,
-`a=` … `d=` (lecteurs), `tape=` ; appliqué au montage de la clé (l'Oric redémarre
+`a=` … `d=` (lecteurs), `tape=`, `volume=0` … `volume=8` ; appliqué au montage de la clé (l'Oric redémarre
 alors sur la disquette du lecteur A) ; le menu réécrit ces lignes et garde les autres.
 
 ![Sélecteur de disquette](images/oric_menu_disque.png)
@@ -69,6 +72,14 @@ Pendant que le moteur de la cassette tourne, une ligne sous l'image de l'Oric
 (bordure basse) montre le nom de la cassette, une barre et le pourcentage lu,
 comme au Telestrat ; elle disparaît à l'arrêt du moteur ou en fin de bande.
 Validé sur la carte (`AIGLE.TAP`).
+
+### Volume par les touches multimédia
+
+Les touches Volume +, Volume − et Muet d'un clavier USB multimédia règlent le même
+volume que le panneau ; le niveau s'affiche 2 s dans la bordure basse, à la place
+du bandeau de la cassette. Ces touches arrivent sur une interface HID à part, dont
+le descripteur est lu au branchement (`src/devices/hid_media.h`, repris du
+Telestrat : champs tableau et variable). Non essayé sur la carte.
 
 ### Profils
 
@@ -241,7 +252,10 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
 - `tests/oric/test_oric_menu.c` : rendu de la surface (encre, fond, trame, UTF-8,
   grandes lettres), navigation, sélecteurs, refus d'une image déjà dans un autre
   lecteur ou d'une interface sans ROM, défilement, `ORIC.CFG` (lecture, fusion,
-  troncature) ; `oric_menu_test DOSSIER` écrit des aperçus PPM du panneau.
+  troncature, `volume=`), entrée Son et bandeau du volume ; `oric_menu_test DOSSIER`
+  écrit des aperçus PPM du panneau (dont ceux de ce document).
+- `tests/devices/test_hid_media.c` (test `hid_media`) : descripteurs HID des touches
+  multimédia (tableau, variable, identifiants de rapport) et pas du volume.
 - `platforms/pc/systems/oric/src/oric_headless.c` : lanceur sans fenêtre utilisé par
   ces tests (`-c`, `-0..-3`, `-T`, `-V`, `-t`, `-s`, `-i`, `-P`, `-H`, `-p`, `-r`, `-W`).
 

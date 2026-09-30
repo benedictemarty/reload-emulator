@@ -266,15 +266,15 @@ static void test_config(void) {
     const char* old = "# ma configuration\r\nfdc=jasmin\r\na=OLD.DSK\r\nautre=1\r\ntape=OLD.TAP\n";
     const char* drives[4] = {"NEW.DSK", "", NULL, "D.DSK"};
     char out[512];
-    size_t n = oric_config_merge(old, 2, drives, "NEW.TAP", out, sizeof(out));
+    size_t n = oric_config_merge(old, 2, drives, "NEW.TAP", -1, out, sizeof(out));
     CHECK(n == strlen(out));
     CHECK(!strcmp(out, "# ma configuration\nautre=1\nfdc=microdisc\na=NEW.DSK\nd=D.DSK\ntape=NEW.TAP\n"));
     // No old file, nothing inserted
     const char* none[4] = {0};
-    oric_config_merge(NULL, 0, none, "", out, sizeof(out));
+    oric_config_merge(NULL, 0, none, "", -1, out, sizeof(out));
     CHECK(!strcmp(out, "fdc=aucune\n"));
     // Truncated output stays a string
-    n = oric_config_merge(old, 2, drives, "NEW.TAP", out, 16);
+    n = oric_config_merge(old, 2, drives, "NEW.TAP", -1, out, 16);
     CHECK(n == 15 && strlen(out) == 15);
 }
 
@@ -347,7 +347,7 @@ static void test_profiles(const char* dir) {
     const char* old = "profil=Nova 64;rom=NOVA64.ROM\ndemarrage=choix\nfdc=jasmin\n";
     const char* none[4] = {0};
     char out[256];
-    oric_config_merge(old, 2, none, "", out, sizeof(out));
+    oric_config_merge(old, 2, none, "", -1, out, sizeof(out));
     CHECK(!strcmp(out, "profil=Nova 64;rom=NOVA64.ROM\ndemarrage=choix\nfdc=microdisc\n"));
 
     // Menu: "Profil" item, "Démarrer sur…" selector
@@ -409,6 +409,65 @@ static void test_banner(const char* dir) {
     }
 }
 
+// Volume: panel item (Left / Right / Enter), ORIC.CFG, banner
+static void test_volume(const char* dir) {
+    oric_menu_init(&menu);
+    CHECK(menu.volume == HID_VOLUME_MAX && !menu.muted);
+    // Reached with Up from the buttons, Down from the profile
+    menu.cursor = ORIC_ITEM_RESET;
+    oric_menu_key(&menu, OSD_KEY_UP);
+    CHECK(menu.cursor == ORIC_ITEM_VOLUME);
+    menu.cursor = ORIC_ITEM_PROFILE;
+    oric_menu_key(&menu, OSD_KEY_DOWN);
+    CHECK(menu.cursor == ORIC_ITEM_VOLUME);
+    // Left / Right change the level (limits kept), the cursor stays
+    CHECK(oric_menu_key(&menu, OSD_KEY_RIGHT).type == ORIC_ACT_VOLUME && menu.volume == HID_VOLUME_MAX);
+    CHECK(oric_menu_key(&menu, OSD_KEY_LEFT).type == ORIC_ACT_VOLUME && menu.volume == HID_VOLUME_MAX - 1);
+    CHECK(menu.cursor == ORIC_ITEM_VOLUME);
+    for (int i = 0; i < 20; i++) oric_menu_key(&menu, OSD_KEY_LEFT);
+    CHECK(menu.volume == 0);
+    oric_menu_key(&menu, OSD_KEY_RIGHT);
+    oric_menu_key(&menu, OSD_KEY_RIGHT);
+    CHECK(menu.volume == 2);
+    // Enter mutes, Enter again (or a level change) restores
+    CHECK(oric_menu_key(&menu, OSD_KEY_ENTER).type == ORIC_ACT_VOLUME && menu.muted);
+    oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("Volume") && screen_contains("son coup\xE9"));   // Latin-1 cells
+    oric_menu_key(&menu, OSD_KEY_RIGHT);
+    CHECK(!menu.muted && menu.volume == 3);
+    oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("3/8") && !screen_contains("son coup\xE9"));
+    // Buttons still reached from the volume
+    oric_menu_key(&menu, OSD_KEY_DOWN);
+    CHECK(menu.cursor == ORIC_ITEM_RESET && oric_menu_key(&menu, OSD_KEY_ENTER).type == ORIC_ACT_RESET);
+    if (dir) write_ppm(dir, "oric_menu_volume.ppm");
+
+    // ORIC.CFG: volume=N read (0..8) and written, the old line replaced
+    CHECK(oric_config_volume("5", HID_VOLUME_MAX) == 5 && oric_config_volume("0\r\n", HID_VOLUME_MAX) == 0);
+    CHECK(oric_config_volume("9", HID_VOLUME_MAX) == -1 && oric_config_volume("x", HID_VOLUME_MAX) == -1 &&
+          oric_config_volume("", HID_VOLUME_MAX) == -1 && oric_config_volume("5a", HID_VOLUME_MAX) == -1);
+    const char* none[4] = {0};
+    char out[256];
+    oric_config_merge("volume=2\nautre=1\n", 0, none, "", 6, out, sizeof(out));
+    CHECK(!strcmp(out, "autre=1\nfdc=aucune\nvolume=6\n"));
+
+    // Banner: gauge, or "Son coupé"
+    static osd_row_t row;
+    char text[OSD_COLS + 1];
+    oric_volume_banner(&row, 5, false);
+    int full = 0, shade = 0;
+    for (int c = 0; c < OSD_COLS; c++) {
+        text[c] = (char)row.ch[c];
+        full += row.ch[c] == OSD_FULL;
+        shade += row.ch[c] == OSD_SHADE;
+    }
+    text[OSD_COLS] = 0;
+    CHECK(strstr(text, "Volume") && strstr(text, "5/8") && full == 5 && shade == 3);
+    oric_volume_banner(&row, 5, true);
+    for (int c = 0; c < OSD_COLS; c++) text[c] = (char)row.ch[c];
+    CHECK(strstr(text, "Son coup\xE9") && !strstr(text, "5/8"));
+}
+
 int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : NULL;
     test_render();
@@ -417,6 +476,7 @@ int main(int argc, char** argv) {
     test_planes();
     test_profiles(dir);
     test_banner(dir);
+    test_volume(dir);
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
 }

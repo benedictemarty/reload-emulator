@@ -20,3 +20,4 @@ add_subdirectory(src)
 add_subdirectory(systems)
 
 add_subdirectory(cputest)
+add_subdirectory(devices)

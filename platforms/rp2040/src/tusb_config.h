@@ -46,8 +46,10 @@
 // CONFIGURATION
 //--------------------------------------------------------------------
 
-// Size of buffer to hold descriptors and other data used for enumeration
-#define CFG_TUH_ENUMERATION_BUFSIZE 256
+// Size of buffer to hold descriptors and other data used for enumeration; the
+// HID report descriptors of multimedia keys can exceed 256 bytes (TinyUSB then
+// ignores the interface), as in ~/Neo6502TeleStrat
+#define CFG_TUH_ENUMERATION_BUFSIZE 512
 
 #define CFG_TUH_HUB                 1
 #define CFG_TUH_CDC                 0

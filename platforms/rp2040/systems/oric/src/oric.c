@@ -582,6 +582,9 @@ static void config_load(void) {
             if (usb_nprofiles < ORIC_CONFIG_PROFILES && oric_config_profile(v, &usb_profiles[usb_nprofiles])) usb_nprofiles++;
         } else if ((v = oric_config_value(line, "demarrage"))) {
             oric_config_copy(start, sizeof(start), v);
+        } else if ((v = oric_config_value(line, "volume"))) {
+            const int level = oric_config_volume(v, HID_VOLUME_MAX);
+            if (level >= 0) audio_set_volume((uint8_t)level, false);
         } else {
             for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
                 const char key[2] = {(char)('a' + d), 0};
@@ -623,7 +626,7 @@ static void config_save(void) {
         f_close(&f);
     }
     const char *drives[ORIC_MENU_DRIVES] = {menu.drive[0], menu.drive[1], menu.drive[2], menu.drive[3]};
-    size_t len = oric_config_merge(old, menu.fdc, drives, menu.tape, out, sizeof(out));
+    size_t len = oric_config_merge(old, menu.fdc, drives, menu.tape, audio_volume_level(), out, sizeof(out));
     bool ok = f_open(&f, ORIC_CONFIG_FILE, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK;
     if (ok) {
         ok = f_write(&f, out, (UINT)len, &n) == FR_OK && n == len;
@@ -685,6 +688,27 @@ static void diag_file_service(void) {
 /*-- Tape banner ----------------------------------------------------------------*/
 // While the tape motor runs: name and position of the tape in the bottom border
 static void banner_update(void) {
+    // Volume (multimedia keys of the keyboard): for 2 s, in place of the tape banner
+    static uint32_t volume_serial;
+    static int volume_frames;
+    if (audio_volume_serial() != volume_serial) {
+        volume_serial = audio_volume_serial();
+        volume_frames = 100;
+        const uint8_t back = (uint8_t)(banner_front ^ 1);
+        oric_volume_banner(&banner_rows[back], audio_volume_level(), audio_volume_muted());
+        __dmb();
+        banner_front = back;
+        banner_on = true;
+        if (panel_open) panel_refresh();
+        return;
+    }
+    if (volume_frames > 0) {
+        if (--volume_frames > 0) {
+            banner_on = true;
+            return;
+        }
+        banner_on = false;   // End of the volume banner: the tape banner is drawn again
+    }
     oric_td_t *td = &state.oric.td;
     const bool on = td->valid && td->tap_mode && menu.tape[0] && oric_td_is_motor_on(td) && !oric_td_tap_ended(td);
     if (on) {
@@ -707,6 +731,8 @@ static void banner_update(void) {
 
 static void panel_refresh(void) {
     menu.fdc = (int)state.oric.fdc_type;
+    menu.volume = audio_volume_level();
+    menu.muted = audio_volume_muted();
     oric_td_t *td = &state.oric.td;
     menu.tape_motor = td->valid && oric_td_is_motor_on(td);
     menu.tape_percent = (td->valid && td->tap_size) ? (int)((uint64_t)td->tap_pos * 100 / td->tap_size) : 0;
@@ -784,6 +810,9 @@ static void panel_action(oric_menu_action_t a) {
             return;
         case ORIC_ACT_PROFILE:
             profile_apply(a.file);
+            break;
+        case ORIC_ACT_VOLUME:
+            audio_set_volume((uint8_t)menu.volume, menu.muted);
             break;
         default:
             break;

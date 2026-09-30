@@ -4,8 +4,9 @@
 //
 // Une clé par ligne : « fdc=aucune|pravetz|microdisc|jasmin » (interface
 // disque), « a=NOM.DSK » … « d=NOM.DSK » (lecteurs), « tape=NOM.TAP »
-// (cassette). Les lignes vides, les commentaires (#) et les autres clés sont
-// gardés quand le menu réécrit le fichier.
+// (cassette), « volume=0 » … « volume=8 » (8 : maximum, 0 : silence). Les
+// lignes vides, les commentaires (#) et les autres clés sont gardés quand le
+// menu réécrit le fichier.
 //
 // Profils (au plus ORIC_CONFIG_PROFILES) : « profil=Libellé;clé=valeur;… »
 // avec fdc=, rom= (ROM BASIC de 16 Ko sur la clé, ex. BASIC 1.0 de l'Oric-1
@@ -72,18 +73,28 @@ static inline void oric_config_copy(char* dst, size_t size, const char* v) {
 }
 
 static inline bool _oric_config_ours(const char* line) {
-    static const char* const keys[6] = {"fdc", "a", "b", "c", "d", "tape"};
-    for (int i = 0; i < 6; i++) {
+    static const char* const keys[7] = {"fdc", "a", "b", "c", "d", "tape", "volume"};
+    for (int i = 0; i < 7; i++) {
         if (oric_config_value(line, keys[i])) return true;
     }
     return false;
 }
 
+// Volume d'une valeur « volume= » (0 à max), -1 si invalide
+static inline int oric_config_volume(const char* v, int max) {
+    int n = 0, digits = 0;
+    while (v[digits] >= '0' && v[digits] <= '9' && digits < 3) n = n * 10 + (v[digits++] - '0');
+    const char e = v[digits];
+    if (!digits || (e && e != '\r' && e != '\n' && e != ' ') || n > max) return -1;
+    return n;
+}
+
 // Nouveau contenu de ORIC.CFG : les lignes de `old` (peut être NULL) qui ne
-// sont pas à nous, puis nos réglages (lecteurs et cassette vides : omis).
-// Retourne la longueur écrite (sans le 0 final), tronquée à out_size - 1.
-static inline size_t oric_config_merge(const char* old, int fdc, const char* const drives[4], const char* tape, char* out,
-                                       size_t out_size) {
+// sont pas à nous, puis nos réglages (lecteurs et cassette vides : omis ;
+// volume < 0 : omis). Retourne la longueur écrite (sans le 0 final), tronquée
+// à out_size - 1.
+static inline size_t oric_config_merge(const char* old, int fdc, const char* const drives[4], const char* tape, int volume,
+                                       char* out, size_t out_size) {
     size_t len = 0;
     out[0] = 0;
 #define _ORIC_CFG_PUT(...)                                                                  \
@@ -106,6 +117,7 @@ static inline size_t oric_config_merge(const char* old, int fdc, const char* con
         if (drives[d] && drives[d][0]) _ORIC_CFG_PUT("%c=%s\n", 'a' + d, drives[d]);
     }
     if (tape && tape[0]) _ORIC_CFG_PUT("tape=%s\n", tape);
+    if (volume >= 0) _ORIC_CFG_PUT("volume=%d\n", volume);
 #undef _ORIC_CFG_PUT
     return len;
 }

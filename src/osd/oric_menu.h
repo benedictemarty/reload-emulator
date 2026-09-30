@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "osd/osd.h"
+#include "devices/hid_media.h"   // HID_VOLUME_MAX
 
 #ifndef ORIC_MENU_FILES
 #define ORIC_MENU_FILES 64   // Fichiers de la clé listés
@@ -65,6 +66,7 @@ enum {
     ORIC_ACT_SAVE,         // ORIC.CFG
     ORIC_ACT_RESUME,
     ORIC_ACT_PROFILE,      // file = profil (index dans profile[])
+    ORIC_ACT_VOLUME,       // volume et muted du menu modifiés
 };
 
 typedef struct {
@@ -84,10 +86,11 @@ typedef struct {
 #define ORIC_ITEM_DRIVE0 1   // 1-4 : lecteurs A-D
 #define ORIC_ITEM_TAPE    5
 #define ORIC_ITEM_PROFILE 6
-#define ORIC_ITEM_RESET   7
-#define ORIC_ITEM_SAVE    8
-#define ORIC_ITEM_RESUME  9
-#define ORIC_ITEMS        10
+#define ORIC_ITEM_VOLUME  7
+#define ORIC_ITEM_RESET   8
+#define ORIC_ITEM_SAVE    9
+#define ORIC_ITEM_RESUME  10
+#define ORIC_ITEMS        11
 #define ORIC_MENU_PROFILES 8   // Profils proposés (intégrés puis de la clé)
 
 static const char* const oric_menu_fdc_names[ORIC_MENU_FDCS] = {"Aucune", "Pravetz 8D", "Microdisc", "Jasmin"};
@@ -109,6 +112,8 @@ typedef struct {
     int nfiles;
     const char* profile[ORIC_MENU_PROFILES];        // Libellés des profils (NULL : fin)
     int profile_cur;                                // Profil appliqué (-1 : aucun)
+    int volume;                                     // 0 à HID_VOLUME_MAX
+    bool muted;
     char message[96];                               // Dernier résultat d'action
     bool message_error;
     const char* version;
@@ -128,6 +133,7 @@ static inline void oric_menu_init(oric_menu_t* m) {
     m->cursor = ORIC_ITEM_RESUME;
     m->fdc_available[0] = true;
     m->profile_cur = -1;
+    m->volume = HID_VOLUME_MAX;
 }
 
 // Page « Démarrer sur… » : le sélecteur des profils (demarrage=choix)
@@ -267,6 +273,18 @@ static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
         return a;
     }
     int c = m->cursor;
+    // Volume : Gauche / Droite règlent, Entrée coupe ou rétablit le son
+    if (c == ORIC_ITEM_VOLUME && (key == OSD_KEY_LEFT || key == OSD_KEY_RIGHT || key == OSD_KEY_ENTER)) {
+        if (key == OSD_KEY_ENTER) {
+            m->muted = !m->muted;
+        } else {
+            m->muted = false;
+            if (key == OSD_KEY_LEFT && m->volume > 0) m->volume--;
+            if (key == OSD_KEY_RIGHT && m->volume < HID_VOLUME_MAX) m->volume++;
+        }
+        a.type = ORIC_ACT_VOLUME;
+        return a;
+    }
     switch (key) {
         case OSD_KEY_UP: c = (c + ORIC_ITEMS - 1) % ORIC_ITEMS; break;
         case OSD_KEY_DOWN: c = (c + 1) % ORIC_ITEMS; break;
@@ -460,18 +478,39 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
                  known ? (sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC) : (sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM), 42);
     }
 
+    // Son
+    _oric_panel(s, R + 20, C + 2, 3, 96, 0, "Son");
+    {
+        const bool sel = main_page && m->cursor == ORIC_ITEM_VOLUME;
+        _oric_item_bar(s, R + 21, C + 3, 94, sel);
+        const uint8_t base = sel ? ORIC_OSD_SEL : ORIC_OSD_PANEL, dim = sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM;
+        const uint8_t acc = sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC;
+        osd_puts(s, R + 21, C + 5, "Volume", acc, -1);
+        if (m->muted) {
+            osd_putc(s, R + 21, C + 14, OSD_CROSS, sel ? OSD_ATTR(OSD_RED, OSD_BLUE) : ORIC_OSD_PANEL_ERR);
+            osd_puts(s, R + 21, C + 16, "son coupé", base, -1);
+        } else {
+            for (int i = 0; i < HID_VOLUME_MAX; i++) {
+                osd_putc(s, R + 21, C + 14 + 2 * i, i < m->volume ? OSD_FULL : OSD_SHADE, dim);
+            }
+            snprintf(buf, sizeof(buf), "%d/%d", m->volume, HID_VOLUME_MAX);
+            osd_puts(s, R + 21, C + 15 + 2 * HID_VOLUME_MAX, buf, acc, -1);
+        }
+        osd_puts(s, R + 21, C + 52, "Gauche / Droite : régler, Entrée : couper", dim, -1);
+    }
+
     // Actions
     const char* const labels[3] = {"Redémarrer (RESET)", "Enregistrer la configuration", "Reprendre"};
     const int cols[3] = {2, 34, 70}, widths[3] = {30, 34, 28};
     for (int i = 0; i < 3; i++) {
-        _oric_button(s, R + 21, C + cols[i], widths[i], labels[i], main_page && m->cursor == ORIC_ITEM_RESET + i);
+        _oric_button(s, R + 24, C + cols[i], widths[i], labels[i], main_page && m->cursor == ORIC_ITEM_RESET + i);
     }
 
     // Message
     if (m->message[0]) {
-        osd_putc(s, R + 24, C + 3, m->message_error ? OSD_CROSS : OSD_CHECK,
+        osd_putc(s, R + 26, C + 3, m->message_error ? OSD_CROSS : OSD_CHECK,
                  OSD_ATTR(m->message_error ? OSD_RED : OSD_GREEN, OSD_BLACK));
-        osd_puts(s, R + 24, C + 5, m->message, OSD_ATTR(m->message_error ? OSD_RED : OSD_YELLOW, OSD_BLACK), 93);
+        osd_puts(s, R + 26, C + 5, m->message, OSD_ATTR(m->message_error ? OSD_RED : OSD_YELLOW, OSD_BLACK), 93);
     }
 
     // Pied : aide des touches
@@ -559,6 +598,29 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
         const int thumb = m->browse_scroll * (ORIC_BROWSE_VISIBLE - 1) / (n - ORIC_BROWSE_VISIBLE);
         osd_putc(s, top + 2 + thumb, bar, OSD_FULL, OSD_ATTR(OSD_CYAN, OSD_BLACK));
     }
+}
+
+// Bandeau du volume (touches multimédia du clavier), à la place de celui de la
+// cassette pendant 2 s : jauge, ou « Son coupé » (comme au Telestrat)
+static inline void oric_volume_banner(osd_row_t* r, int level, bool muted) {
+    const uint8_t base = OSD_ATTR(OSD_WHITE, OSD_BLUE);
+    const uint8_t acc = OSD_ATTR(OSD_YELLOW, OSD_BLUE);
+    osd_row_clear(r, base);
+    const int C = ORIC_OSD_C0;
+    osd_row_puts(r, C + 13, "Volume", acc);
+    if (muted) {
+        r->ch[C + 22] = OSD_CROSS;
+        r->attr[C + 22] = OSD_ATTR(OSD_RED, OSD_BLUE);
+        osd_row_puts(r, C + 24, "Son coupé", base);
+        return;
+    }
+    for (int i = 0; i < HID_VOLUME_MAX; i++) {
+        r->ch[C + 22 + 2 * i] = i < level ? OSD_FULL : OSD_SHADE;
+        r->attr[C + 22 + 2 * i] = OSD_ATTR(OSD_CYAN, OSD_BLUE);
+    }
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d/%d", level, HID_VOLUME_MAX);
+    osd_row_puts(r, C + 23 + 2 * HID_VOLUME_MAX, buf, acc);
 }
 
 // Bandeau de la cassette, incrusté sous l'image de l'Oric pendant que le
