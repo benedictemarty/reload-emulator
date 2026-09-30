@@ -76,6 +76,10 @@ typedef struct {
     bool brk_nmi;       // Interface compatibility (last interrupt was NMI)
     bool brk_irq;
     uint16_t irq_pip, nmi_pip;   // Interface compatibility (unused)
+    // Interrupt polling at the penultimate cycle (measured on the board: cli_latency, nmi_control)
+    bool nmi_prev, irq_prev;     // Lines as seen at the start of the previous tick
+    bool nmi_poll, irq_poll;     // What the last cycle of an instruction polls
+    bool iflag_top;              // I flag at the start of the current tick (CLI/SEI/PLP act after the poll)
 } w65c02cpu_t;
 
 // Define W65C02_NO_MACROS to use this core as a second CPU next to another
@@ -448,6 +452,11 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
         c->nmi_pending = true;
         c->nmi_triggered = false;
     }
+    // Poll pipeline: the last cycle of an instruction polls the lines as they were
+    // during its penultimate cycle
+    c->nmi_poll = c->nmi_prev; c->nmi_prev = c->nmi_pending;
+    c->irq_poll = c->irq_prev; c->irq_prev = c->irq;
+    c->iflag_top = c->iflag;
 
     if (c->res) {
         // Reset: 7 cycles then the vector at $FFFC
@@ -510,8 +519,9 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
                 c->step = 104;
                 return;
             case 104:
-                // Vector selection: an NMI arriving during BRK/IRQ hijacks the vector on the 65C02 as well
-                if (c->irq_vec != 0xFC && c->nmi_pending) { c->irq_vec = 0xFA; c->nmi_pending = false; }
+                // No vector hijack: an NMI arriving during BRK/IRQ is taken right after the
+                // sequence, before the first instruction of the handler (measured on the
+                // board: cpu_interrupts_v2 2-nmi_and_brk and 3-nmi_and_irq, same tables as the 2A03 model)
                 _w65_rd(c, (uint16_t)(0xFF00 | c->irq_vec));
                 c->iflag = true;
                 c->df = false;
@@ -527,6 +537,7 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
                 c->brk_nmi = (c->irq_vec == 0xFA);
                 c->brk_irq = (c->irq_vec == 0xFE) && !c->in_brk;
                 c->in_brk = false;
+                if (c->nmi_poll) { c->nmi_pending = c->nmi_prev = c->nmi_poll = false; c->irq_vec = 0xFA; c->take_irq = true; }
                 _W65_FETCH();
                 return;
             default:
@@ -552,8 +563,8 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
 
     // Helper to finish an instruction: sample interrupts, then fetch
 #define _W65_DONE() do { \
-        if (c->nmi_pending) { c->nmi_pending = false; c->irq_vec = 0xFA; c->take_irq = true; } \
-        else if (c->irq && !c->iflag) { c->irq_vec = 0xFE; c->take_irq = true; } \
+        if (c->nmi_poll) { c->nmi_pending = c->nmi_prev = c->nmi_poll = false; c->irq_vec = 0xFA; c->take_irq = true; } \
+        else if (c->irq_poll && !c->iflag_top) { c->irq_vec = 0xFE; c->take_irq = true; } \
         _W65_FETCH(); return; } while (0)
     // Read-type operand consumed at the fetch of the next opcode
 #define _W65_READ_DONE() do { _w65_op_read(c, c->data); \

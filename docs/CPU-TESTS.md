@@ -55,6 +55,18 @@ Corrigé dans `w65c02cpu.h` grâce à ces tests :
 - **BBRx / BBSx** : un cycle de moins que prévu quand le branchement est pris ; la
   valeur de page zéro est lue deux fois avant l'offset.
 
+Repris de la NES (Neo6502nes v0.4.2, mesuré sur le W65C02S de la carte, fusion du
+2026-09-30) — les tests de Harte ne couvrent pas les interruptions :
+- **IRQ et NMI scrutées à l'avant-dernier cycle** d'une instruction, avec le drapeau I
+  d'avant CLI/SEI/PLP (champs `nmi_prev`/`nmi_poll`/`irq_prev`/`irq_poll`/`iflag_top`) ;
+- **pas de détournement de vecteur** : une NMI arrivée pendant BRK/IRQ est prise juste
+  après la séquence, avant la première instruction du gestionnaire.
+- Validé par les ROM de la communauté (`cpu_interrupts_v2` 1, 2, 3, 5 ; `ppu_vbl_nmi`
+  04, 05, 07, 08 : mêmes résultats que la carte), 52 ROM réussies et Popeye identique
+  trame par trame côté NES ; Harte, Klaus et intégrations reload ; `make test` du
+  Telestrat (rejeu à l'identique). Coût par cycle du parasite Tube du BBC sur la carte
+  (quelques écritures de plus) : non mesuré.
+
 Écarts connus (option `-x` des tests CTest) :
 - **WDC `$5C`** : 4 cycles dans les tests (WDC, Rockwell et Synertek), 8 dans le
   cœur. **Mesuré sur le W65C02S de la carte Neo6502 le 2026-09-30 : 8 cycles.** La

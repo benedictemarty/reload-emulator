@@ -44,7 +44,7 @@ Inventaire de ses composants (lecture seule chez elle, v0.4.1) :
 | Composant | État à la NES | Décision |
 |---|---|---|
 | `chips_common.h`, `mos6502cpu.h` | identiques à reload | la NES supprime ses copies |
-| `w65c02cpu.h` (65C02 logiciel, PC) | **divergent** : la NES scrute IRQ/NMI à l'avant-dernier cycle (mesuré sur carte : `cli_latency`, `nmi_control`) ; reload et le Telestrat ont la soustraction décimale corrigée (SingleStepTests) | **fusionner les deux** dans reload (tests Harte, Klaus, intégration Oric et rejeu du Telestrat), puis une seule copie |
+| `w65c02cpu.h` (65C02 logiciel, PC) | **divergent** : la NES scrute IRQ/NMI à l'avant-dernier cycle (mesuré sur carte : `cli_latency`, `nmi_control`) ; reload et le Telestrat ont la soustraction décimale corrigée (SingleStepTests) | **fait** (socle-2026-09-30-5) : scrutation de la NES v0.4.2 + corrections de reload ; NES `make test` et références carte, Telestrat `make test`, CTest reload : tout passe ; la NES supprime sa copie quand elle le décide |
 | Pilote de bus `neo6502_bus.h` | copie de celui du Telestrat | étape 10 (pilote commun, SIO puis PIO) |
 | Minutage vidéo, verrous | 960 × 544 défini localement, `next_striped_spin_lock_num` | `neo_dvi_timings.h` et verrous `spin_lock_claim_unused` du socle |
 | Jeux sur la clé et menu F1 (US-15, à faire) | absents | à construire sur `msc_app.c` (étape 8) et le moteur de menu commun (étape 7 : `osd.h`, `osd_browser.h`) |
