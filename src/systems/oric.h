@@ -217,6 +217,8 @@ void oric_screen_update(oric_t* sys);
 
 // Change the disk interface (the machine is reset); false if its ROM is missing
 bool oric_set_fdc(oric_t* sys, oric_fdc_type_t type);
+// Change the BASIC ROM (16 KB, kept by the caller; e.g. BASIC 1.0 of the Oric-1); reset the machine afterwards
+void oric_set_rom(oric_t* sys, uint8_t* rom);
 // Interface a MFM_DISK image is made for (FT-DOS boot sector: Jasmin, else Microdisc)
 oric_fdc_type_t oric_dsk_interface(oric_t* sys, oric_dsk_t* dsk);
 // Insert an in-memory MFM_DISK image in a Microdisc / Jasmin drive (0-3)
@@ -370,6 +372,12 @@ static void _oric_update_map(oric_t* sys) {
             mem_map_rw(&sys->mem, 0, 0xC000, 0x4000, sys->rom, sys->overlay_ram);
             break;
     }
+}
+
+void oric_set_rom(oric_t* sys, uint8_t* rom) {
+    CHIPS_ASSERT(sys && sys->valid && rom);
+    sys->rom = rom;
+    _oric_update_map(sys);
 }
 
 bool oric_set_fdc(oric_t* sys, oric_fdc_type_t type) {

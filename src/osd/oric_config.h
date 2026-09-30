@@ -7,6 +7,13 @@
 // (cassette). Les lignes vides, les commentaires (#) et les autres clés sont
 // gardés quand le menu réécrit le fichier.
 //
+// Profils (au plus ORIC_CONFIG_PROFILES) : « profil=Libellé;clé=valeur;… »
+// avec fdc=, rom= (ROM BASIC de 16 Ko sur la clé, ex. BASIC 1.0 de l'Oric-1
+// ou ROM d'origine du Nova 64), a= … d=, tape= ; appliquer un profil vide
+// les lecteurs et la cassette qu'il ne cite pas.
+// « demarrage=choix » ouvre au montage de la clé la page « Démarrer sur… »,
+// « demarrage=Libellé » applique directement un profil (intégré ou de la clé).
+//
 // Indépendant de la plate-forme (testé par tests/oric/test_oric_menu.c).
 //
 // ## Licence zlib/libpng
@@ -101,4 +108,57 @@ static inline size_t oric_config_merge(const char* old, int fdc, const char* con
     if (tape && tape[0]) _ORIC_CFG_PUT("tape=%s\n", tape);
 #undef _ORIC_CFG_PUT
     return len;
+}
+
+/*-- Profils ------------------------------------------------------------------*/
+
+#define ORIC_CONFIG_PROFILES  3
+#define ORIC_CONFIG_LABEL_LEN 28
+#define ORIC_CONFIG_NAME_LEN  48
+
+typedef struct {
+    char label[ORIC_CONFIG_LABEL_LEN];
+    int fdc;                                  // -1 : inchangée
+    char rom[ORIC_CONFIG_NAME_LEN];           // "" : ROM du firmware
+    char drive[4][ORIC_CONFIG_NAME_LEN];
+    char tape[ORIC_CONFIG_NAME_LEN];
+} oric_profile_t;
+
+// Copie jusqu'au séparateur `;` ou à la fin de ligne, espaces de bord retirés
+static inline const char* _oric_config_field(const char* v, char* dst, size_t size) {
+    while (*v == ' ') v++;
+    size_t n = 0;
+    while (v[n] && v[n] != ';' && v[n] != '\r' && v[n] != '\n') n++;
+    size_t m = n;
+    while (m > 0 && v[m - 1] == ' ') m--;
+    if (m >= size) m = size - 1;
+    memcpy(dst, v, m);
+    dst[m] = 0;
+    return v[n] == ';' ? v + n + 1 : NULL;
+}
+
+// Valeur d'une ligne « profil= » -> profil ; false sans libellé
+static inline bool oric_config_profile(const char* v, oric_profile_t* p) {
+    memset(p, 0, sizeof(*p));
+    p->fdc = -1;
+    const char* next = _oric_config_field(v, p->label, sizeof(p->label));
+    if (!p->label[0]) return false;
+    while (next) {
+        char field[ORIC_CONFIG_NAME_LEN + 8];
+        next = _oric_config_field(next, field, sizeof(field));
+        const char* val;
+        if ((val = oric_config_value(field, "fdc"))) {
+            p->fdc = oric_config_fdc(val);
+        } else if ((val = oric_config_value(field, "rom"))) {
+            oric_config_copy(p->rom, sizeof(p->rom), val);
+        } else if ((val = oric_config_value(field, "tape"))) {
+            oric_config_copy(p->tape, sizeof(p->tape), val);
+        } else {
+            for (int d = 0; d < 4; d++) {
+                const char key[2] = {(char)('a' + d), 0};
+                if ((val = oric_config_value(field, key))) oric_config_copy(p->drive[d], sizeof(p->drive[d]), val);
+            }
+        }
+    }
+    return true;
 }

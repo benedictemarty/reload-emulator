@@ -25,7 +25,9 @@ Emulated systems:
   - Printer port (always acknowledging, bytes available to the host)
 
 On the RP2040, **F1** opens a control panel (disk interface, drives A-D, tape, reset)
-with the `.dsk` and `.tap` files of a USB drive; `ORIC.CFG` on the drive keeps the setup.
+with the `.dsk` and `.tap` files of a USB drive, and profiles (Atmos, Microdisc, Jasmin,
+Pravetz 8D, and up to three of the drive with their own ROM, e.g. Oric-1 or Nova 64);
+`ORIC.CFG` on the drive keeps the setup.
 F2-F9 insert the images embedded in the firmware.
 
 See [docs/ORIC-DISQUES-CASSETTES.md](docs/ORIC-DISQUES-CASSETTES.md) (French) for the disk and tape support, its sources and its tests.

@@ -335,12 +335,58 @@ static void test_planes(void) {
     CHECK(bad == 0);
 }
 
+static void test_profiles(const char* dir) {
+    oric_profile_t p;
+    CHECK(oric_config_profile("Oric-1 BASIC 1.0 ; rom=BASIC10.ROM ; tape=JEU.TAP\r\n", &p));
+    CHECK(!strcmp(p.label, "Oric-1 BASIC 1.0") && !strcmp(p.rom, "BASIC10.ROM") && !strcmp(p.tape, "JEU.TAP") && p.fdc == -1);
+    CHECK(oric_config_profile("Nova 64;rom=NOVA64.ROM;fdc=microdisc;a=SEDORIC.DSK;c=DATA.DSK", &p));
+    CHECK(p.fdc == 2 && !strcmp(p.drive[0], "SEDORIC.DSK") && p.drive[1][0] == 0 && !strcmp(p.drive[2], "DATA.DSK"));
+    CHECK(!oric_config_profile(";rom=X.ROM", &p));   // No label
+    CHECK(oric_config_profile("Seul", &p) && !strcmp(p.label, "Seul") && !p.rom[0]);
+    // The ORIC.CFG merge keeps the profiles and the start choice
+    const char* old = "profil=Nova 64;rom=NOVA64.ROM\ndemarrage=choix\nfdc=jasmin\n";
+    const char* none[4] = {0};
+    char out[256];
+    oric_config_merge(old, 2, none, "", out, sizeof(out));
+    CHECK(!strcmp(out, "profil=Nova 64;rom=NOVA64.ROM\ndemarrage=choix\nfdc=microdisc\n"));
+
+    // Menu: "Profil" item, "Démarrer sur…" selector
+    setup();
+    menu.profile[0] = "Oric Atmos (BASIC 1.1)";
+    menu.profile[1] = "Atmos + Microdisc (Sedoric)";
+    menu.profile[2] = "Nova 64";
+    oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("Profil") && screen_contains("utilisateur"));
+    oric_menu_open_profiles(&menu);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse_count == 3 && menu.browse_cursor == 0);
+    oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("Nova 64") && screen_contains("Atmos + Microdisc"));
+    write_ppm(dir, "oric_menu_profils.ppm");
+    oric_menu_key(&menu, 'n');
+    oric_menu_action_t a = oric_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(a.type == ORIC_ACT_PROFILE && a.file == 2);
+    menu.profile_cur = 2;
+    oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("Nova 64") && !screen_contains("utilisateur"));
+    // From the main page: the Profil item, reached from the tape with Down
+    menu.cursor = ORIC_ITEM_TAPE;
+    oric_menu_key(&menu, OSD_KEY_DOWN);
+    CHECK(menu.cursor == ORIC_ITEM_PROFILE);
+    oric_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse_cursor == 2);
+    oric_menu_key(&menu, OSD_KEY_ESC);
+    CHECK(menu.page == ORIC_PAGE_MAIN);
+    oric_menu_key(&menu, OSD_KEY_LEFT);
+    CHECK(menu.cursor == ORIC_ITEM_FDC);
+}
+
 int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : NULL;
     test_render();
     test_navigation(dir);
     test_config();
     test_planes();
+    test_profiles(dir);
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
 }

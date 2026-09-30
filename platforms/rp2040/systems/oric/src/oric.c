@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 
 #include <pico/platform.h>
@@ -121,6 +122,7 @@ static oric_menu_t __not_in_flash() menu;
 static osd_surface_t __not_in_flash() osd_surfaces[2];
 static volatile uint8_t osd_front;            // Surface shown by core 1
 static volatile uint32_t core1_frames;        // Frames started by core 1
+static void profiles_list(void);               // Profiles offered by the panel (built in, then ORIC.CFG)
 static volatile bool panel_open;
 
 // Layout for host tools (SWD capture, co-simulation), in every build: offset of
@@ -172,6 +174,7 @@ void app_init(void) {
 #ifdef HAVE_JASMIN_ROM
     menu.fdc_available[ORIC_FDC_JASMIN] = true;
 #endif
+    profiles_list();
 }
 
 #ifdef OLIMEX_NEO6502
@@ -198,6 +201,7 @@ struct dvi_inst dvi0;
 extern void copy_tmdsbuf(uint32_t *dest, const uint32_t *src);
 
 static void panel_toggle(void);
+static void panel_refresh(void);
 // Keys of the open panel, queued by the USB HID callback and handled by the main
 // loop (the actions open files on the USB drive: not from inside a USB callback)
 static volatile uint16_t panel_keys[16];
@@ -440,22 +444,121 @@ static bool panel_set_fdc(int type) {
     return true;
 }
 
-// ORIC.CFG of the USB drive: interface, drives, tape (then the Oric restarts)
+/*-- Profiles: built in, then those of ORIC.CFG (profil=) ------------------------*/
+
+#define BUILTIN_PROFILES 4
+static const oric_profile_t builtin_profiles[BUILTIN_PROFILES] = {
+    {.label = "Oric Atmos (BASIC 1.1)", .fdc = ORIC_FDC_NONE},
+    {.label = "Atmos + Microdisc (Sedoric)", .fdc = ORIC_FDC_MICRODISC},
+    {.label = "Atmos + Jasmin (FT-DOS)", .fdc = ORIC_FDC_JASMIN},
+    {.label = "Pravetz 8D (Disk II)", .fdc = ORIC_FDC_PRAVETZ},
+};
+static const char *const builtin_keys[BUILTIN_PROFILES] = {"atmos", "microdisc", "jasmin", "pravetz"};
+static oric_profile_t usb_profiles[ORIC_CONFIG_PROFILES];
+static int usb_nprofiles;
+static const oric_profile_t *profile_at[ORIC_MENU_PROFILES];
+static int nprofiles;
+static uint8_t __not_in_flash() usb_rom[0x4000];   // ROM of a profile (rom=), loaded from the USB drive
+
+static void profiles_list(void) {
+    nprofiles = 0;
+    for (int k = 0; k < BUILTIN_PROFILES; k++) {
+        int fdc = builtin_profiles[k].fdc;
+        if (fdc > 0 && !menu.fdc_available[fdc]) continue;   // ROM of the interface missing
+        profile_at[nprofiles++] = &builtin_profiles[k];
+    }
+    for (int k = 0; k < usb_nprofiles && nprofiles < ORIC_MENU_PROFILES; k++) profile_at[nprofiles++] = &usb_profiles[k];
+    for (int k = 0; k < ORIC_MENU_PROFILES; k++) menu.profile[k] = k < nprofiles ? profile_at[k]->label : NULL;
+}
+
+// Profile of a « demarrage= » value: label (any case) or key of a built-in profile; -1 if none
+static int profile_find(const char *v) {
+    for (int k = 0; k < nprofiles; k++) {
+        if (!strcasecmp(v, profile_at[k]->label)) return k;
+        for (int b = 0; b < BUILTIN_PROFILES; b++) {
+            if (profile_at[k] == &builtin_profiles[b] && !strcasecmp(v, builtin_keys[b])) return k;
+        }
+    }
+    return -1;
+}
+
+static bool rom_load(const char *name) {
+    FIL f;
+    UINT n = 0;
+    if (f_open(&f, name, FA_READ) != FR_OK) return false;
+    bool ok = f_size(&f) == sizeof(usb_rom) && f_read(&f, usb_rom, sizeof(usb_rom), &n) == FR_OK && n == sizeof(usb_rom);
+    f_close(&f);
+    return ok;
+}
+
+// Apply a profile: ROM, interface, drives and tape (those not given are emptied), then reset
+static void profile_apply(int k) {
+    char msg[96];
+    if (k < 0 || k >= nprofiles) return;
+    const oric_profile_t *p = profile_at[k];
+    bool ok = true;
+    if (p->rom[0]) {
+        if (rom_load(p->rom)) {
+            oric_set_rom(&state.oric, usb_rom);
+        } else {
+            snprintf(msg, sizeof(msg), "%.40s : ROM de 16 Ko introuvable", p->rom);
+            oric_menu_message(&menu, true, msg);
+            ok = false;
+        }
+    } else {
+        oric_set_rom(&state.oric, oric_rom);
+    }
+    if (p->fdc >= 0) panel_set_fdc(p->fdc);
+    for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
+        dsk_close(d);
+        if (p->drive[d][0] && !dsk_insert(d, p->drive[d])) {
+            snprintf(msg, sizeof(msg), "%.40s : disquette introuvable", p->drive[d]);
+            oric_menu_message(&menu, true, msg);
+            ok = false;
+        }
+    }
+    tap_close();
+    if (p->tape[0] && !tap_insert(p->tape)) {
+        snprintf(msg, sizeof(msg), "%.40s : cassette introuvable", p->tape);
+        oric_menu_message(&menu, true, msg);
+        ok = false;
+    }
+    oric_reset(&state.oric);
+    menu.profile_cur = k;
+    if (ok) {
+        snprintf(msg, sizeof(msg), "Profil %.60s : l'Oric redémarre", p->label);
+        oric_menu_message(&menu, false, msg);
+    }
+    printf("Profile: %s\n", p->label);
+}
+
+// ORIC.CFG of the USB drive: user settings (interface, drives, tape), profiles
+// and start choice; demarrage=choix opens the "Démarrer sur…" page
 static void config_load(void) {
     FIL f;
-    if (f_open(&f, ORIC_CONFIG_FILE, FA_READ) != FR_OK) return;
-    char line[96];
+    usb_nprofiles = 0;
+    if (f_open(&f, ORIC_CONFIG_FILE, FA_READ) != FR_OK) {
+        profiles_list();
+        return;
+    }
+    char line[160];
     int fdc = -1;
     static char drives[ORIC_MENU_DRIVES][ORIC_MENU_NAME_LEN];
     static char tape[ORIC_MENU_NAME_LEN];
+    static char start[ORIC_CONFIG_LABEL_LEN];
     memset(drives, 0, sizeof(drives));
     tape[0] = 0;
+    start[0] = 0;
     while (f_gets(line, sizeof(line), &f)) {
         const char *v;
         if ((v = oric_config_value(line, "fdc"))) {
             fdc = oric_config_fdc(v);
         } else if ((v = oric_config_value(line, "tape"))) {
             oric_config_copy(tape, sizeof(tape), v);
+        } else if ((v = oric_config_value(line, "profil"))) {
+            if (usb_nprofiles < ORIC_CONFIG_PROFILES && oric_config_profile(v, &usb_profiles[usb_nprofiles])) usb_nprofiles++;
+        } else if ((v = oric_config_value(line, "demarrage"))) {
+            oric_config_copy(start, sizeof(start), v);
         } else {
             for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
                 const char key[2] = {(char)('a' + d), 0};
@@ -464,12 +567,25 @@ static void config_load(void) {
         }
     }
     f_close(&f);
+    profiles_list();
+    int k = start[0] ? profile_find(start) : -1;
+    if (k >= 0) {
+        profile_apply(k);
+        return;
+    }
     if (fdc >= 0) panel_set_fdc(fdc);
     for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
         if (drives[d][0] && !dsk_insert(d, drives[d])) printf("ORIC.CFG: cannot open %s\n", drives[d]);
     }
     if (tape[0] && !tap_insert(tape)) printf("ORIC.CFG: cannot open %s\n", tape);
     oric_reset(&state.oric);   // Boot from the disk in drive A
+    if (!strcasecmp(start, "choix")) {
+        // "Démarrer sur…" page, right after the USB drive is mounted
+        menu.message[0] = 0;
+        oric_menu_open_profiles(&menu);
+        panel_refresh();
+        panel_open = true;
+    }
     printf("ORIC.CFG applied\n");
 }
 
@@ -583,6 +699,9 @@ static void panel_action(oric_menu_action_t a) {
         case ORIC_ACT_RESUME:
             panel_open = false;
             return;
+        case ORIC_ACT_PROFILE:
+            profile_apply(a.file);
+            break;
         default:
             break;
     }

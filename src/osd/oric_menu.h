@@ -64,6 +64,7 @@ enum {
     ORIC_ACT_RESET,
     ORIC_ACT_SAVE,         // ORIC.CFG
     ORIC_ACT_RESUME,
+    ORIC_ACT_PROFILE,      // file = profil (index dans profile[])
 };
 
 typedef struct {
@@ -81,11 +82,13 @@ typedef struct {
 // Éléments de la page principale
 #define ORIC_ITEM_FDC    0
 #define ORIC_ITEM_DRIVE0 1   // 1-4 : lecteurs A-D
-#define ORIC_ITEM_TAPE   5
-#define ORIC_ITEM_RESET  6
-#define ORIC_ITEM_SAVE   7
-#define ORIC_ITEM_RESUME 8
-#define ORIC_ITEMS       9
+#define ORIC_ITEM_TAPE    5
+#define ORIC_ITEM_PROFILE 6
+#define ORIC_ITEM_RESET   7
+#define ORIC_ITEM_SAVE    8
+#define ORIC_ITEM_RESUME  9
+#define ORIC_ITEMS        10
+#define ORIC_MENU_PROFILES 8   // Profils proposés (intégrés puis de la clé)
 
 static const char* const oric_menu_fdc_names[ORIC_MENU_FDCS] = {"Aucune", "Pravetz 8D", "Microdisc", "Jasmin"};
 static const char* const oric_menu_fdc_notes[ORIC_MENU_FDCS] = {"BASIC seul", "images NIB (Disk II)", "Sedoric, .dsk",
@@ -104,6 +107,8 @@ typedef struct {
     char usb_label[ORIC_MENU_NAME_LEN];
     oric_menu_file_t files[ORIC_MENU_FILES];
     int nfiles;
+    const char* profile[ORIC_MENU_PROFILES];        // Libellés des profils (NULL : fin)
+    int profile_cur;                                // Profil appliqué (-1 : aucun)
     char message[96];                               // Dernier résultat d'action
     bool message_error;
     const char* version;
@@ -122,7 +127,12 @@ static inline void oric_menu_init(oric_menu_t* m) {
     m->version = "";
     m->cursor = ORIC_ITEM_RESUME;
     m->fdc_available[0] = true;
+    m->profile_cur = -1;
 }
+
+// Page « Démarrer sur… » : le sélecteur des profils (demarrage=choix)
+static inline void _oric_open_browser(oric_menu_t* m, int item);
+static inline void oric_menu_open_profiles(oric_menu_t* m) { _oric_open_browser(m, ORIC_ITEM_PROFILE); }
 
 static inline bool _oric_item_is_drive(int item) { return item >= ORIC_ITEM_DRIVE0 && item < ORIC_ITEM_DRIVE0 + 4; }
 
@@ -131,11 +141,15 @@ static inline bool oric_menu_dsk_drives(const oric_menu_t* m) { return m->fdc ==
 
 #define ORIC_BROWSE_VISIBLE 16
 
-// Le sélecteur de l'interface n'a pas de ligne « éjecter »
-static inline int _oric_browse_first(const oric_menu_t* m) { return m->browse_target == ORIC_ITEM_FDC ? 0 : 1; }
+// Les sélecteurs de l'interface et des profils n'ont pas de ligne « éjecter »
+static inline int _oric_browse_first(const oric_menu_t* m) {
+    return (m->browse_target == ORIC_ITEM_FDC || m->browse_target == ORIC_ITEM_PROFILE) ? 0 : 1;
+}
 
 static inline const char* _oric_entry_name(const oric_menu_t* m, int entry) {
-    return m->browse_target == ORIC_ITEM_FDC ? oric_menu_fdc_names[entry] : m->files[entry].name;
+    if (m->browse_target == ORIC_ITEM_FDC) return oric_menu_fdc_names[entry];
+    if (m->browse_target == ORIC_ITEM_PROFILE) return m->profile[entry];
+    return m->files[entry].name;
 }
 
 static inline void _oric_open_browser(oric_menu_t* m, int item) {
@@ -143,6 +157,9 @@ static inline void _oric_open_browser(oric_menu_t* m, int item) {
     if (item == ORIC_ITEM_FDC) {
         for (int k = 0; k < ORIC_MENU_FDCS; k++) m->browse_list[m->browse_count++] = k;
         m->browse_cursor = m->fdc;
+    } else if (item == ORIC_ITEM_PROFILE) {
+        for (int k = 0; k < ORIC_MENU_PROFILES && m->profile[k]; k++) m->browse_list[m->browse_count++] = k;
+        m->browse_cursor = m->profile_cur >= 0 && m->profile_cur < m->browse_count ? m->profile_cur : 0;
     } else {
         const uint8_t kind = item == ORIC_ITEM_TAPE ? ORIC_FILE_TAP : ORIC_FILE_DSK;
         for (int i = 0; i < m->nfiles && m->browse_count < ORIC_MENU_FILES; i++) {
@@ -192,6 +209,13 @@ static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
             case OSD_KEY_ENTER: {
                 const int item = m->browse_target;
                 m->page = ORIC_PAGE_MAIN;
+                if (item == ORIC_ITEM_PROFILE) {
+                    if (m->browse_count > 0) {
+                        a.type = ORIC_ACT_PROFILE;
+                        a.file = m->browse_list[m->browse_cursor];
+                    }
+                    break;
+                }
                 if (item == ORIC_ITEM_FDC) {
                     const int t = m->browse_list[m->browse_cursor];
                     if (!m->fdc_available[t]) {
@@ -247,7 +271,7 @@ static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
         case OSD_KEY_UP: c = (c + ORIC_ITEMS - 1) % ORIC_ITEMS; break;
         case OSD_KEY_DOWN: c = (c + 1) % ORIC_ITEMS; break;
         case OSD_KEY_LEFT:
-            if (c == ORIC_ITEM_TAPE) c = ORIC_ITEM_FDC;
+            if (c == ORIC_ITEM_TAPE || c == ORIC_ITEM_PROFILE) c = ORIC_ITEM_FDC;
             else if (c > ORIC_ITEM_RESET) c--;
             break;
         case OSD_KEY_RIGHT:
@@ -266,7 +290,7 @@ static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
             }
             break;
         case OSD_KEY_ENTER:
-            if (c == ORIC_ITEM_FDC || c == ORIC_ITEM_TAPE) {
+            if (c == ORIC_ITEM_FDC || c == ORIC_ITEM_TAPE || c == ORIC_ITEM_PROFILE) {
                 _oric_open_browser(m, c);
             } else if (_oric_item_is_drive(c)) {
                 if (oric_menu_dsk_drives(m)) {
@@ -426,9 +450,15 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
         osd_puts(s, R + 13, C + 54, "Clé FAT : .dsk et .tap à la racine", ORIC_OSD_PANEL_DIM, -1);
     }
 
-    // Aide
-    osd_puts(s, R + 16, C + 52, "Suppr : éjecter   Échap : reprendre", ORIC_OSD_BG, -1);
-    osd_puts(s, R + 17, C + 52, "ORIC.CFG (clé) : fdc=, a= … d=, tape=", OSD_ATTR(OSD_CYAN, OSD_BLACK), -1);
+    // Profil
+    _oric_panel(s, R + 16, C + 51, 3, 47, OSD_CART_L, "Profil");
+    {
+        const bool sel = main_page && m->cursor == ORIC_ITEM_PROFILE;
+        _oric_item_bar(s, R + 17, C + 52, 45, sel);
+        const bool known = m->profile_cur >= 0 && m->profile_cur < ORIC_MENU_PROFILES && m->profile[m->profile_cur];
+        osd_puts(s, R + 17, C + 54, known ? m->profile[m->profile_cur] : "— réglages de l'utilisateur —",
+                 known ? (sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC) : (sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM), 42);
+    }
 
     // Actions
     const char* const labels[3] = {"Redémarrer (RESET)", "Enregistrer la configuration", "Reprendre"};
@@ -463,8 +493,9 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
 
     // Sélecteur, par-dessus
     const int item = m->browse_target;
-    const bool fdc = item == ORIC_ITEM_FDC, tape = item == ORIC_ITEM_TAPE;
-    if (fdc) snprintf(buf, sizeof(buf), "Interface disque (la machine redémarre)");
+    const bool fdc = item == ORIC_ITEM_FDC, tape = item == ORIC_ITEM_TAPE, prof = item == ORIC_ITEM_PROFILE;
+    if (prof) snprintf(buf, sizeof(buf), "Démarrer sur… (la machine redémarre)");
+    else if (fdc) snprintf(buf, sizeof(buf), "Interface disque (la machine redémarre)");
     else if (tape) snprintf(buf, sizeof(buf), "Cassette (la même : rembobinée)");
     else snprintf(buf, sizeof(buf), "Disquette pour le lecteur %c", 'A' + item - ORIC_ITEM_DRIVE0);
     const int first = _oric_browse_first(m);
@@ -473,7 +504,7 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
     osd_fill(s, top, left, height, width, OSD_ATTR(OSD_WHITE, OSD_BLACK));
     osd_frame(s, top, left, height, width, OSD_ATTR(OSD_YELLOW, OSD_BLACK));
     osd_putc(s, top, left + 2, ' ', OSD_ATTR(OSD_YELLOW, OSD_BLACK));
-    const uint8_t icon = tape ? OSD_TAPE_L : OSD_FLOP_L;
+    const uint8_t icon = tape ? OSD_TAPE_L : prof ? OSD_CART_L : OSD_FLOP_L;
     osd_putc(s, top, left + 3, icon, OSD_ATTR(OSD_YELLOW, OSD_BLACK));
     osd_putc(s, top, left + 4, (uint8_t)(icon + 1), OSD_ATTR(OSD_YELLOW, OSD_BLACK));
     const int tl = osd_puts(s, top, left + 6, buf, OSD_ATTR(OSD_WHITE, OSD_BLACK), -1);
@@ -490,6 +521,11 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
             continue;
         }
         const int entry = m->browse_list[idx - first];
+        if (prof) {
+            osd_putc(s, row, left + 4, entry == m->profile_cur ? OSD_DOT : ' ', base);
+            osd_puts(s, row, left + 6, m->profile[entry], base, width - 10);
+            continue;
+        }
         if (fdc) {
             osd_putc(s, row, left + 4, entry == m->fdc ? OSD_DOT : ' ', base);
             osd_puts(s, row, left + 6, oric_menu_fdc_names[entry], base, -1);
@@ -512,7 +548,7 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
             osd_puts(s, row, left + width - 18, tag, sel ? OSD_ATTR(OSD_RED, OSD_CYAN) : OSD_ATTR(OSD_YELLOW, OSD_BLACK), -1);
         }
     }
-    if (!fdc && m->browse_count == 0) {
+    if (!fdc && !prof && m->browse_count == 0) {
         osd_puts(s, top + 4, left + 4, tape ? "Aucune cassette .tap sur la clé" : "Aucune image .dsk sur la clé",
                  OSD_ATTR(OSD_RED, OSD_BLACK), -1);
     }

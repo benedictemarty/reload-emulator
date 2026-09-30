@@ -61,6 +61,40 @@ alors sur la disquette du lecteur A) ; le menu réécrit ces lignes et garde les
 
 ![Sélecteur de disquette](images/oric_menu_disque.png)
 
+### Profils
+
+![Démarrer sur…](images/oric_menu_profils.png)
+
+Comme au Telestrat, un **profil** regroupe une machine et ses supports ;
+l'entrée « Profil » du panneau ouvre la page « Démarrer sur… » (le profil
+appliqué est marqué, l'Oric redémarre) :
+
+- **intégrés** : Oric Atmos (BASIC 1.1), Atmos + Microdisc (Sedoric), Atmos +
+  Jasmin (FT-DOS), Pravetz 8D (Disk II) ; un profil dont la ROM d'interface
+  manque n'est pas proposé ;
+- **de la clé** (trois au plus), dans `ORIC.CFG` :
+  `profil=Libellé;fdc=…;rom=…;a=…;b=…;c=…;d=…;tape=…`. `rom=` charge une ROM
+  BASIC de 16 Ko depuis la clé : BASIC 1.0 de l'Oric-1, ROM d'origine du Nova 64…
+  (aucune ROM n'est ajoutée au firmware) ; les lecteurs et la cassette non cités
+  sont vidés.
+
+```
+profil=Oric-1;rom=BASIC10.ROM
+profil=Nova 64;rom=NOVA64.ROM;fdc=microdisc;a=SEDORIC.DSK
+demarrage=choix
+```
+
+`demarrage=choix` ouvre la page « Démarrer sur… » dès le montage de la clé ;
+`demarrage=Libellé` (ou `atmos`, `microdisc`, `jasmin`, `pravetz`) applique
+directement un profil. Le Nova 64 est un clone yougoslave sous licence de
+l'Oric Atmos (Avtotehna, Ljubljana) : il se traite comme un Atmos, avec sa ROM
+d'origine sur la clé si on la veut.
+
+Essai sur la carte : page « Démarrer sur… » (4 profils intégrés), passage au
+profil « Atmos + Jasmin », profil affiché. Les profils de la clé et `rom=` sont
+couverts par les tests (`tests/oric/test_oric_menu.c`), pas encore essayés sur la
+carte.
+
 Code : `src/osd/osd.h` (surface, rendu en indices de palette et en plans de 1 bit,
 grille 100 × 30 sur le Neo6502 en 800 × 480, 120 × 34 en 960 × 544),
 `src/osd/osd_font.h` (police du Telestrat : unscii-8 de Viznut, domaine public, et
