@@ -93,6 +93,11 @@ le dit dans un ADR.
 - **Le socle a un responsable** : la session reload-emulator. Un correctif trouvé
   ailleurs est d'abord signalé (SendMessage), puis fait dans le socle ; les
   projets le reprennent en suivant le socle, pas en recopiant.
+- **Avant tout commit qui touche le socle** (`platforms/rp2040/src`, `src/`) :
+  `tools/socle_consommateurs.sh` compile le NES et le Telestrat contre lui
+  (leçon du 2026-09-30 : une inclusion ajoutée à `hid_app.c` a cassé le NES, qui
+  n'a pas `src/` dans ses chemins ; les sources du socle incluent donc par chemin
+  relatif).
 - Chaque projet note le commit du socle qu'il utilise ; le socle garde une
   interface stable, annoncée avant tout changement (comme `harte.c`).
 - Tout écart aux règles de la section 3 fait l'objet d'un ADR dans le projet.
@@ -106,7 +111,7 @@ le dit dans un ADR.
 | 3 | Extraire `neo_platform.c` et `neo_video.c` (boucle, horloge, DVI) des `main` de l'Oric et du BBC | reload |
 | 4 | Moteur de menu commun (Oric et Telestrat), un seul banc SWD | reload + Telestrat |
 | 5 | Le Telestrat et le NES remplacent leurs copies (`hid_app.c`, `usb_msc.c`, pilote de bus) par le socle | Telestrat, NES |
-| 6 | Vic20 et Atari2600 démarrent leur port pour la carte directement sur le socle | Vic20, Atari2600 |
+| 6 | Vic20 et Atari2600 démarrent leur port pour la carte directement sur le socle (Atari2600 d'accord, sous réserve de bmarty ; contraintes dans `~/Neo6502Atari2600/docs/adr/ADR-001-architecture-neo6502.md` : TIA rendu par tronçons ou sur le cœur 1 depuis un journal d'écritures, le bus doit laisser le système voir chaque accès, factices compris, car un accès factice peut changer de banque de cartouche) | Vic20, Atari2600 |
 | 7 | Tangerine : adopter le socle, ou appliquer les règles de la section 3 (ADR) | Tangerine |
 
 ## 7. À décider (bmarty)

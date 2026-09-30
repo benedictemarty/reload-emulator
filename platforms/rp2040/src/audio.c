@@ -9,7 +9,7 @@
 #include "pico/critical_section.h"
 
 #include "audio.h"
-#include "devices/hid_media.h"
+#include "../../../src/devices/hid_media.h"   // Relative: consumers of these sources (RELOAD_DIR) need no include path
 
 #define SAMPLES_BUFFER_SIZE    2048
 #define SAMPLES_CHUNK_SIZE     32

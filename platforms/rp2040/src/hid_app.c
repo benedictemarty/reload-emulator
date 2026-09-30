@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include "tusb.h"
 #include "class/hid/hid.h"
-#include "devices/hid_media.h"
+#include "../../../src/devices/hid_media.h"   // Relative: consumers of these sources (RELOAD_DIR) need no include path
 
 #define GAMEPAD_MAX_DEVICES 2
 
