@@ -451,6 +451,7 @@ void app_init(void) {
     (void)diag_layout[0];   // Kept by the linker for the host tools
     bbc_desc_t desc = bbc_desc();
     bbc_init(&state.bbc, &desc);
+    bbc_set_sample_rate_q8(&state.bbc, audio_pwm_rate_q8(22050));   // The rate the PWM really consumes
     bbc_reset(&state.bbc);
 #ifdef BBC_HAVE_IMAGES
     insert_image(0);   // Flash image until a USB drive shows up

@@ -305,6 +305,9 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc);
 void bbc_discard(bbc_t* sys);
 // Reset a BBC instance (BREAK key)
 void bbc_reset(bbc_t* sys);
+// Sample rate in 1/256 Hz: the rate the audio output really consumes (on the
+// RP2040: audio_pwm_rate_q8), so that no sample is dropped or missing
+void bbc_set_sample_rate_q8(bbc_t* sys, uint32_t rate_q8);
 // Tick BBC instance once (one 2 MHz CPU cycle)
 void bbc_tick(bbc_t* sys);
 // Tick BBC instance for a given number of microseconds, return number of executed ticks
@@ -487,6 +490,11 @@ void bbc_init(bbc_t* sys, const bbc_desc_t* desc) {
 void bbc_discard(bbc_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     sys->valid = false;
+}
+
+void bbc_set_sample_rate_q8(bbc_t* sys, uint32_t rate_q8) {
+    CHIPS_ASSERT(sys && rate_q8 > 0);
+    sys->sn.sample_period = (int32_t)(((int64_t)BBC_FREQUENCY << 16) / rate_q8);
 }
 
 void bbc_reset(bbc_t* sys) {

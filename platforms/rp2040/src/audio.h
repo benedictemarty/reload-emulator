@@ -15,6 +15,12 @@ extern "C" {
 #endif
 
 void audio_init(uint8_t audio_pin, uint16_t sample_freq);
+// Sample rate the PWM really consumes for audio_init(pin, sample_freq), in
+// 1/256 Hz (the 4-bit fractional divider cannot give sample_freq exactly: up to
+// 0.2 % off at 22050 Hz). A system must produce at this rate, or the buffer
+// fills up and samples are dropped (crackles). Needs only the system clock:
+// may be called before audio_init.
+uint32_t audio_pwm_rate_q8(uint16_t sample_freq);
 void audio_push_sample(const uint8_t sample);
 
 // Output volume (every system; also used by ~/Neo6502TeleStrat: keep these

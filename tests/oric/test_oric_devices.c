@@ -830,7 +830,7 @@ static void bus_write(uint16_t addr, uint8_t v) {
 static void printer_cb(uint8_t c, void* user) { *(int*)user = c; }
 
 // PSG mix and sample clock: integer mix without overflow, exactly sample_rate
-// samples per emulated second
+// samples per emulated second (also a fractional rate, in 1/256 Hz)
 static uint32_t audio_samples;
 static uint8_t audio_max;
 static void audio_cb(const uint8_t sample, void* user_data) {
@@ -873,6 +873,13 @@ static void test_audio(void) {
         for (uint32_t i = 0; i < ORIC_FREQUENCY; i++) oric_tick(&sys);   // One emulated second
         CHECK(audio_samples == rates[r]);
     }
+    // Fractional rate (the PWM of the RP2040 at 345 MHz: 22092.7265625 Hz): over
+    // 10 emulated seconds, 220927 samples (floor of 10 x the rate), none drifting
+    oric_set_sample_rate_q8(&sys, 5655738);   // 22092.7265625 * 256
+    sys.sample_acc = 0;
+    audio_samples = 0;
+    for (uint32_t i = 0; i < 10 * ORIC_FREQUENCY; i++) oric_tick(&sys);
+    CHECK(audio_samples == 220927);
 }
 
 static void test_oric_interfaces(void) {

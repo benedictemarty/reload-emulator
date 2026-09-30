@@ -76,17 +76,34 @@ static void __not_in_flash_func(audio_dma_irq_handler)() {
     dma_channel_acknowledge_irq1(trigger_dma_channel);
 }
 
+// PWM clock divider in 1/16ths for sample_freq: a PWM period is 256 steps
+// (wrap 255) and a sample lasts SAMPLE_REPETITION_RATE periods; rounded to the
+// nearest 1/16 (the fractional divider has 4 bits)
+static uint32_t audio_div16(uint32_t sample_freq) {
+    const uint64_t f = clock_get_hz(clk_sys);
+    const uint64_t den = 256ull * sample_freq * SAMPLE_REPETITION_RATE;
+    uint32_t d16 = (uint32_t)((f * 16 + den / 2) / den);
+    if (d16 < 16) d16 = 16;
+    if (d16 > 255 * 16 + 15) d16 = 255 * 16 + 15;
+    return d16;
+}
+
+uint32_t audio_pwm_rate_q8(uint16_t sample_freq) {
+    const uint64_t f = clock_get_hz(clk_sys);
+    const uint64_t den = (uint64_t)SAMPLE_REPETITION_RATE * audio_div16(sample_freq);
+    return (uint32_t)((f * 16 + den / 2) / den);   // 256 * f / (256 * rep * d16 / 16): in 1/256 Hz
+}
+
 void audio_init(uint8_t audio_pin, uint16_t sample_freq) {
     gpio_set_function(audio_pin, GPIO_FUNC_PWM);
 
     int audio_pin_slice = pwm_gpio_to_slice_num(audio_pin);
     int audio_pin_channel = pwm_gpio_to_channel(audio_pin);
 
-    uint32_t f_clk_sys = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS);
-    float clock_div = ((float)f_clk_sys * 1000.0f) / 255.0f / (float)sample_freq / (float)SAMPLE_REPETITION_RATE - 0.02f;
+    const uint32_t d16 = audio_div16(sample_freq);
 
     pwm_config config = pwm_get_default_config();
-    pwm_config_set_clkdiv(&config, clock_div);
+    pwm_config_set_clkdiv_int_frac(&config, (uint8_t)(d16 >> 4), (uint8_t)(d16 & 15));
     pwm_config_set_wrap(&config, 255);
     pwm_init(audio_pin_slice, &config, true);
 

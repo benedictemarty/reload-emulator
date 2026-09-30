@@ -188,6 +188,7 @@ void app_init(void) {
     (void)diag_layout[0];   // Kept by the linker for the host tools
     oric_desc_t desc = oric_desc();
     oric_init(&state.oric, &desc);
+    oric_set_sample_rate_q8(&state.oric, audio_pwm_rate_q8(22050));   // The rate the PWM really consumes
     oric_menu_init(&menu);
     menu.version = "reload";
     menu.fdc = (int)state.oric.fdc_type;

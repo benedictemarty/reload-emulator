@@ -69,8 +69,11 @@ le dit dans un ADR.
 7. **USB** : TinyUSB 0.21.0 ; `f_mount` hors des rappels TinyUSB ; délai maximal
    par transfert ; `CFG_TUH_ENUMERATION_BUFSIZE` 512 ; tables par emplacement
    (adresse USB − 1), bornées ; toute boucle d'attente sert `tuh_task`.
-8. **Son** : horloge d'échantillons fractionnaire (fréquence exacte), mélange en
-   entiers sans débordement, volume du socle.
+8. **Son** : horloge d'échantillons fractionnaire **à la cadence que le PWM consomme
+   vraiment** (`audio_pwm_rate_q8(fréquence)`, en 1/256 Hz ; le diviseur au 1/16 ne donne
+   pas 22 050 Hz exactement : 22 092,7 Hz à 345 MHz), sinon le tampon déborde ou se vide
+   (craquements, trouvé par le Vic20 le 2026-09-30) ; mélange en entiers sans débordement,
+   volume du socle.
 9. **Démarrage** : la carte démarre sans clé USB (attente bornée) ; Pause = retour
    au firmware Neo6502.
 10. **Sonde** : `~/Neo6502TeleStrat/docs/SONDE_SWD.md` (une session à la fois,

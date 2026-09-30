@@ -84,7 +84,7 @@ extern "C" {
 #endif
 
 // Bump snapshot version when oric_t memory layout changes
-#define ORIC_SNAPSHOT_VERSION (2)   // 2: sample_rate, sample_acc (audio clock)
+#define ORIC_SNAPSHOT_VERSION (3)   // 2: sample_rate, sample_acc (audio clock); 3: sample_rate_q8
 
 #define ORIC_FREQUENCY     (1000000)  // 1 MHz
 #define ORIC_MAX_TAPE_SIZE (1 << 16)  // Max size of tape file in bytes
@@ -152,8 +152,8 @@ typedef struct {
     chips_debug_t debug;
 
     chips_audio_callback_t audio_callback;
-    uint32_t sample_rate;    // Audio samples per second (desc.audio.sample_rate)
-    uint32_t sample_acc;     // Fractional sample clock: + sample_rate per cycle
+    uint32_t sample_rate_q8; // Audio samples per second, in 1/256 Hz (desc.audio.sample_rate, oric_set_sample_rate_q8)
+    uint32_t sample_acc;     // Fractional sample clock: + sample_rate_q8 per cycle, 256 * ORIC_FREQUENCY per sample
 
     uint8_t ram[0xC000];
     uint8_t overlay_ram[0x4000];
@@ -242,6 +242,9 @@ void oric_tape_recorder(oric_t* sys, const oric_tape_rec_out_t* out);
 // Fast loading: patch (or restore) the BASIC 1.1 ROM in RAM and answer $03FE/$03FF;
 // false if the ROM is not BASIC 1.1 (then nothing is patched)
 bool oric_tape_fast(oric_t* sys, bool on);
+// Sample rate in 1/256 Hz: the rate the audio output really consumes (on the
+// RP2040: audio_pwm_rate_q8), so that no sample is dropped or missing
+void oric_set_sample_rate_q8(oric_t* sys, uint32_t rate_q8);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -282,7 +285,7 @@ void oric_init(oric_t* sys, const oric_desc_t* desc) {
     sys->valid = true;
     sys->debug = desc->debug;
     sys->audio_callback = desc->audio.callback;
-    sys->sample_rate = (uint32_t)CHIPS_DEFAULT(desc->audio.sample_rate, 22050);
+    sys->sample_rate_q8 = (uint32_t)CHIPS_DEFAULT(desc->audio.sample_rate, 22050) << 8;
     sys->printer_cb = desc->printer_cb;
     sys->printer_user_data = desc->printer_user_data;
 
@@ -482,6 +485,11 @@ void oric_eject_tape(oric_t* sys) {
 void oric_tape_recorder(oric_t* sys, const oric_tape_rec_out_t* out) {
     CHIPS_ASSERT(sys && sys->valid);
     oric_tape_rec_init(&sys->tape_rec, out);
+}
+
+void oric_set_sample_rate_q8(oric_t* sys, uint32_t rate_q8) {
+    CHIPS_ASSERT(sys && rate_q8 > 0);
+    sys->sample_rate_q8 = rate_q8;
 }
 
 bool oric_tape_fast(oric_t* sys, bool on) {
@@ -753,11 +761,11 @@ static inline __attribute__((always_inline)) void _oric_tick(oric_t* sys) {
             }
         }
 
-        // Exactly sample_rate samples per second of emulated time (fractional clock),
+        // Exactly sample_rate_q8 / 256 samples per second of emulated time (fractional clock),
         // three PSG channels mixed in integers (no overflow when several are loud)
-        sys->sample_acc += 4 * sys->sample_rate;
-        if (sys->sample_acc >= ORIC_FREQUENCY) {
-            sys->sample_acc -= ORIC_FREQUENCY;
+        sys->sample_acc += 4 * sys->sample_rate_q8;
+        if (sys->sample_acc >= 256u * ORIC_FREQUENCY) {
+            sys->sample_acc -= 256u * ORIC_FREQUENCY;
             if (sys->audio_callback.func) {
                 sys->audio_callback.func(ay38910psg_sample_u8(&sys->psg), sys->audio_callback.user_data);
             }
