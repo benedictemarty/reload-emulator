@@ -57,8 +57,11 @@ Corrigé dans `w65c02cpu.h` grâce à ces tests :
 
 Écarts connus (option `-x` des tests CTest) :
 - **WDC `$5C`** : 4 cycles dans les tests (WDC, Rockwell et Synertek), 8 dans le
-  cœur (NOP de 8 cycles décrit par d'autres documents). Lequel est juste sur le
-  W65C02S : non établi, le cœur n'est pas changé.
+  cœur. **Mesuré sur le W65C02S de la carte Neo6502 le 2026-09-30 : 8 cycles.** La
+  VIA de l'Oric (émulée, un tic par cycle de bus du vrai 65C02) chronomètre une
+  routine avec K instructions `5C 00 00` : K = 1, 10, 20 → 24, 96, 176 cycles, soit
+  8 cycles par `$5C` (pente) ; le cœur est juste, les SingleStepTests ne le sont pas
+  pour ce processeur. L'exclusion `-x 5c` reste.
 - **NMOS JAM** (`$02`, `$12`… `$F2`) : le processeur se bloque, ce qui ne se
   teste pas par instruction.
 - **NMOS SHA / TAS / SHY / SHX** (`$93`, `$9B`, `$9C`, `$9E`, `$9F`) : opcodes non

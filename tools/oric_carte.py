@@ -81,12 +81,19 @@ def taper(texte):
         else:
             # hid_app.c donne les minuscules sans SHIFT ; oric.c inverse la casse
             codes.append(ord(jeton.lower()) if jeton.isalpha() else ord(jeton))
-    tail = mot(lire(s["diag_keyq_tail"], 4), 0)
-    cmds = []
-    for i, c in enumerate(codes):
-        cmds.append(f"mwh 0x{s['diag_keyq'] + 2 * ((tail + i) & 255):08x} 0x{c:04x}")
-    cmds.append(f"mww 0x{s['diag_keyq_tail']:08x} {tail + len(codes)}")
-    openocd(*cmds)
+    # La file du firmware (diag_keyq) a 256 places : au-delà, les premières touches
+    # étaient écrasées ; envoi par paquets, en attendant qu'elle se vide
+    PLACES = 256
+    while codes:
+        head, tail = lire_mots([s["diag_keyq_head"], s["diag_keyq_tail"]])
+        libre = PLACES - (tail - head)
+        if libre < 32:
+            time.sleep(0.5)
+            continue
+        paquet, codes = codes[:libre - 16], codes[libre - 16:]
+        cmds = [f"mwh 0x{s['diag_keyq'] + 2 * ((tail + i) & 255):08x} 0x{c:04x}" for i, c in enumerate(paquet)]
+        cmds.append(f"mww 0x{s['diag_keyq_tail']:08x} {tail + len(paquet)}")
+        openocd(*cmds)
 
 
 def panneau():
