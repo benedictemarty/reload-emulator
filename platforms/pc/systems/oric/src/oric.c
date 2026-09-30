@@ -53,7 +53,9 @@
 #include "chips/kbd.h"
 #include "chips/mem.h"
 #include "chips/clk.h"
-#include "devices/oric_td.h"
+#include "devices/oric_tape.h"
+#include "devices/oric_tape_rec.h"
+#include "devices/oric_tape_turbo.h"
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/oric_fdc_rom.h"
@@ -345,8 +347,7 @@ void app_frame(void) {
     const uint64_t emu_start_time = stm_now();
     type_service();
     // Tape loading: several frames of emulation per frame while the tape motor runs
-    int runs = (tape_turbo && state.oric.td.valid && oric_td_is_tape_inserted(&state.oric.td) &&
-                oric_td_is_motor_on(&state.oric.td)) ? 16 : 1;
+    int runs = (tape_turbo && state.oric.tape.inserted && state.oric.tape.motor) ? 16 : 1;
     state.ticks = 0;
     for (int i = 0; i < runs; i++) {
         state.ticks += oric_exec(&state.oric, state.frame_time_us);
@@ -461,10 +462,8 @@ static void kbd_raw_key_down(int code) {
                 }
             } else {
                 index -= num_nib_images;
-                if (index < CHIPS_ARRAY_SIZE(oric_wave_images)) {
-                    if (sys->td.valid) {
-                        oric_td_insert_tape(&sys->td, oric_wave_images[index]);
-                    }
+                if (index < CHIPS_ARRAY_SIZE(oric_tap_images)) {
+                    oric_insert_tap(sys, oric_tap_images[index], oric_tap_image_sizes[index]);
                 }
             }
             break;

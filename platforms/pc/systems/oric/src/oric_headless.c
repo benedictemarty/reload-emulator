@@ -9,7 +9,8 @@
 //   -0 FILE   insert FILE (MFM_DISK .dsk) in drive 0 (-1, -2, -3 for the other drives)
 //   -W FILE   write the (possibly modified) drive 0 image to FILE at the end
 //   -T FILE   insert FILE (.tap) in the tape drive
-//   -V FILE   insert FILE (WAVE image made by tools/tap2wave) in the tape drive
+//   -F        fast tape loading (BASIC 1.1 patched, devices/oric_tape_turbo.h)
+//   -R DIR    CSAVE: write the recorded files as DIR/NAME.TAP (devices/oric_tape_rec.h)
 //   -t TEXT   type TEXT after -w frames (default 60; \n = RETURN, ~ = pause of 50 frames)
 //   -w N      frames before typing
 //   -h N      hold each key N frames, then release it N frames (default 3)
@@ -73,7 +74,9 @@ static uint8_t* oric_nib_images[1];
 #include "chips/kbd.h"
 #include "chips/mem.h"
 #include "chips/clk.h"
-#include "devices/oric_td.h"
+#include "devices/oric_tape.h"
+#include "devices/oric_tape_rec.h"
+#include "devices/oric_tape_turbo.h"
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/oric_fdc_rom.h"
@@ -138,12 +141,36 @@ static void write_ppm(const char* path) {
     fclose(f);
 }
 
+// CSAVE (-R DIR): one DIR/NAME.TAP file per recording
+static const char* rec_path_dir;
+static FILE* rec_fp;
+static bool rec_open(void* ctx, const char* name) {
+    (void)ctx;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", rec_path_dir, name);
+    if (rec_fp) fclose(rec_fp);
+    rec_fp = fopen(path, "wb");
+    if (rec_fp) printf("tape: recording %s\n", name);
+    return rec_fp != 0;
+}
+static void rec_write(void* ctx, const uint8_t* data, uint32_t len) {
+    (void)ctx;
+    if (rec_fp) fwrite(data, 1, len, rec_fp);
+}
+static void rec_close(void* ctx) {
+    (void)ctx;
+    if (rec_fp) fclose(rec_fp);
+    rec_fp = 0;
+}
+static const oric_tape_rec_out_t rec_out = {rec_open, rec_write, rec_close, 0};
+
 int main(int argc, char** argv) {
     int frames = 100, wait_frames = 60, hold_frames = 3;
     const char* fdc_name = "none";
     const char* disk_file[4] = {0};
     const char* tape_file = 0;
-    const char* wave_file = 0;
+    const char* rec_dir = 0;
+    bool fast = false;
     const char* text = 0;
     const char* ppm_file = 0;
     const char* ram_file = 0;
@@ -158,7 +185,8 @@ int main(int argc, char** argv) {
         else if (a[0] == '-' && a[1] >= '0' && a[1] <= '3' && !a[2] && v) { disk_file[a[1] - '0'] = v; i++; }
         else if (!strcmp(a, "-W") && v) { write_file = v; i++; }
         else if (!strcmp(a, "-T") && v) { tape_file = v; i++; }
-        else if (!strcmp(a, "-V") && v) { wave_file = v; i++; }
+        else if (!strcmp(a, "-R") && v) { rec_dir = v; i++; }
+        else if (!strcmp(a, "-F")) fast = true;
         else if (!strcmp(a, "-t") && v) { text = v; i++; }
         else if (!strcmp(a, "-w") && v) { wait_frames = atoi(v); i++; }
         else if (!strcmp(a, "-h") && v) { hold_frames = atoi(v); i++; }
@@ -217,11 +245,12 @@ int main(int argc, char** argv) {
         tap = load_file(tape_file, &tap_size);
         oric_insert_tap(&oric, tap, tap_size);
     }
-    uint32_t wave_size = 0;
-    uint8_t* wave = 0;
-    if (wave_file) {
-        wave = load_file(wave_file, &wave_size);
-        oric_td_insert_tape(&oric.td, wave);
+    if (fast && !oric_tape_fast(&oric, true)) {
+        fprintf(stderr, "oric_headless: fast tape loading needs the BASIC 1.1 ROM\n");
+    }
+    if (rec_dir) {
+        rec_path_dir = rec_dir;
+        oric_tape_recorder(&oric, &rec_out);
     }
 
     // Keys to type (Oric key codes: letters unshifted are capitals)
@@ -260,7 +289,7 @@ int main(int argc, char** argv) {
         static const char* names[] = {"none", "pravetz", "microdisc", "jasmin"};
         printf("pc=%04X md_ctrl=%02X irq=%d iflag=%d fdc=%s romdis=%d diskrom=%d olay=%d jasmin_rom=%d track=%d head0=%d status=%02X tape_pos=%u via_ier=%02X via_ifr=%02X acr=%02X t1_latch=%04X\n",
                oric.cpu.PC, oric.md_ctrl, oric.cpu.irq, oric.cpu.iflag, names[oric.fdc_type], oric.romdis, oric.diskrom, oric.jasmin_olay, oric.jasmin_rom_on, oric.wd.track,
-               oric.wd.head[0], oric.wd.status, (unsigned)oric.td.tap_pos, oric.via.intr.ier, oric.via.intr.ifr, oric.via.acr,
+               oric.wd.head[0], oric.wd.status, (unsigned)oric.tape.pos, oric.via.intr.ier, oric.via.intr.ifr, oric.via.acr,
                oric.via.t1.latch);
     }
     if (show_printer) {

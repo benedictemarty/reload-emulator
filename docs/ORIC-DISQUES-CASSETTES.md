@@ -12,7 +12,7 @@ référence (Oricutron `~/oricutron`, Phosphoric `~/Oric1`) ou dans un fichier r
 | Disquette | MFM_DISK `.dsk` | Jasmin (FT-DOS) | FT-DOS démarre (« BOOTING.. TDOS », BASIC utilisable, gestionnaire `!` installé) ; commandes FT-DOS **non validées** (voir limites) [M] |
 | Disquette | NIB (Disk II) | Pravetz 8D | inchangé |
 | Cassette | `.tap` | lecteur de cassette | `CLOAD""` d'un programme BASIC et de 8 000 octets à `$A000` [M] |
-| Cassette | WAVE (`tools/tap2wave`) | lecteur de cassette | inchangé (ne charge pas avec la ROM 1.1, voir limites) |
+| Cassette | `CSAVE` → `.tap` | enregistreur (PB7) | aller-retour `CSAVE` / `CLOAD` [M] |
 
 ## Utilisation (PC)
 
@@ -201,23 +201,30 @@ démarre, puis le bouton BOOT est simulé (ROM masquée + reset CPU et VIA) quan
 information de cycle d'opcode (65C02 réel du Neo6502), le bouton est simulé après
 3,5 s (`ORIC_JASMIN_BOOT_TICKS`).
 
-### Cassette `.tap` (`src/devices/oric_td.h`)
+### Cassette `.tap` (`src/devices/oric_tape.h`, commun avec le Telestrat)
 
-Signal d'Oricutron (`tape.c`, `tape.h`) [C], en unités de 208 µs : bit 1 = 208 µs
-haut + 208 µs bas, bit 0 = 416 + 416 ; octet de 14 bits (1, départ 0, 8 bits de
-données, parité, 1, 1, 1). Au démarrage du moteur sur une amorce, 80 octets `$16` de
-plus, puis une pause de 6 unités après l'en-tête et le nom. La ROM mesure l'intervalle
-entre deux fronts montants de CB1 avec le timer 2 (seuil `$FE` sur T2C-H, routine
-`$E71C` de la ROM 1.1) [C] : 413 cycles donnent un 1, 836 un 0 [M].
+Depuis la fusion Oric / Telestrat (docs/FUSION-ORIC-TELESTRAT.md), l'Oric utilise le
+lecteur du Telestrat, exact au cycle : bit 1 = une alternance haute puis basse de
+208 cycles, bit 0 = 416 + 416 ; octet de 14 bits (1, départ 0, 8 bits de données,
+parité, 1, 1, 1) ; au démarrage du moteur sur une amorce, 80 octets `$16` de plus ;
+après l'en-tête et le nom, un silence d'environ 1281 cycles ; en fin de bande, deux
+alternances. Le signal arrive sur CB1 ; le moteur suit PB6 (sortie seulement).
+La ROM mesure l'intervalle entre deux fronts montants de CB1 avec le timer 2 (seuil
+`$FE` sur T2C-H, routine `$E71C` de la ROM 1.1) [C] : 413 cycles donnent un 1, 836 un 0 [M].
 
-Règles propres à reload :
-
-- quand le moteur s'arrête avant la fin du fichier en cours, la bande revient à sa
-  position de démarrage du moteur (l'utilisateur n'a pas encore « appuyé sur PLAY ») ;
-- un dernier fichier plus court que ce qu'annonce son en-tête (adresse de fin comptée
-  exclusive par certains outils, ex. `spell.tap`) est complété par des `$00` ;
-- 4 bits à 1 suivent le dernier octet ;
-- `.tap` lu en mémoire ou en flux (tampon de 256 octets).
+- moteur arrêté au milieu d'un octet : la lecture reprend à l'octet suivant ;
+- un dernier fichier plus court que ce qu'annonce son en-tête (256 octets au plus,
+  ex. `spell.tap`) est complété par des `$00` (ajout de reload au lecteur commun) ;
+- `.tap` lu en mémoire (`oric_insert_tap`, images intégrées `oric_tap_images`) ou en
+  flux (`oric_insert_tape`, tampon de 256 octets) ; rembobiné au RESET ;
+- **`CSAVE`** (`oric_tape_rec.h`) : PB7 (sortie du timer 1) écouté tant que le moteur
+  tourne, un fichier `NOM.TAP` par enregistrement (sur la clé USB pour la carte ;
+  `oric_headless -R DOSSIER`) ;
+- **chargement rapide** (`oric_tape_turbo.h`, `oric_tape_fast`) : deux routines de la
+  ROM BASIC 1.1 patchées en RAM, qui lisent les octets en `$03FE` / `$03FF` ; ni avec
+  Jasmin ni avec Pravetz (ces adresses leur appartiennent) ; `oric_headless -F`.
+- Les images WAVE (`tools/tap2wave`) ont été retirées : les `.tap` sont intégrés
+  directement (`bin2hdr`), plus petits.
 
 ## Corrections apportées au passage
 
@@ -275,11 +282,6 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
   Oricutron sur une vraie session.
 - Sous Sedoric, la première touche tapée après le démarrage est perdue, quel que
   soit le délai (pas sous BASIC seul) ; non comparé à une référence.
-- Les images WAVE de l'ancien `tools/tap2wave` ne se chargeaient pas avec la ROM 1.1
-  (déjà sur la dernière version de l'auteur d'origine, `8e2fcff` ; bit 0 de
-  208 + 416 µs, pas d'amorce allongée). L'outil échantillonne désormais le générateur
-  de `oric_td.h` (même signal que les `.tap`) ; `CLOAD` d'une image WAVE vérifié par
-  le test d'intégration.
 - La version PC n'a pas le panneau (options de ligne de commande et
   glisser-déposer à la place).
 - Démarrage d'une disquette Sedoric ou FT-DOS depuis la clé : pas encore essayé sur

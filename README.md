@@ -176,8 +176,7 @@ Building headers from TAP file (Oric):
 
 ```bash
 # Pulsoids-UK.TAP
-tap2wave -i Pulsoids-UK.TAP -o Pulsoids-UK.WAVE
-bin2hdr -i Pulsoids-UK.WAVE -o pulsoids.h -a pulsoids_wave_image
+bin2hdr -i Pulsoids-UK.TAP -o pulsoids.h -a pulsoids_tap_image
 ```
 
 Example oric_images.h file for Oric emulator:
@@ -192,8 +191,11 @@ uint8_t* oric_nib_images[] = {
     oric_games_nib_image,
 };
 
-uint8_t* oric_wave_images[] = {
-    pulsoids_wave_image,
+const uint8_t* oric_tap_images[] = {
+    pulsoids_tap_image,
+};
+uint32_t oric_tap_image_sizes[] = {
+    sizeof(pulsoids_tap_image),
 };
 ```
 

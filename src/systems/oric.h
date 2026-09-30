@@ -29,7 +29,7 @@
 // - chips/clk.h
 // - devices/disk2_fdd.h, devices/disk2_fdc.h (Pravetz 8D disk interface)
 // - devices/oric_dsk.h, devices/wd1793.h (Microdisc and Jasmin interfaces)
-// - devices/oric_td.h
+// - devices/oric_tape.h, devices/oric_tape_rec.h, devices/oric_tape_turbo.h
 //
 // ## The Oric
 //
@@ -169,7 +169,13 @@ typedef struct {
 
     uint16_t extension;
 
-    oric_td_t td;  // Tape drive
+    // Tape (devices/oric_tape.h, shared with the Telestrat): signal on CB1, motor on PB6,
+    // CSAVE from PB7 (oric_tape_rec.h), fast loading by the patched ROM (oric_tape_turbo.h)
+    bool td_enabled;
+    oric_tape_t tape;
+    uint32_t tape_due;           // system_ticks of the next edge of the signal
+    oric_tape_rec_t tape_rec;
+    bool tape_turbo;             // $03FE / $03FF answer (not with Jasmin or Pravetz)
 
     disk2_fdc_t fdc;  // Disk II floppy disk controller
 
@@ -228,6 +234,14 @@ oric_fdc_type_t oric_dsk_interface(oric_t* sys, oric_dsk_t* dsk);
 bool oric_insert_dsk(oric_t* sys, int drive, uint8_t* data, uint32_t size, bool write_protected);
 // Insert a .tap image held in memory (the tape drive must be enabled)
 bool oric_insert_tap(oric_t* sys, const uint8_t* tap, uint32_t size);
+// Insert a streamed .tap image (read by `read`), rewound; len 0: eject
+bool oric_insert_tape(oric_t* sys, uint32_t len, oric_tape_read_t read, void* ctx);
+void oric_eject_tape(oric_t* sys);
+// CSAVE to .tap files (out: open/write/close callbacks; NULL: off)
+void oric_tape_recorder(oric_t* sys, const oric_tape_rec_out_t* out);
+// Fast loading: patch (or restore) the BASIC 1.1 ROM in RAM and answer $03FE/$03FF;
+// false if the ROM is not BASIC 1.1 (then nothing is patched)
+bool oric_tape_fast(oric_t* sys, bool on);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -314,9 +328,9 @@ void oric_init(oric_t* sys, const oric_desc_t* desc) {
     sys->extension = 0;
 
     // Optionally setup tape drive
-    if (desc->td_enabled) {
-        oric_td_init(&sys->td);
-    }
+    sys->td_enabled = desc->td_enabled;
+    oric_tape_init(&sys->tape);
+    oric_tape_rec_init(&sys->tape_rec, 0);
 
     // Optionally setup floppy disk controller
     if (sys->fdc_type == ORIC_FDC_PRAVETZ) {
@@ -438,10 +452,43 @@ bool oric_insert_dsk(oric_t* sys, int drive, uint8_t* data, uint32_t size, bool 
 
 bool oric_insert_tap(oric_t* sys, const uint8_t* tap, uint32_t size) {
     CHIPS_ASSERT(sys && sys->valid);
-    if (!sys->td.valid) {
+    if (!sys->td_enabled || !tap || size == 0) {
         return false;
     }
-    return oric_td_insert_tap(&sys->td, tap, size);
+    oric_tape_insert_mem(&sys->tape, tap, size);
+    sys->tape_due = sys->system_ticks;
+    return true;
+}
+
+bool oric_insert_tape(oric_t* sys, uint32_t len, oric_tape_read_t read, void* ctx) {
+    CHIPS_ASSERT(sys && sys->valid);
+    if (!sys->td_enabled) {
+        return false;
+    }
+    if (len && read) {
+        oric_tape_insert(&sys->tape, len, read, ctx);
+    } else {
+        oric_tape_eject(&sys->tape);
+    }
+    sys->tape_due = sys->system_ticks;
+    return sys->tape.inserted;
+}
+
+void oric_eject_tape(oric_t* sys) {
+    CHIPS_ASSERT(sys && sys->valid);
+    oric_tape_eject(&sys->tape);
+}
+
+void oric_tape_recorder(oric_t* sys, const oric_tape_rec_out_t* out) {
+    CHIPS_ASSERT(sys && sys->valid);
+    oric_tape_rec_init(&sys->tape_rec, out);
+}
+
+bool oric_tape_fast(oric_t* sys, bool on) {
+    CHIPS_ASSERT(sys && sys->valid);
+    const bool basic11 = sys->rom && oric_turbo_apply(sys->rom, on);
+    sys->tape_turbo = on && basic11;
+    return basic11;
 }
 
 void oric_discard(oric_t* sys) {
@@ -450,9 +497,7 @@ void oric_discard(oric_t* sys) {
         disk2_fdc_discard(&sys->fdc);
     }
     wd1793_flush(&sys->wd);
-    if (sys->td.valid) {
-        oric_td_discard(&sys->td);
-    }
+    oric_tape_rec_motor_off(&sys->tape_rec);   // Closes a file being written
     sys->valid = false;
 }
 
@@ -472,9 +517,11 @@ void oric_reset(oric_t* sys) {
     if (sys->fdc.valid) {
         disk2_fdc_reset(&sys->fdc);
     }
-    if (sys->td.valid) {
-        oric_td_reset(&sys->td);
-    }
+    // The tape is rewound (the machine starts again), the motor stopped
+    oric_tape_rewind(&sys->tape);
+    oric_tape_set_motor(&sys->tape, false);
+    oric_tape_rec_motor_off(&sys->tape_rec);
+    sys->tape_due = sys->system_ticks;
     _oric_fdc_reset(sys);
     MOS6502CPU_RESET(&sys->cpu);
 }
@@ -556,10 +603,23 @@ static void _oric_jasmin_press_boot(oric_t* sys) {
     MOS6502CPU_RESET(&sys->cpu);
 }
 
+// Fast loading registers (oric_tape_turbo.h): $03FE next byte, $03FF synchro
+static void _oric_tape_turbo_read(oric_t* sys, uint16_t addr) {
+    uint8_t data;
+    if ((addr & 0xFF) == ORIC_TURBO_BYTE_REG) {
+        data = oric_tape_turbo_byte(&sys->tape);
+    } else {
+        data = oric_tape_turbo_sync(&sys->tape) ? 0x00 : 0x80;
+    }
+    MOS6502CPU_SET_DATA(&sys->cpu, data);
+}
+
 static ORIC_HOT void _oric_mem_rw(oric_t* sys, uint16_t addr, bool rw) {
     if ((addr >= 0x0300) && (addr <= 0x03FF)) {
         // Memory-mapped IO area
-        if (sys->fdc_type == ORIC_FDC_MICRODISC && addr >= 0x0310) {
+        if (sys->tape_turbo && rw && addr >= 0x03FE && sys->fdc_type != ORIC_FDC_JASMIN && !sys->fdc.valid) {
+            _oric_tape_turbo_read(sys, addr);
+        } else if (sys->fdc_type == ORIC_FDC_MICRODISC && addr >= 0x0310) {
             _oric_microdisc_rw(sys, addr, rw);
         } else if (sys->fdc_type == ORIC_FDC_JASMIN && addr >= 0x0310) {
             _oric_jasmin_rw(sys, addr, rw);
@@ -644,7 +704,31 @@ static ORIC_HOT void _oric_mem_rw(oric_t* sys, uint16_t addr, bool rw) {
     }
 }
 
-static uint8_t _last_motor_state = 0;
+// Tape: motor on PB6 (output only: at a reset, PB6 as an input reads 1 and must not start
+// the motor), edges of the signal at their cycle (4-cycle steps), CSAVE from PB7
+static inline void _oric_update_tape(oric_t* sys, uint8_t pb_out) {
+    oric_tape_t* tp = &sys->tape;
+    const uint32_t t = sys->system_ticks;
+    const bool motor = (pb_out & 0x40) != 0;
+    if (motor != tp->motor) {
+        oric_tape_set_motor(tp, motor);
+        sys->tape_due = t + (uint32_t)oric_tape_next(tp);
+        if (!motor) oric_tape_rec_motor_off(&sys->tape_rec);
+    }
+    if (motor && sys->tape_rec.enabled) {
+        oric_tape_rec_level(&sys->tape_rec, (mos6522via_get_pb(&sys->via) >> 7) & 1, t);
+    }
+    if (!tp->inserted) return;
+    while (oric_tape_running(tp) && (int32_t)(t - sys->tape_due) >= 0) {
+        oric_tape_toggle(tp);
+        sys->tape_due += (uint32_t)oric_tape_next(tp);
+    }
+    // CB1 only when it changes (or an edge is pending): keeps the VIA's lazy mode
+    const bool cb1 = tp->level != 0;
+    if (cb1 != sys->via.pb.c1_in || sys->via.pb.c1_triggered) {
+        mos6522via_set_cb1(&sys->via, cb1);
+    }
+}
 
 // One cycle. The work done every 4 cycles (system_ticks multiple of 4) is grouped
 // in the `quad` blocks: the PSG, Disk II and VIA periods are multiples of 4, and
@@ -757,31 +841,8 @@ static inline __attribute__((always_inline)) void _oric_tick(oric_t* sys) {
         }
         sys->printer_strobe = pb_out;
 
-        if (sys->td.valid) {
-            // Tape relay: PB6 when driven as an output (as in Oricutron)
-            uint8_t motor_state = pb_out & 0x40;
-            if (motor_state != _last_motor_state) {
-                if (motor_state) {
-                    sys->td.port |= ORIC_TD_PORT_MOTOR;
-                    printf("oric: motor on\n");
-                } else {
-                    sys->td.port &= ~ORIC_TD_PORT_MOTOR;
-                    printf("oric: motor off\n");
-                }
-                _last_motor_state = motor_state;
-            }
-
-            static uint8_t t2 = 0;
-            t2++;
-            if (t2 == 52) {
-                oric_td_tick(&sys->td);
-                t2 = 0;
-            }
-            // Only when it changes (or an edge is pending): same reason as PB above
-            const bool cb1 = (sys->td.port & ORIC_TD_PORT_READ) != 0;
-            if (cb1 != sys->via.pb.c1_in || sys->via.pb.c1_triggered) {
-                mos6522via_set_cb1(&sys->via, cb1);
-            }
+        if (sys->tape.inserted || sys->tape_rec.enabled || ((pb_out & 0x40) != 0) != sys->tape.motor) {
+            _oric_update_tape(sys, pb_out);
         }
     }
 
@@ -1006,7 +1067,6 @@ uint32_t oric_save_snapshot(oric_t* sys, oric_t* dst) {
     chips_audio_callback_snapshot_onsave(&dst->audio_callback);
     // m6502_snapshot_onsave(&dst->cpu);
     ay38910psg_snapshot_onsave(&dst->psg);
-    oric_td_snapshot_onsave(&dst->td);
     disk2_fdc_snapshot_onsave(&dst->fdc);
     mem_snapshot_onsave(&dst->mem, sys);
     return ORIC_SNAPSHOT_VERSION;
@@ -1023,7 +1083,10 @@ bool oric_load_snapshot(oric_t* sys, uint32_t version, oric_t* src) {
     chips_audio_callback_snapshot_onload(&im.audio_callback, &sys->audio_callback);
     // m6502_snapshot_onload(&im.cpu, &sys->cpu);
     ay38910psg_snapshot_onload(&im.psg, &sys->psg);
-    oric_td_snapshot_onload(&im.td, &sys->td);
+    // The tape stays that of the running machine (read callback, file being written)
+    im.tape = sys->tape;
+    im.tape_rec = sys->tape_rec;
+    im.tape_due = sys->tape_due;
     disk2_fdc_snapshot_onload(&im.fdc, &sys->fdc);
     // Disks stay those of the running machine
     memcpy(im.wd.disk, sys->wd.disk, sizeof(im.wd.disk));

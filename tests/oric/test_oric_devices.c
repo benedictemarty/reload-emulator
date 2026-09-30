@@ -4,7 +4,7 @@
 //   - devices/oric_dsk.h: MFM_DISK header, track layout, sector scan, CRC;
 //   - devices/wd1793.h: write track (format), read/write sector, read address,
 //     type I commands and status, multiple sectors, errors, streamed images;
-//   - devices/oric_td.h: .tap signal (decoded back into bytes), leader and
+//   - devices/oric_tape.h: .tap signal (decoded back into bytes), leader and
 //     pause, motor rules, padding, streamed reading;
 //   - chips/mos6522via.h: IRQ released when the IER disables its source;
 //   - systems/oric.h: Microdisc and Jasmin registers and memory maps,
@@ -61,7 +61,9 @@ static uint8_t* oric_nib_images[1];
 #include "chips/kbd.h"
 #include "chips/mem.h"
 #include "chips/clk.h"
-#include "devices/oric_td.h"
+#include "devices/oric_tape.h"
+#include "devices/oric_tape_rec.h"
+#include "devices/oric_tape_turbo.h"
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/oric_dsk.h"
@@ -597,12 +599,25 @@ static void rx_level(rx_t* rx, int level) {
     rx->last_level = level;
 }
 
-static oric_td_t td;
+// Tape (devices/oric_tape.h): edges at their cycle, sampled every 208 cycles (one unit)
+static oric_tape_t tp;
+static uint32_t tnow, tdue;
+
+static void tape_motor(bool on) {
+    oric_tape_set_motor(&tp, on);
+    tdue = tnow + (uint32_t)oric_tape_next(&tp);
+}
 
 static void tape_run(rx_t* rx, int units) {
     for (int i = 0; i < units; i++) {
-        oric_td_tick(&td);
-        if (rx) rx_level(rx, (td.port & ORIC_TD_PORT_READ) ? 1 : 0);
+        const uint32_t end = tnow + 208;
+        while (oric_tape_running(&tp) && (int32_t)(end - tdue) >= 0) {
+            tnow = tdue;
+            oric_tape_toggle(&tp);
+            tdue += (uint32_t)oric_tape_next(&tp);
+        }
+        tnow = end;
+        if (rx) rx_level(rx, tp.level);
     }
 }
 
@@ -629,95 +644,85 @@ static bool contains(const rx_t* rx, const uint8_t* seq, int len) {
 
 static void test_tape(void) {
     static rx_t rx;
-    memset(&td, 0, sizeof(td));
-    oric_td_init(&td);
-    CHECK(oric_td_insert_tap(&td, tap, sizeof(tap)));
-    CHECK(oric_td_is_tape_inserted(&td));
+    oric_tape_init(&tp);
+    tnow = tdue = 0;
+    oric_tape_insert_mem(&tp, tap, sizeof(tap));
+    CHECK(tp.inserted && !oric_tape_running(&tp));
     // Motor off: the tape does not move
     tape_run(0, 100);
-    CHECK(td.tap_pos == 0);
+    CHECK(tp.pos == 0);
     // Motor on at the leader: 80 extra 0x16, then the first file and a pause after its name
     memset(&rx, 0, sizeof(rx));
-    td.port |= ORIC_TD_PORT_MOTOR;
-    for (int i = 0; i < 20000 && !(td.tap_pos == 22 && td.tap_bit == 14 && td.tap_units == 0 && !td.tap_level); i++) {
-        tape_run(&rx, 1);
-    }
-    tape_run(&rx, 2);   // Rising edge after the last bit
+    tape_motor(true);
+    for (int i = 0; i < 20000 && tp.pos < 22; i++) tape_run(&rx, 1);
+    tape_run(&rx, 30);   // Last byte of the file, and the start of the next leader
     CHECK(rx.parity_errors == 0);
     CHECK(count_bytes(&rx, 0x16) >= 83);
     const uint8_t file1[] = {0x24, 0x00, 0x00, 0x80, 0x00, 0x05, 0x04, 0x05, 0x00, 0x00, 'O', 'N', 'E', 0x00,
                              0x11, 0x22, 0x33, 0x44, 0x55};
     CHECK(contains(&rx, file1, sizeof(file1)));
     CHECK(rx.pause_seen >= 1);
-    // Motor stopped after the whole first file: the tape stays after it
-    td.port &= ~ORIC_TD_PORT_MOTOR;
-    tape_run(0, 1);
-    uint32_t pos = td.tap_pos;
-    CHECK(pos >= 22);
-    // The second file: motor stopped in its middle -> back to where the motor started
+    // Motor stopped after the first file: the tape stays after it
+    tape_motor(false);
+    const uint32_t pos = tp.pos;
+    CHECK(pos >= 22 && pos < sizeof(tap));
+    tape_run(0, 100);
+    CHECK(tp.pos == pos);
+    // The second file, read to the end of the tape
     memset(&rx, 0, sizeof(rx));
-    td.port |= ORIC_TD_PORT_MOTOR;
-    tape_run(&rx, 200);   // Leader only
-    td.port &= ~ORIC_TD_PORT_MOTOR;
-    tape_run(0, 1);
-    CHECK(td.tap_pos == pos);
-    td.port |= ORIC_TD_PORT_MOTOR;
-    memset(&rx, 0, sizeof(rx));
+    tape_motor(true);
     tape_run(&rx, 8000);
     const uint8_t file2[] = {'T', 'W', 'O', 0x00, 0xA0, 0xB0, 0xC0};
     CHECK(contains(&rx, file2, sizeof(file2)));
-    CHECK(oric_td_tap_ended(&td));
-    // Rewind (also done by a reset)
-    oric_td_reset(&td);
-    CHECK(td.tap_pos == 0 && !oric_td_tap_ended(&td) && oric_td_is_tape_inserted(&td));
-    oric_td_remove_tape(&td);
-    CHECK(!oric_td_is_tape_inserted(&td));
+    CHECK(!oric_tape_running(&tp) && oric_tape_percent(&tp) == 100);
+    // Rewind, eject
+    oric_tape_rewind(&tp);
+    CHECK(tp.pos == 0 && tp.inserted && oric_tape_percent(&tp) == 0);
+    oric_tape_eject(&tp);
+    CHECK(!tp.inserted && !oric_tape_running(&tp));
 }
 
-// Truncated last file (end address counted exclusive): completed with 0x00
+// Truncated last file (4 bytes announced, 3 present): completed with 0x00
 static void test_tape_padding(void) {
     static rx_t rx;
     static const uint8_t t[] = {0x16, 0x16, 0x16, 0x24, 0x00, 0x00, 0x80, 0x00, 0x05, 0x03, 0x05, 0x00, 0x00, 'P', 0x00,
-                                0x77, 0x88, 0x99};   // 4 bytes announced, 3 present
-    memset(&td, 0, sizeof(td));
-    oric_td_init(&td);
-    oric_td_insert_tap(&td, t, sizeof(t));
+                                0x77, 0x88, 0x99};
+    oric_tape_init(&tp);
+    tnow = tdue = 0;
+    oric_tape_insert_mem(&tp, t, sizeof(t));
     memset(&rx, 0, sizeof(rx));
-    td.port |= ORIC_TD_PORT_MOTOR;
+    tape_motor(true);
     tape_run(&rx, 8000);
     const uint8_t data[] = {'P', 0x00, 0x77, 0x88, 0x99, 0x00};
-    CHECK(contains(&rx, data, sizeof(data)));
-    CHECK(oric_td_tap_ended(&td));
+    CHECK(contains(&rx, data, sizeof(data)) && tp.pad == 1);
+    CHECK(!oric_tape_running(&tp));
 }
 
 // Streamed .tap gives the same signal as the in-memory one
-static uint32_t t_read(void* ctx, uint32_t off, uint8_t* buf, uint32_t len) {
+static int t_reads;
+static bool t_read(void* ctx, uint32_t off, uint8_t* buf, uint32_t len) {
     (void)ctx;
-    if (off >= sizeof(tap)) return 0;
-    if (len > sizeof(tap) - off) len = (uint32_t)(sizeof(tap) - off);
-    if (len > 7) len = 7;   // Small reads: several buffer refills
+    t_reads++;
+    if (off + len > sizeof(tap)) return false;
     memcpy(buf, tap + off, len);
-    return len;
+    return true;
 }
 
 static void test_tape_streamed(void) {
-    static oric_td_t a, b;
-    memset(&a, 0, sizeof(a));
-    memset(&b, 0, sizeof(b));
-    oric_td_init(&a);
-    oric_td_init(&b);
-    oric_td_insert_tap(&a, tap, sizeof(tap));
-    oric_td_insert_tap_streamed(&b, sizeof(tap), t_read, 0);
-    a.port |= ORIC_TD_PORT_MOTOR;
-    b.port |= ORIC_TD_PORT_MOTOR;
-    int diff = 0;
-    for (int i = 0; i < 12000; i++) {
-        oric_td_tick(&a);
-        oric_td_tick(&b);
-        if ((a.port & ORIC_TD_PORT_READ) != (b.port & ORIC_TD_PORT_READ)) diff++;
+    static oric_tape_t a, b;
+    oric_tape_init(&a);
+    oric_tape_init(&b);
+    oric_tape_insert_mem(&a, tap, sizeof(tap));
+    oric_tape_insert(&b, sizeof(tap), t_read, 0);
+    oric_tape_set_motor(&a, true);
+    oric_tape_set_motor(&b, true);
+    int diff = 0, edges = 0;
+    while (oric_tape_running(&a) && edges < 100000) {
+        if (oric_tape_next(&a) != oric_tape_next(&b)) diff++;
+        if (oric_tape_toggle(&a) != oric_tape_toggle(&b)) diff++;
+        edges++;
     }
-    CHECK(diff == 0);
-    CHECK(oric_td_tap_ended(&a) && oric_td_tap_ended(&b));
+    CHECK(diff == 0 && edges > 1000 && !oric_tape_running(&b) && t_reads > 0);
 }
 
 /*-- VIA ----------------------------------------------------------------------*/
@@ -907,11 +912,11 @@ static void test_oric_interfaces(void) {
     // Tape relay: PB6 driven as an output only
     bus_write(0x0302, 0x00);          // DDRB: inputs
     for (int i = 0; i < 8; i++) oric_tick(&sys);
-    CHECK(!oric_td_is_motor_on(&sys.td));
+    CHECK(!sys.tape.motor);
     bus_write(0x0302, 0xFF);
     bus_write(0x0300, 0x40);
     for (int i = 0; i < 8; i++) oric_tick(&sys);
-    CHECK(oric_td_is_motor_on(&sys.td));
+    CHECK(sys.tape.motor);
     oric_discard(&sys);
 }
 

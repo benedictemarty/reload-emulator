@@ -72,7 +72,9 @@
 #include "chips/kbd.h"
 #include "chips/mem.h"
 #include "chips/clk.h"
-#include "devices/oric_td.h"
+#include "devices/oric_tape.h"
+#include "devices/oric_tape_rec.h"
+#include "devices/oric_tape_turbo.h"
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/oric_fdc_rom.h"
@@ -280,10 +282,8 @@ void kbd_raw_key_down(int code) {
                 }
             } else {
                 index -= num_nib_images;
-                if (index < CHIPS_ARRAY_SIZE(oric_wave_images)) {
-                    if (sys->td.valid) {
-                        oric_td_insert_tape(&sys->td, oric_wave_images[index]);
-                    }
+                if (index < CHIPS_ARRAY_SIZE(oric_tap_images)) {
+                    oric_insert_tap(sys, oric_tap_images[index], oric_tap_image_sizes[index]);
                 }
             }
             break;
@@ -385,12 +385,35 @@ static bool dsk_write(void *ctx, uint32_t offset, const uint8_t *buf, uint32_t l
     return f_lseek(f, offset) == FR_OK && f_write(f, buf, len, &n) == FR_OK && n == len && f_sync(f) == FR_OK;
 }
 
-static uint32_t tap_read(void *ctx, uint32_t offset, uint8_t *buf, uint32_t len) {
+static bool tap_read(void *ctx, uint32_t offset, uint8_t *buf, uint32_t len) {
     (void)ctx;
     UINT n = 0;
-    if (f_lseek(&tap_fil, offset) != FR_OK || f_read(&tap_fil, buf, len, &n) != FR_OK) return 0;
-    return n;
+    return f_lseek(&tap_fil, offset) == FR_OK && f_read(&tap_fil, buf, len, &n) == FR_OK && n == len;
 }
+
+static void usb_scan(void);
+
+// CSAVE: one NAME.TAP file per recording in the root of the USB drive (oric_tape_rec.h)
+static FIL rec_fil;
+static bool rec_open;
+static bool rec_file_open(void *ctx, const char *name) {
+    (void)ctx;
+    if (rec_open) f_close(&rec_fil);
+    rec_open = f_open(&rec_fil, name, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK;
+    return rec_open;
+}
+static void rec_file_write(void *ctx, const uint8_t *data, uint32_t len) {
+    (void)ctx;
+    UINT n;
+    if (rec_open) f_write(&rec_fil, data, len, &n);
+}
+static void rec_file_close(void *ctx) {
+    (void)ctx;
+    if (rec_open) f_close(&rec_fil);
+    rec_open = false;
+    usb_scan();   // List the new file (the configuration is not applied again)
+}
+static const oric_tape_rec_out_t rec_out = {rec_file_open, rec_file_write, rec_file_close, 0};
 
 static void dsk_close(int d) {
     wd1793_eject(&state.oric.wd, d);   // Writes the cached track back first
@@ -422,7 +445,7 @@ static bool dsk_insert(int d, const char *name) {
 }
 
 static void tap_close(void) {
-    if (state.oric.td.valid) oric_td_remove_tape(&state.oric.td);
+    oric_eject_tape(&state.oric);
     if (tap_open) f_close(&tap_fil);
     tap_open = false;
     menu.tape[0] = 0;
@@ -430,13 +453,13 @@ static void tap_close(void) {
 
 static bool tap_insert(const char *name) {
     if (tap_open && !strcmp(menu.tape, name)) {
-        oric_td_rewind(&state.oric.td);   // The same tape: rewound
+        oric_tape_rewind(&state.oric.tape);   // The same tape: rewound
         return true;
     }
     tap_close();
     if (f_open(&tap_fil, name, FA_READ) != FR_OK) return false;
     tap_open = true;
-    if (!oric_td_insert_tap_streamed(&state.oric.td, (uint32_t)f_size(&tap_fil), tap_read, 0)) {
+    if (!oric_insert_tape(&state.oric, (uint32_t)f_size(&tap_fil), tap_read, 0)) {
         tap_close();
         return false;
     }
@@ -655,6 +678,7 @@ static void usb_poll(void) {
     if (usb_scanned || !msc_inquiry_complete) return;
     usb_scanned = true;
     usb_scan();
+    oric_tape_recorder(&state.oric, &rec_out);   // CSAVE to the USB drive
     config_load();
 }
 
@@ -723,11 +747,11 @@ static void banner_update(void) {
         }
         banner_on = false;   // End of the volume banner: the tape banner is drawn again
     }
-    oric_td_t *td = &state.oric.td;
-    const bool on = td->valid && td->tap_mode && menu.tape[0] && oric_td_is_motor_on(td) && !oric_td_tap_ended(td);
+    oric_tape_t *tp = &state.oric.tape;
+    const bool on = menu.tape[0] && oric_tape_running(tp);
     if (on) {
         static uint32_t last;
-        const int percent = td->tap_size ? (int)((uint64_t)td->tap_pos * 100 / td->tap_size) : 0;
+        const int percent = oric_tape_percent(tp);
         if (!banner_on || (uint32_t)percent != last) {
             const uint8_t back = (uint8_t)(banner_front ^ 1);
             oric_tape_banner(&banner_rows[back], menu.tape, percent);
@@ -747,9 +771,8 @@ static void panel_refresh(void) {
     menu.fdc = (int)state.oric.fdc_type;
     menu.volume = audio_volume_level();
     menu.muted = audio_volume_muted();
-    oric_td_t *td = &state.oric.td;
-    menu.tape_motor = td->valid && oric_td_is_motor_on(td);
-    menu.tape_percent = (td->valid && td->tap_size) ? (int)((uint64_t)td->tap_pos * 100 / td->tap_size) : 0;
+    menu.tape_motor = state.oric.tape.motor;
+    menu.tape_percent = oric_tape_percent(&state.oric.tape);
     // Wait until core 1 no longer shows the hidden surface (it takes the front one per frame)
     static uint32_t swapped_at;
     uint32_t t0 = time_us_32();

@@ -15,7 +15,6 @@
 #   ORIC_FTDOS_DSK     FT-DOS disk (Jasmin)               ~/oriclib/games/dsk/FTDOS.dsk
 #   ORIC_BASIC_TAP     BASIC program (cc65 stub)          ~/oric-bench/sieve_cc65.tap
 #   ORIC_HIRES_TAP     8000 bytes at $A000, 1 byte short  ~/pichires/spell.tap
-#   ORIC_TAP2WAVE      tools/tap2wave built (WAVE images)  set by CTest
 
 HEADLESS=${1:?usage: run_integration.sh path/to/oric_headless}
 SEDORIC_DSK=${ORIC_SEDORIC_DSK:-$HOME/legacy/disk/test.dsk}
@@ -53,13 +52,12 @@ check "BASIC typing" " 12" "" -f 400 -w 150 -t 'PRINT 12\n' -s
 check "printer (LPRINT)" "printer: 4 byte(s): AB.." "" -f 400 -w 150 -t 'LPRINT "AB"\n' -P
 check "tape: no motion at boot" "tape_pos=0 " "$BASIC_TAP" -T "$BASIC_TAP" -f 150 -i
 check "tape: CLOAD BASIC" "531 CALL#50D" "$BASIC_TAP" -T "$BASIC_TAP" -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
-check "tape: CLOAD 8000 bytes, padded" "tape_pos=8014 " "$HIRES_TAP" -T "$HIRES_TAP" -f 5500 -w 150 -t 'CLOAD""\n' -i
-if [ -n "$ORIC_TAP2WAVE" ] && [ -x "$ORIC_TAP2WAVE" ] && [ -f "$BASIC_TAP" ]; then
-    "$ORIC_TAP2WAVE" -i "$BASIC_TAP" -o "$TMP/basic.wave" > /dev/null
-    check "tape: WAVE image (tap2wave), CLOAD" "531 CALL#50D" "" -V "$TMP/basic.wave" -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
-else
-    echo "SKIP tape: WAVE image (tap2wave or $BASIC_TAP missing)"; skip=$((skip + 1))
-fi
+check "tape: CLOAD fast (patched BASIC 1.1)" "531 CALL#50D" "$BASIC_TAP" -T "$BASIC_TAP" -F -f 400 -w 150 -t 'CLOAD""\n~LIST\n' -s
+# CSAVE to a .tap file, then CLOAD of that file
+"$HEADLESS" -f 1600 -w 150 -R "$TMP" -t '10 PRINT 4242\nCSAVE"RLTEST"\n' > /dev/null 2>&1
+check "tape: CSAVE then CLOAD" "10 PRINT 4242" "$TMP/RLTEST.TAP" -T "$TMP/RLTEST.TAP" -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
+# 8014 bytes, one short of its header: the padding $00 is sent too (position 8015)
+check "tape: CLOAD 8000 bytes, padded" "tape_pos=8015 " "$HIRES_TAP" -T "$HIRES_TAP" -f 5500 -w 150 -t 'CLOAD""\n' -i
 check "Microdisc: Sedoric 4.0 boot + DIR" "1414 free sectors" "$SEDORIC_DSK" -c microdisc -0 "$SEDORIC_DSK" -f 1300 -w 900 -t ' DIR\n' -s
 check "Microdisc: auto-detected interface" "fdc=microdisc" "$SEDORIC_DSK" -c auto -0 "$SEDORIC_DSK" -f 10 -i
 check "Microdisc: disk without OS -> BASIC" "No operating system on disc" "$NOOS_DSK" -c microdisc -0 "$NOOS_DSK" -f 300 -s
