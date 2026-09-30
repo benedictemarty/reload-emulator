@@ -12,7 +12,7 @@ hôte TinyUSB, clé FatFs, son PWM) :
 |---|---|---|
 | reload-emulator (Oric, BBC, Apple II / IIe) | la sienne | sert déjà de base aux deux suivants |
 | Neo6502TeleStrat | reload via `RELOAD_DIR` (SDK, PicoDVI, `audio.c`) + ses copies (`hid_app.c`, `usb_msc.c`, pilote de bus, OSD, WD1793) | |
-| Neo6502nes | reload via `RELOAD_DIR` (SDK, PicoDVI, `audio.c`, `hid_app.c`) + son pilote de bus (copie de celui du Telestrat) | |
+| Neo6502nes | reload via `RELOAD_DIR` (SDK, PicoDVI, TinyUSB, `hid_app.c` seul) + son pilote de bus (copie de celui du Telestrat), sa copie divergente de `w65c02cpu.h` ; pas de son ni de clé USB | voir FUSION-ORIC-TELESTRAT.md, section NES |
 | Neo6502Tangerine | autonome (son PicoDVI, TinyUSB du SDK) | |
 | Neo6502Trinity | firmware C++ à part | références : `README-TRINITY.md`, `Neo6502monlivre/manuscrit/15-firmware.md` |
 

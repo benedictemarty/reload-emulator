@@ -35,9 +35,29 @@ changeant d'étiquette de socle quand il le décide, et retire alors sa copie.
 Choix encore ouverts, à trancher par les deux suites d'intégration : pause après
 l'en-tête de cassette (1248 ou 1281 cycles), fin de bande (4 bits 1 ou 2 alternances).
 
+## La NES (Neo6502nes) dans la fusion
+
+Ajoutée le 2026-09-30. La NES consomme déjà le socle par `RELOAD_DIR` (SDK, PicoDVI,
+TinyUSB 0.21.0, `hid_app.c`), vérifié à la compilation par `tools/socle_consommateurs.sh`.
+Inventaire de ses composants (lecture seule chez elle, v0.4.1) :
+
+| Composant | État à la NES | Décision |
+|---|---|---|
+| `chips_common.h`, `mos6502cpu.h` | identiques à reload | la NES supprime ses copies |
+| `w65c02cpu.h` (65C02 logiciel, PC) | **divergent** : la NES scrute IRQ/NMI à l'avant-dernier cycle (mesuré sur carte : `cli_latency`, `nmi_control`) ; reload et le Telestrat ont la soustraction décimale corrigée (SingleStepTests) | **fusionner les deux** dans reload (tests Harte, Klaus, intégration Oric et rejeu du Telestrat), puis une seule copie |
+| Pilote de bus `neo6502_bus.h` | copie de celui du Telestrat | étape 10 (pilote commun, SIO puis PIO) |
+| Minutage vidéo, verrous | 960 × 544 défini localement, `next_striped_spin_lock_num` | `neo_dvi_timings.h` et verrous `spin_lock_claim_unused` du socle |
+| Jeux sur la clé et menu F1 (US-15, à faire) | absents | à construire sur `msc_app.c` (étape 8) et le moteur de menu commun (étape 7 : `osd.h`, `osd_browser.h`) |
+| Son de l'APU (à faire) | absent | `audio.c` du socle (PWM, volume, touches multimédia) |
+| Vidéo 16 bits (RGB565) | propre à la NES | reste à la NES |
+
+Conséquence pour l'étape 7 : le moteur de menu commun doit servir trois machines
+(Oric, Telestrat, NES) ; le sélecteur de fichiers est le premier besoin de la NES.
+
 ## Ordre
 
 1 → 4 (sans risque, surtout côté Telestrat), puis **5 (WD1793)** et **6 (cassette)**
-côté reload avec les tests des deux projets, puis 7, 8, 9, 10. Chaque composant :
+côté reload avec les tests des deux projets, puis 7, 8, 9, 10 ; pour la NES : fusion de
+`w65c02cpu.h`, puis clé et menu sur le socle. Chaque composant :
 commit dans reload, nouvelle étiquette `socle-…`, message à la session Telestrat, qui
 migre et retire sa copie quand elle le décide.
