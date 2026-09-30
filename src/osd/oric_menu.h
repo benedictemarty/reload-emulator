@@ -560,3 +560,28 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
         osd_putc(s, top + 2 + thumb, bar, OSD_FULL, OSD_ATTR(OSD_CYAN, OSD_BLACK));
     }
 }
+
+// Bandeau de la cassette, incrusté sous l'image de l'Oric pendant que le
+// moteur tourne (comme au Telestrat) : ▶, icône, nom, barre, pour cent
+static inline void oric_tape_banner(osd_row_t* r, const char* name, int percent) {
+    const uint8_t base = OSD_ATTR(OSD_WHITE, OSD_BLUE);
+    const uint8_t acc = OSD_ATTR(OSD_YELLOW, OSD_BLUE);
+    osd_row_clear(r, base);
+    const int C = ORIC_OSD_C0;
+    r->ch[C + 8] = OSD_TRI_R;
+    r->attr[C + 8] = acc;
+    r->ch[C + 10] = OSD_TAPE_L;
+    r->ch[C + 11] = OSD_TAPE_R;
+    r->attr[C + 10] = r->attr[C + 11] = acc;
+    osd_row_puts(r, C + 13, "Lecture", acc);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.30s", name);
+    osd_row_puts(r, C + 22, buf, base);
+    const int bar = C + 56, cells = 30;
+    for (int i = 0; i < cells; i++) {
+        r->ch[bar + i] = i * 100 / cells < percent ? OSD_FULL : OSD_SHADE;
+        r->attr[bar + i] = OSD_ATTR(OSD_CYAN, OSD_BLUE);
+    }
+    snprintf(buf, sizeof(buf), "%3d %%", percent);
+    osd_row_puts(r, bar + cells + 2, buf, acc);
+}

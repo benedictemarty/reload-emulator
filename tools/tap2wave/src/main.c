@@ -1,3 +1,35 @@
+// tap2wave: convert an Oric .tap image into a WAVE image for the tape drive
+// of reload-emulator (src/devices/oric_td.h)
+//
+// WAVE image: size in bytes (uint32 LE), then one bit per 208 us (the tape
+// drive tick), MSB first, 1 = high level.
+//
+// The signal is the one the tape drive builds from a .tap image (Oricutron's
+// signal, see oric_td.h): the generator of oric_td.h is sampled, with the
+// motor stopped and restarted between files so that each file gets its long
+// leader and the pause after its header. The former encoding of this tool
+// (bit 0 = 208 + 416 us, no leader) did not load with the BASIC 1.1 ROM.
+//
+// ## zlib/libpng license
+//
+// Copyright (c) 2026 bmarty
+// This software is provided 'as-is', without any express or implied warranty.
+// In no event will the authors be held liable for any damages arising from the
+// use of this software.
+// Permission is granted to anyone to use this software for any purpose,
+// including commercial applications, and to alter it and redistribute it
+// freely, subject to the following restrictions:
+//     1. The origin of this software must not be misrepresented; you must not
+//     claim that you wrote the original software. If you use this software in a
+//     product, an acknowledgment in the product documentation would be
+//     appreciated but is not required.
+//     2. Altered source versions must be plainly marked as such, and must not
+//     be misrepresented as being the original software.
+//     3. This notice may not be removed or altered from any source
+//     distribution.
+
+#define CHIPS_IMPL
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -5,177 +37,68 @@
 #include <string.h>
 #include <getopt.h>
 
+#include "devices/oric_td.h"
+
 // Max size of the tape image
 #define MAX_TAP_IMAGE_SIZE (512 * 1024)
 // Max size of the wave image
-#define MAX_WAVE_IMAGE_SIZE (1024 * 1024)
+#define MAX_WAVE_IMAGE_SIZE (8 * 1024 * 1024)
 
-static uint32_t tap_image_size;
 static uint8_t tap_image[MAX_TAP_IMAGE_SIZE];
-
-static uint32_t wave_image_size;
 static uint8_t wave_image[MAX_WAVE_IMAGE_SIZE];
 
-static uint8_t _current_level;
-static uint8_t _shifter;
-static uint8_t _shift_count;
-
-static void _flush_output() {
-    for (int i = 0; i < 8 - _shift_count; i++) {
-        _shifter = (_shifter << 1) | 1;
+static int convert_tap_to_wave(const char* tap_file, const char* wave_file) {
+    FILE* in = fopen(tap_file, "rb");
+    if (!in) {
+        fprintf(stderr, "Failed to open file for reading: %s\n", tap_file);
+        return 1;
     }
-    wave_image[wave_image_size++] = _shifter;
-}
-
-static void _output_half_period(uint8_t length) {
-    for (int i = 0; i < length; i++) {
-        _shifter = (_shifter << 1) | _current_level;
-        _shift_count++;
-        if (_shift_count == 8) {
-            _shift_count = 0;
-            wave_image[wave_image_size++] = _shifter;
-        }
-    }
-    _current_level ^= 1;
-}
-
-static void _output_bit(uint8_t b) {
-    _output_half_period(1);
-    _output_half_period(b ? 1 : 2);
-}
-
-static void _output_byte(uint8_t b) {
-    _output_half_period(1);
-    _output_bit(0);
-
-    uint8_t parity = 1;
-
-    for (int i = 0; i < 8; i++) {
-        uint8_t bit = b & 1;
-        parity += bit;
-        _output_bit(bit);
-        b >>= 1;
-    }
-
-    _output_bit(parity & 1);
-
-    _output_bit(1);
-    _output_bit(1);
-    _output_bit(1);
-}
-
-static bool _find_synchro(uint32_t* pos) {
-    int synchro_state = 0;
-    while (*pos < tap_image_size) {
-        uint8_t b = tap_image[(*pos)++];
-        if (b == 0x16) {
-            if (synchro_state < 3) synchro_state++;
-        } else if (b == 0x24 && synchro_state == 3) {
-            return true;
-        } else {
-            synchro_state = 0;
-        }
-    }
-    return false;
-}
-
-static void _output_big_synchro() {
-    for (int i = 0; i < 259; i++) {
-        _output_byte(0x16);
-    }
-    _output_byte(0x24);
-}
-
-static bool _output_file(uint32_t* pos) {
-    uint8_t header[9];
-    uint32_t i;
-
-    i = 0;
-    while (*pos < tap_image_size && i < 9) {
-        uint8_t b = tap_image[(*pos)++];
-        header[i++] = b;
-        _output_byte(b);
-    }
-    if (*pos >= tap_image_size) {
-        return false;
-    }
-
-    uint8_t b;
-    while (*pos < tap_image_size && ((b = tap_image[(*pos)++]) != 0)) {
-        _output_byte(b);
-    }
-    if (*pos >= tap_image_size) {
-        return false;
-    }
-    _output_byte(0);
-
-    for (int i = 0; i < 6; i++) {
-        _output_half_period(1);
-    }
-
-    uint32_t start = header[6] * 256 + header[7];
-    uint32_t end = header[4] * 256 + header[5];
-    uint32_t size = end - start + 1;
-    i = 0;
-    while (*pos < tap_image_size && i < size) {
-        uint8_t b = tap_image[(*pos)++];
-        _output_byte(b);
-        i++;
-    }
-    if (*pos == tap_image_size && i < size) {
-        return false;
-    }
-
-    for (int i = 0; i < 2; i++) {
-        _output_half_period(1);
-    }
-
-    return true;
-}
-
-// Convert TAP image into WAVE image
-static void convert_tap_to_wave(const char* tap_file, const char* wave_file) {
-    FILE *in, *out;
-
-    in = fopen(tap_file, "rb");
-    if (in == NULL) {
-        fprintf(stderr, "Failed to open file for reading: %s", tap_file);
-        return;
-    }
-    fseek(in, 0, SEEK_END);
-    tap_image_size = ftell(in);
-    if (tap_image_size > MAX_TAP_IMAGE_SIZE) {
-        fprintf(stderr, "Invalid TAP image size: %s", tap_file);
+    size_t tap_size = fread(tap_image, 1, sizeof(tap_image), in);
+    if (!feof(in) || tap_size == 0) {
+        fprintf(stderr, "Invalid TAP image size: %s\n", tap_file);
         fclose(in);
-        return;
+        return 1;
     }
-    fseek(in, 0, SEEK_SET);
-    fread(tap_image, tap_image_size, 1, in);
     fclose(in);
 
-    for (int i = 0; i < 5; i++) {
-        _output_half_period(1);
-    }
+    static oric_td_t td;
+    oric_td_init(&td);
+    oric_td_insert_tap(&td, tap_image, (uint32_t)tap_size);
+    td.port |= ORIC_TD_PORT_MOTOR;
 
-    uint32_t pos = 0;
-    while (pos < tap_image_size) {
-        if (_find_synchro(&pos)) {
-            _output_big_synchro();
-            if (!_output_file(&pos)) {
-                return;
-            }
+    uint32_t bits = 0;
+    while (!oric_td_tap_ended(&td)) {
+        // Between two files: motor stopped then restarted (long leader and pause for the next one)
+        if (td.tap_bit >= 14 && td.tap_units == 0 && !td.tap_level && td.tap_hdr_end == 0 && td.tap_delay == 0 &&
+            td.tap_pos >= td.tap_file_end && td.tap_pos < td.tap_size) {
+            td.port &= ~ORIC_TD_PORT_MOTOR;
+            oric_td_tick(&td);
+            td.port |= ORIC_TD_PORT_MOTOR;
         }
+        oric_td_tick(&td);
+        if (bits / 8 >= sizeof(wave_image)) {
+            fprintf(stderr, "WAVE image too large\n");
+            return 1;
+        }
+        if (td.port & ORIC_TD_PORT_READ) {
+            wave_image[bits / 8] |= (uint8_t)(0x80 >> (bits & 7));
+        }
+        bits++;
     }
-    _flush_output();
+    uint32_t wave_size = (bits + 7) / 8;
 
-    out = fopen(wave_file, "wb");
-    if (out == NULL) {
-        fprintf(stderr, "Failed to open file for writing: %s", wave_file);
-        return;
+    FILE* out = fopen(wave_file, "wb");
+    if (!out) {
+        fprintf(stderr, "Failed to open file for writing: %s\n", wave_file);
+        return 1;
     }
-    fwrite(&wave_image_size, 4, 1, out);
-    fwrite(wave_image, wave_image_size, 1, out);
+    const uint8_t header[4] = {(uint8_t)wave_size, (uint8_t)(wave_size >> 8), (uint8_t)(wave_size >> 16),
+                               (uint8_t)(wave_size >> 24)};
+    fwrite(header, 1, 4, out);
+    fwrite(wave_image, 1, wave_size, out);
     fclose(out);
+    printf("%s: %u bytes of signal (%.1f s)\n", wave_file, (unsigned)wave_size, bits * 208e-6);
+    return 0;
 }
 
 static void print_usage(const char* argv0) {
@@ -207,9 +130,6 @@ int main(int argc, char* const argv[]) {
 
     if (!infile || !outfile) {
         print_usage(argv[0]);
-    } else {
-        convert_tap_to_wave(infile, outfile);
     }
-
-    return 0;
+    return convert_tap_to_wave(infile, outfile);
 }

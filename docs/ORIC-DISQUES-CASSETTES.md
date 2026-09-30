@@ -61,6 +61,15 @@ alors sur la disquette du lecteur A) ; le menu réécrit ces lignes et garde les
 
 ![Sélecteur de disquette](images/oric_menu_disque.png)
 
+### Bandeau de la cassette
+
+![Bandeau de la cassette](images/oric_bandeau.png)
+
+Pendant que le moteur de la cassette tourne, une ligne sous l'image de l'Oric
+(bordure basse) montre le nom de la cassette, une barre et le pourcentage lu,
+comme au Telestrat ; elle disparaît à l'arrêt du moteur ou en fin de bande.
+Validé sur la carte (`AIGLE.TAP`).
+
 ### Profils
 
 ![Démarrer sur…](images/oric_menu_profils.png)
@@ -245,9 +254,11 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
   Oricutron sur une vraie session.
 - Sous Sedoric, la première touche tapée après le démarrage est perdue, quel que
   soit le délai (pas sous BASIC seul) ; non comparé à une référence.
-- Les images WAVE produites par `tools/tap2wave` ne se chargent pas avec la ROM 1.1,
-  déjà avant ces changements (vérifié sur la dernière version de l'auteur d'origine,
-  `8e2fcff`) : leur bit 0 dure 208 + 416 µs. La lecture directe des `.tap` les remplace.
+- Les images WAVE de l'ancien `tools/tap2wave` ne se chargeaient pas avec la ROM 1.1
+  (déjà sur la dernière version de l'auteur d'origine, `8e2fcff` ; bit 0 de
+  208 + 416 µs, pas d'amorce allongée). L'outil échantillonne désormais le générateur
+  de `oric_td.h` (même signal que les `.tap`) ; `CLOAD` d'une image WAVE vérifié par
+  le test d'intégration.
 - La version PC n'a pas le panneau (options de ligne de commande et
   glisser-déposer à la place).
 - Démarrage d'une disquette Sedoric ou FT-DOS depuis la clé : pas encore essayé sur

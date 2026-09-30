@@ -55,3 +55,9 @@ if (NOT MSVC)
     target_compile_options(oric_menu_test PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 add_test(NAME oric_menu COMMAND oric_menu_test)
+
+#=== EXECUTABLE: tap2wave (tools/tap2wave: .tap -> WAVE image, signal of devices/oric_td.h)
+
+add_executable(tap2wave ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/tap2wave/src/main.c)
+target_include_directories(tap2wave PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+set_tests_properties(oric_integration PROPERTIES ENVIRONMENT "ORIC_TAP2WAVE=$<TARGET_FILE:tap2wave>")

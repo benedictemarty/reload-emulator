@@ -266,16 +266,12 @@ static inline void osd_render_line(const osd_surface_t* s, int line, uint8_t* ou
     osd_render_row_line(&rc, line & 7, line & 1, out);
 }
 
-// Une ligne de tampon (0 à OSD_LINES - 1) dans trois plans de 1 bit (rouge,
+// Ligne y (0-7) d'une rangée de cellules dans trois plans de 1 bit (rouge,
 // vert, bleu ; bit 0 d'un mot = pixel de gauche, comme tmds_encode_1bpp de
-// PicoDVI) : OSD_COLS / 4 mots par plan. Même image que osd_render_line.
-static inline void OSD_HOT osd_render_line_planes(const osd_surface_t* s, int line, uint32_t* red, uint32_t* green,
-                                                  uint32_t* blue) {
-    const int row = line >> 3, y = line & 7;
-    const uint32_t dither = (line & 1) ? 0xAAu : 0x55u;   // Fond sur les pixels pairs (lignes paires) ou impairs
-    const uint8_t* chs = s->ch[row];
-    const uint8_t* attrs = s->attr[row];
-    const uint8_t* bigs = s->big[row];
+// PicoDVI) : OSD_COLS / 4 mots par plan ; parity : parité de la ligne (trame)
+static inline void OSD_HOT osd_render_cells_planes(const uint8_t* chs, const uint8_t* attrs, const uint8_t* bigs, int y,
+                                                   int parity, uint32_t* red, uint32_t* green, uint32_t* blue) {
+    const uint32_t dither = (parity & 1) ? 0xAAu : 0x55u;   // Fond sur les pixels pairs (lignes paires) ou impairs
     for (int w = 0; w < OSD_COLS / 4; w++) {
         uint32_t r = 0, g = 0, b = 0;
         for (int k = 0; k < 4; k++) {
@@ -301,4 +297,35 @@ static inline void OSD_HOT osd_render_line_planes(const osd_surface_t* s, int li
         green[w] = g;
         blue[w] = b;
     }
+}
+
+// Une ligne de tampon (0 à OSD_LINES - 1) de la surface dans les trois plans.
+// Même image que osd_render_line.
+static inline void OSD_HOT osd_render_line_planes(const osd_surface_t* s, int line, uint32_t* red, uint32_t* green,
+                                                  uint32_t* blue) {
+    const int row = line >> 3;
+    osd_render_cells_planes(s->ch[row], s->attr[row], s->big[row], line & 7, line & 1, red, green, blue);
+}
+
+// Une rangée seule (bandeau incrusté hors du menu)
+typedef struct {
+    uint8_t ch[OSD_COLS];
+    uint8_t attr[OSD_COLS];
+    uint8_t big[OSD_COLS];
+} osd_row_t;
+
+static inline void osd_row_clear(osd_row_t* r, uint8_t attr) {
+    memset(r->ch, ' ', sizeof(r->ch));
+    memset(r->attr, attr, sizeof(r->attr));
+    memset(r->big, 0, sizeof(r->big));
+}
+
+static inline int osd_row_puts(osd_row_t* r, int col, const char* str, uint8_t attr) {
+    int n = 0;
+    while (*str && col + n < OSD_COLS) {
+        r->ch[col + n] = osd_next_char(&str);
+        r->attr[col + n] = attr;
+        n++;
+    }
+    return n;
 }

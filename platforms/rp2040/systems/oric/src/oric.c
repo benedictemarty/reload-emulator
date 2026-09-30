@@ -122,6 +122,10 @@ static oric_menu_t __not_in_flash() menu;
 static osd_surface_t __not_in_flash() osd_surfaces[2];
 static volatile uint8_t osd_front;            // Surface shown by core 1
 static volatile uint32_t core1_frames;        // Frames started by core 1
+// Tape banner (bottom border, while the tape motor runs), double-buffered too
+static osd_row_t __not_in_flash() banner_rows[2];
+static volatile uint8_t banner_front;
+static volatile bool banner_on;
 static void profiles_list(void);               // Profiles offered by the panel (built in, then ORIC.CFG)
 static volatile bool panel_open;
 
@@ -618,6 +622,25 @@ static void usb_poll(void) {
     config_load();
 }
 
+/*-- Tape banner ----------------------------------------------------------------*/
+// While the tape motor runs: name and position of the tape in the bottom border
+static void banner_update(void) {
+    oric_td_t *td = &state.oric.td;
+    const bool on = td->valid && td->tap_mode && menu.tape[0] && oric_td_is_motor_on(td) && !oric_td_tap_ended(td);
+    if (on) {
+        static uint32_t last;
+        const int percent = td->tap_size ? (int)((uint64_t)td->tap_pos * 100 / td->tap_size) : 0;
+        if (!banner_on || (uint32_t)percent != last) {
+            const uint8_t back = (uint8_t)(banner_front ^ 1);
+            oric_tape_banner(&banner_rows[back], menu.tape, percent);
+            __dmb();
+            banner_front = back;
+            last = (uint32_t)percent;
+        }
+    }
+    banner_on = on;
+}
+
 /*-- Control panel (F1) --------------------------------------------------------*/
 // Core 0 builds the surface (osd), core 1 draws it in place of the Oric picture
 // while panel_open is set. The emulation is paused while the panel is open.
@@ -761,6 +784,7 @@ static inline void __not_in_flash_func(render_frame)() {
 #endif
     const bool panel = panel_open;
     const osd_surface_t *osd = &osd_surfaces[osd_front];
+    const osd_row_t *banner = banner_on ? &banner_rows[banner_front] : NULL;
     core1_frames++;
     for (int y = 0; y < DISPLAY_LINES; y++) {
         uint32_t *tmdsbuf;
@@ -770,6 +794,10 @@ static inline void __not_in_flash_func(render_frame)() {
 #endif
         if (panel) {
             osd_render_line_planes(osd, y, planes[0], planes[1], planes[2]);
+            encode_planes(tmdsbuf);
+        } else if (banner && y >= ORIC_TOP + ORIC_SCREEN_HEIGHT && y < ORIC_TOP + ORIC_SCREEN_HEIGHT + 8) {
+            const int by = y - ORIC_TOP - ORIC_SCREEN_HEIGHT;
+            osd_render_cells_planes(banner->ch, banner->attr, banner->big, by, by, planes[0], planes[1], planes[2]);
             encode_planes(tmdsbuf);
         } else if (y < ORIC_TOP || y >= ORIC_TOP + ORIC_SCREEN_HEIGHT) {
             copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
@@ -840,6 +868,7 @@ int main() {
             oric_tick(&state.oric);
         }
         usb_poll();
+        banner_update();
         while (panel_keys_head != panel_keys_tail) {
             int code = panel_keys[panel_keys_head & 15];
             panel_keys_head++;

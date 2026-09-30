@@ -380,6 +380,35 @@ static void test_profiles(const char* dir) {
     CHECK(menu.cursor == ORIC_ITEM_FDC);
 }
 
+static void test_banner(const char* dir) {
+    static osd_row_t row;
+    oric_tape_banner(&row, "AIGLE.TAP", 40);
+    char text[OSD_COLS + 1];
+    for (int c = 0; c < OSD_COLS; c++) text[c] = (char)row.ch[c];
+    text[OSD_COLS] = 0;
+    CHECK(strstr(text, "Lecture") && strstr(text, "AIGLE.TAP") && strstr(text, " 40 %"));
+    int full = 0, shade = 0;
+    for (int c = 0; c < OSD_COLS; c++) {
+        full += row.ch[c] == OSD_FULL;
+        shade += row.ch[c] == OSD_SHADE;
+    }
+    CHECK(full == 12 && shade == 18);   // 40 % of 30 cells
+    // Rendered like a surface row (planes), preview in a 8-line strip
+    static uint32_t r[OSD_COLS / 4], g[OSD_COLS / 4], b[OSD_COLS / 4];
+    int lit = 0;
+    for (int y = 0; y < 8; y++) {
+        osd_render_cells_planes(row.ch, row.attr, row.big, y, y, r, g, b);
+        for (int w = 0; w < OSD_COLS / 4; w++) lit += __builtin_popcount(b[w]);   // Blue background
+    }
+    CHECK(lit > OSD_WIDTH * 8 / 2);
+    if (dir) {
+        osd_clear(&surf, OSD_ATTR(OSD_WHITE, OSD_BLACK));
+        memcpy(surf.ch[29], row.ch, OSD_COLS);
+        memcpy(surf.attr[29], row.attr, OSD_COLS);
+        write_ppm(dir, "oric_banner.ppm");
+    }
+}
+
 int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : NULL;
     test_render();
@@ -387,6 +416,7 @@ int main(int argc, char** argv) {
     test_config();
     test_planes();
     test_profiles(dir);
+    test_banner(dir);
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
 }
