@@ -7,6 +7,8 @@ firmware oric_diag (platforms/rp2040/build/systems/oric/oric_diag.elf).
                                   {HAUT} {BAS} {GAUCHE} {DROITE} {SUPPR} {DEBUT} {FIN}
   oric_carte.py panneau           texte du panneau de contrôle (surface osd, Latin-1)
   oric_carte.py ecran             écran texte de l'Oric ($BB80, 40 x 28)
+  oric_carte.py envoyer F [F…]    copie des fichiers à la racine de la clé USB de la carte
+                                  (FICHIER ou FICHIER=NOM), puis relit la clé (ORIC.CFG)
 
 Variables : NEO_ELF (oric_diag.elf), NEO_OPENOCD (OpenOCD qui connaît la flash
 Puya P25Q16 du Neo6502).
@@ -109,6 +111,48 @@ def etat():
     print("clé USB (msc_inquiry_complete)", lire(s["msc_inquiry_complete"], 1)[0], "scannée", lire(s["usb_scanned"], 1)[0])
 
 
+def envoyer(fichiers):
+    """Copie des fichiers sur la clé USB par la boîte aux lettres diag_file_* du firmware."""
+    s = symboles()
+    if "diag_file_cmd" not in s:
+        raise SystemExit("ELF sans boîte aux lettres : compiler et flasher oric_diag")
+    CHUNK = 8192
+    cmd, status, length = s["diag_file_cmd"], s["diag_file_status"], s["diag_file_len"]
+    with tempfile.TemporaryDirectory() as d:
+        # Chaque commande est traitée à la trame suivante (20 ms) : au-delà de 10 s, le
+        # firmware n'est pas (ou plus) oric_diag -> arrêt net
+        tcl = [f"proc attendre {{}} {{ set t 0 ; "
+               f"while {{[lindex [read_memory 0x{cmd:08x} 32 1] 0] != 0}} {{ sleep 5 ; incr t 5 ; "
+               f"if {{$t > 10000}} {{ echo \"ECHEC délai : firmware oric_diag absent ?\" ; shutdown ; return }} }} ; "
+               f"set st [lindex [read_memory 0x{status:08x} 32 1] 0] ; if {{$st != 0}} {{ echo \"ECHEC $st\" }} }}"]
+        for spec in fichiers:
+            src, _, nom = spec.partition("=")
+            nom = nom or os.path.basename(src)
+            data = open(src, "rb").read()
+            octets = " ".join(str(b) for b in nom.encode("ascii") + b"\0")
+            tcl.append(f"echo \"{nom} : {len(data)} octets\"")
+            tcl.append(f"write_memory 0x{s['diag_file_name']:08x} 8 {{{octets}}}")
+            tcl.append(f"mww 0x{cmd:08x} 1 ; attendre")
+            for i in range(0, len(data), CHUNK):
+                bloc = os.path.join(d, f"{nom}.{i // CHUNK}")
+                open(bloc, "wb").write(data[i:i + CHUNK])
+                tcl.append(f"load_image {bloc} 0x{s['diag_file_buf']:08x} bin")
+                tcl.append(f"mww 0x{length:08x} {len(data[i:i + CHUNK])} ; mww 0x{cmd:08x} 2 ; attendre")
+            tcl.append(f"mww 0x{cmd:08x} 3 ; attendre ; echo \"{nom} : écrit\"")
+        tcl.append(f"mww 0x{cmd:08x} 4 ; attendre ; echo \"clé relue\"")
+        script = os.path.join(d, "envoyer.tcl")
+        open(script, "w").write("\n".join(tcl) + "\n")
+        args = [OPENOCD, "-f", "interface/cmsis-dap.cfg", "-f", "target/rp2040.cfg", "-c", "adapter speed 4000",
+                "-c", "init", "-f", script, "-c", "shutdown"]
+        r = subprocess.run(args, capture_output=True, text=True, timeout=1800)
+        journal = r.stdout + r.stderr
+        for ligne in journal.splitlines():
+            if " : " in ligne or "ECHEC" in ligne or "relue" in ligne or "Error" in ligne:
+                print(ligne)
+        if "ECHEC" in journal or "Error" in journal:
+            raise SystemExit("envoi incomplet")
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(__doc__)
@@ -122,6 +166,8 @@ if __name__ == "__main__":
         panneau()
     elif cmd == "ecran":
         ecran()
+    elif cmd == "envoyer":
+        envoyer(sys.argv[2:])
     else:
         print(__doc__)
         sys.exit(1)

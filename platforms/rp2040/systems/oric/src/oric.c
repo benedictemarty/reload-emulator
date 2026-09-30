@@ -622,6 +622,47 @@ static void usb_poll(void) {
     config_load();
 }
 
+#ifdef ORIC_DIAG
+/*-- Bench: files written to the USB drive over SWD (tools/oric_carte.py envoyer) -*/
+// The host writes the name / a chunk, then the command; core 0 runs it in the
+// main loop and clears diag_file_cmd (result in diag_file_status: FatFs code)
+#define DIAG_FILE_CHUNK 8192
+enum { DIAG_FILE_CREATE = 1, DIAG_FILE_WRITE = 2, DIAG_FILE_CLOSE = 3, DIAG_FILE_RESCAN = 4 };
+volatile uint32_t diag_file_cmd, diag_file_status, diag_file_len;
+volatile char diag_file_name[64];
+uint8_t diag_file_buf[DIAG_FILE_CHUNK];
+static FIL diag_fil;
+
+static void diag_file_service(void) {
+    uint32_t cmd = diag_file_cmd;
+    if (!cmd) return;
+    __dmb();
+    FRESULT r = FR_OK;
+    UINT n = 0;
+    switch (cmd) {
+        case DIAG_FILE_CREATE:
+            r = f_open(&diag_fil, (const char *)diag_file_name, FA_WRITE | FA_CREATE_ALWAYS);
+            break;
+        case DIAG_FILE_WRITE:
+            r = f_write(&diag_fil, diag_file_buf, diag_file_len > DIAG_FILE_CHUNK ? DIAG_FILE_CHUNK : diag_file_len, &n);
+            if (r == FR_OK && n != diag_file_len) r = FR_DISK_ERR;
+            break;
+        case DIAG_FILE_CLOSE:
+            r = f_close(&diag_fil);
+            break;
+        case DIAG_FILE_RESCAN:
+            usb_scanned = false;   // usb_poll lists the files again and applies ORIC.CFG
+            break;
+        default:
+            r = FR_INVALID_PARAMETER;
+            break;
+    }
+    diag_file_status = (uint32_t)r;
+    __dmb();
+    diag_file_cmd = 0;
+}
+#endif
+
 /*-- Tape banner ----------------------------------------------------------------*/
 // While the tape motor runs: name and position of the tape in the bottom border
 static void banner_update(void) {
@@ -869,6 +910,9 @@ int main() {
         }
         usb_poll();
         banner_update();
+#ifdef ORIC_DIAG
+        diag_file_service();
+#endif
         while (panel_keys_head != panel_keys_tail) {
             int code = panel_keys[panel_keys_head & 15];
             panel_keys_head++;
