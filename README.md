@@ -24,6 +24,10 @@ Emulated systems:
     - Jasmin (WD1793, FT-DOS, MFM_DISK `.dsk` images, 4 drives)
   - Printer port (always acknowledging, bytes available to the host)
 
+On the RP2040, **F1** opens a control panel (disk interface, drives A-D, tape, reset)
+with the `.dsk` and `.tap` files of a USB drive; `ORIC.CFG` on the drive keeps the setup.
+F2-F9 insert the images embedded in the firmware.
+
 See [docs/ORIC-DISQUES-CASSETTES.md](docs/ORIC-DISQUES-CASSETTES.md) (French) for the disk and tape support, its sources and its tests.
 
 ## Requirements (RP2040)
@@ -171,7 +175,7 @@ uint8_t* oric_wave_images[] = {
 };
 ```
 
-First NIB file is loaded in floppy disk drive on startup. Images can be loaded dynamically at runtime in floppy disk drive and / or tape drive using F1-F9.
+First NIB file is loaded in floppy disk drive on startup. Images can be loaded dynamically at runtime in floppy disk drive and / or tape drive using F1-F9 (Oric on the RP2040: F2-F9, F1 opens the control panel).
 
 Up to 9 disk images can be embedded in single UF2 binary (for 2MB flash).
 

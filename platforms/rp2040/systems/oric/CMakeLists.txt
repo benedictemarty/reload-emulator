@@ -7,6 +7,7 @@ add_executable(oric
 	${CMAKE_CURRENT_SOURCE_DIR}/src/utils.S
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 )
 
 target_compile_options(oric PRIVATE -Wall)
@@ -24,6 +25,7 @@ target_link_libraries(oric
 	pico_util
 	libdvi
 	tinyusb_host
+	fatfs
 )
 
 # create map/bin/hex file etc.

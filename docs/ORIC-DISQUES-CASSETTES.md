@@ -33,6 +33,41 @@ ROM : `src/roms/oric_microdisc_rom.h` (EPROM 8 Ko, MD5 de la version testée
 `5136f764a7dbd1352519351fbb53a9f3`), produites par `tools/bin2hdr`, jamais dans le
 dépôt. Sans elles, l'interface correspondante est indisponible.
 
+## Panneau de contrôle et clé USB (RP2040)
+
+![Panneau de contrôle](images/oric_menu.png)
+
+**F1** ouvre le panneau (l'émulation est en pause), sur le modèle du menu du
+Telestrat (projet Neo6502TeleStrat : même police, même surface de cellules 8 × 8,
+même ergonomie) :
+
+- **Interface disque** : aucune, Pravetz 8D, Microdisc, Jasmin (une ROM absente
+  est signalée) ; le choix redémarre l'Oric ;
+- **Disquettes A à D** (Microdisc et Jasmin) : sélecteur des `.dsk` de la racine de
+  la clé ; une image n'est que dans un lecteur à la fois ; lue et écrite en flux
+  (une piste de 6 400 octets en mémoire, réécrite quand une autre piste est lue) ;
+  un fichier en lecture seule donne une disquette protégée ;
+- **Cassette** : sélecteur des `.tap` (la même cassette : rembobinée), position et
+  moteur affichés ; lue en flux ;
+- **Redémarrer**, **Enregistrer la configuration** (`ORIC.CFG`), **Reprendre** (Échap).
+
+Touches : flèches, Entrée, Suppr (éjecter), Échap, Page préc./suiv., Début/Fin,
+une lettre saute au fichier suivant qui commence par elle. F2 à F9 insèrent les
+images intégrées au firmware (F1 à F8 auparavant).
+
+`ORIC.CFG` (racine de la clé, une clé par ligne) : `fdc=aucune|pravetz|microdisc|jasmin`,
+`a=` … `d=` (lecteurs), `tape=` ; appliqué au montage de la clé (l'Oric redémarre
+alors sur la disquette du lecteur A) ; le menu réécrit ces lignes et garde les autres.
+
+![Sélecteur de disquette](images/oric_menu_disque.png)
+
+Code : `src/osd/osd.h` (surface, rendu en indices de palette, grille 100 × 30
+sur le Neo6502 en 800 × 480, 120 × 34 en 960 × 544), `src/osd/osd_font.h`
+(police du Telestrat : unscii-8 de Viznut, domaine public, et icônes du projet),
+`src/osd/oric_menu.h` (menu, indépendant de la plate-forme), `src/osd/oric_config.h`
+(`ORIC.CFG`), `platforms/rp2040/systems/oric/src/oric.c` (clé USB, flux, cœur 1).
+**Pas encore essayé sur la carte.**
+
 ## Matériel émulé
 
 ### WD1793 (`src/devices/wd1793.h`)
@@ -134,6 +169,10 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
   cassette immobile au démarrage, `CLOAD` BASIC puis `LIST`, `CLOAD` de 8 000 octets,
   Sedoric 4.0 + `DIR`, détection de l'interface, disquette sans système, *3D Fongus*,
   démarrage FT-DOS.
+- `tests/oric/test_oric_menu.c` : rendu de la surface (encre, fond, trame, UTF-8,
+  grandes lettres), navigation, sélecteurs, refus d'une image déjà dans un autre
+  lecteur ou d'une interface sans ROM, défilement, `ORIC.CFG` (lecture, fusion,
+  troncature) ; `oric_menu_test DOSSIER` écrit des aperçus PPM du panneau.
 - `platforms/pc/systems/oric/src/oric_headless.c` : lanceur sans fenêtre utilisé par
   ces tests (`-c`, `-0..-3`, `-T`, `-V`, `-t`, `-s`, `-i`, `-P`, `-H`, `-p`, `-r`, `-W`).
 
@@ -149,8 +188,8 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
 - Les images WAVE produites par `tools/tap2wave` ne se chargent pas avec la ROM 1.1,
   déjà avant ces changements (vérifié sur la dernière version de l'auteur d'origine,
   `8e2fcff`) : leur bit 0 dure 208 + 416 µs. La lecture directe des `.tap` les remplace.
-- RP2040 : le cœur (Microdisc, Jasmin, `.tap`) est compilé dans le firmware, mais il
-  n'existe pas encore de moyen d'y insérer une disquette ou une cassette : prévu avec
-  le panneau de contrôle OSD (voir la feuille de route).
+- RP2040 : panneau de contrôle et clé USB compilés, **pas encore essayés sur la
+  carte** ; la version PC n'a pas le panneau (options de ligne de commande et
+  glisser-déposer à la place).
 - Formats non pris en charge : MFM_DISK de géométrie 2, ancien format `ORICDISK`,
   images Sedoric brutes (`SED*`), contrôleur BD-500, Telestrat.

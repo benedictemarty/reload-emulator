@@ -80,6 +80,20 @@
 
 #include "tusb.h"
 #include "neo_multiboot.h"
+#include "ff.h"
+
+// Control panel (F1): grid of 8 x 8 cells covering the output, each buffer line shown twice
+#ifdef OLIMEX_NEO6502
+#define OSD_COLS 100   // 800 x 480
+#define OSD_ROWS 30
+#else
+#define OSD_COLS 120   // 960 x 544
+#define OSD_ROWS 34
+#endif
+#define OSD_HOT          __attribute__((section(".time_critical.osd")))
+#define OSD_FONT_SECTION __attribute__((section(".time_critical.osd_font")))
+#include "osd/oric_menu.h"
+#include "osd/oric_config.h"
 
 typedef struct {
     uint32_t version;
@@ -94,6 +108,11 @@ typedef struct {
 } state_t;
 
 state_t __not_in_flash() state;
+
+// Control panel (F1): menu state, surface drawn by core 1, open flag
+static oric_menu_t __not_in_flash() menu;
+static osd_surface_t __not_in_flash() osd;
+static volatile bool panel_open;
 
 // Layout for host tools (SWD capture, co-simulation), in every build: offset of
 // the Oric RAM in `state` (text screen at $BB80, 40 x 28), size of oric_t
@@ -134,6 +153,16 @@ void app_init(void) {
     (void)diag_layout[0];   // Kept by the linker for the host tools
     oric_desc_t desc = oric_desc();
     oric_init(&state.oric, &desc);
+    oric_menu_init(&menu);
+    menu.version = "reload";
+    menu.fdc = (int)state.oric.fdc_type;
+    menu.fdc_available[ORIC_FDC_PRAVETZ] = true;
+#ifdef HAVE_MICRODISC_ROM
+    menu.fdc_available[ORIC_FDC_MICRODISC] = true;
+#endif
+#ifdef HAVE_JASMIN_ROM
+    menu.fdc_available[ORIC_FDC_JASMIN] = true;
+#endif
 }
 
 #ifdef OLIMEX_NEO6502
@@ -161,8 +190,25 @@ struct dvi_inst dvi0;
 
 void tmds_palette_init() { tmds_setup_palette24_symbols(oric_palette, tmds_palette, PALETTE_SIZE); }
 
+static void panel_toggle(void);
+// Keys of the open panel, queued by the USB HID callback and handled by the main
+// loop (the actions open files on the USB drive: not from inside a USB callback)
+static volatile uint16_t panel_keys[16];
+static volatile uint8_t panel_keys_head, panel_keys_tail;
+
 void kbd_raw_key_down(int code) {
     if (code == (NEO_MULTIBOOT_RETURN_KEY | 0x100)) neo_multiboot_return();  // Pause (code HID | 0x100 : pas d'ASCII) : retour au firmware Neo6502
+    if (code == 0x13A) {   // F1: control panel
+        panel_toggle();
+        return;
+    }
+    if (panel_open) {
+        if ((uint8_t)(panel_keys_tail - panel_keys_head) < 16) {
+            panel_keys[panel_keys_tail & 15] = (uint16_t)code;
+            panel_keys_tail++;
+        }
+        return;
+    }
     if (isascii(code)) {
         if (isupper(code)) {
             code = tolower(code);
@@ -174,7 +220,6 @@ void kbd_raw_key_down(int code) {
     oric_t *sys = &state.oric;
 
     switch (code) {
-        case 0x13A:  // F1
         case 0x13B:  // F2
         case 0x13C:  // F3
         case 0x13D:  // F4
@@ -184,7 +229,7 @@ void kbd_raw_key_down(int code) {
         case 0x141:  // F8
         case 0x142:  // F9
         {
-            uint8_t index = code - 0x13A;
+            uint8_t index = code - 0x13B;   // F2: first image (F1 opens the control panel)
             int num_nib_images = CHIPS_ARRAY_SIZE(oric_nib_images);
             if (index < num_nib_images) {
                 if (sys->fdc.valid) {
@@ -257,6 +302,303 @@ static void diag_key_service(void) {
 }
 #endif
 
+/*-- USB drive: disk and tape images streamed from files ----------------------*/
+
+extern bool msc_inquiry_complete;
+extern void msc_poll(void);
+
+static bool usb_scanned;
+static FIL dsk_fil[ORIC_MENU_DRIVES];
+static bool dsk_open[ORIC_MENU_DRIVES];
+static FIL tap_fil;
+static bool tap_open;
+
+static bool has_ext(const char *name, const char *ext) {
+    size_t n = strlen(name), e = strlen(ext);
+    if (n < e) return false;
+    for (size_t i = 0; i < e; i++) {
+        char c = name[n - e + i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        if (c != ext[i]) return false;
+    }
+    return true;
+}
+
+// Track reader / writer of the WD1793 (ctx = drive)
+static bool dsk_read(void *ctx, uint32_t offset, uint8_t *buf, uint32_t len) {
+    FIL *f = &dsk_fil[(intptr_t)ctx];
+    UINT n = 0;
+    return f_lseek(f, offset) == FR_OK && f_read(f, buf, len, &n) == FR_OK && n == len;
+}
+
+static bool dsk_write(void *ctx, uint32_t offset, const uint8_t *buf, uint32_t len) {
+    FIL *f = &dsk_fil[(intptr_t)ctx];
+    UINT n = 0;
+    return f_lseek(f, offset) == FR_OK && f_write(f, buf, len, &n) == FR_OK && n == len && f_sync(f) == FR_OK;
+}
+
+static uint32_t tap_read(void *ctx, uint32_t offset, uint8_t *buf, uint32_t len) {
+    (void)ctx;
+    UINT n = 0;
+    if (f_lseek(&tap_fil, offset) != FR_OK || f_read(&tap_fil, buf, len, &n) != FR_OK) return 0;
+    return n;
+}
+
+static void dsk_close(int d) {
+    wd1793_eject(&state.oric.wd, d);   // Writes the cached track back first
+    if (dsk_open[d]) f_close(&dsk_fil[d]);
+    dsk_open[d] = false;
+    menu.drive[d][0] = 0;
+    menu.drive_ro[d] = false;
+}
+
+static bool dsk_insert(int d, const char *name) {
+    dsk_close(d);
+    bool ro = false;
+    if (f_open(&dsk_fil[d], name, FA_READ | FA_WRITE) != FR_OK) {
+        if (f_open(&dsk_fil[d], name, FA_READ) != FR_OK) return false;
+        ro = true;
+    }
+    dsk_open[d] = true;
+    uint8_t header[ORIC_DSK_HEADER_SIZE];
+    if (!dsk_read((void *)(intptr_t)d, 0, header, sizeof(header)) ||
+        !wd1793_insert_streamed(&state.oric.wd, d, header, (uint32_t)f_size(&dsk_fil[d]), dsk_read, ro ? 0 : dsk_write,
+                                (void *)(intptr_t)d)) {
+        f_close(&dsk_fil[d]);
+        dsk_open[d] = false;
+        return false;
+    }
+    snprintf(menu.drive[d], sizeof(menu.drive[d]), "%s", name);
+    menu.drive_ro[d] = ro;
+    return true;
+}
+
+static void tap_close(void) {
+    if (state.oric.td.valid) oric_td_remove_tape(&state.oric.td);
+    if (tap_open) f_close(&tap_fil);
+    tap_open = false;
+    menu.tape[0] = 0;
+}
+
+static bool tap_insert(const char *name) {
+    if (tap_open && !strcmp(menu.tape, name)) {
+        oric_td_rewind(&state.oric.td);   // The same tape: rewound
+        return true;
+    }
+    tap_close();
+    if (f_open(&tap_fil, name, FA_READ) != FR_OK) return false;
+    tap_open = true;
+    if (!oric_td_insert_tap_streamed(&state.oric.td, (uint32_t)f_size(&tap_fil), tap_read, 0)) {
+        tap_close();
+        return false;
+    }
+    snprintf(menu.tape, sizeof(menu.tape), "%s", name);
+    return true;
+}
+
+// .dsk and .tap files of the root, sorted by name
+static void usb_scan(void) {
+    DIR dir;
+    FILINFO fno;
+    menu.nfiles = 0;
+    if (f_opendir(&dir, "/") != FR_OK) return;
+    while (menu.nfiles < ORIC_MENU_FILES && f_readdir(&dir, &fno) == FR_OK && fno.fname[0]) {
+        if (fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
+        int kind = has_ext(fno.fname, ".dsk") ? ORIC_FILE_DSK : has_ext(fno.fname, ".tap") ? ORIC_FILE_TAP : -1;
+        if (kind < 0) continue;
+        oric_menu_file_t *f = &menu.files[menu.nfiles++];
+        snprintf(f->name, sizeof(f->name), "%s", fno.fname);
+        f->size = (uint32_t)fno.fsize;
+        f->kind = (uint8_t)kind;
+    }
+    f_closedir(&dir);
+    for (int i = 1; i < menu.nfiles; i++) {
+        oric_menu_file_t t = menu.files[i];
+        int j = i - 1;
+        while (j >= 0 && strcmp(menu.files[j].name, t.name) > 0) {
+            menu.files[j + 1] = menu.files[j];
+            j--;
+        }
+        menu.files[j + 1] = t;
+    }
+    snprintf(menu.usb_label, sizeof(menu.usb_label), "Clé montée");
+    menu.usb_present = true;
+    printf("USB: %d image(s)\n", menu.nfiles);
+}
+
+static bool panel_set_fdc(int type) {
+    wd1793_flush(&state.oric.wd);
+    if (!oric_set_fdc(&state.oric, (oric_fdc_type_t)type)) return false;
+    menu.fdc = type;
+    return true;
+}
+
+// ORIC.CFG of the USB drive: interface, drives, tape (then the Oric restarts)
+static void config_load(void) {
+    FIL f;
+    if (f_open(&f, ORIC_CONFIG_FILE, FA_READ) != FR_OK) return;
+    char line[96];
+    int fdc = -1;
+    static char drives[ORIC_MENU_DRIVES][ORIC_MENU_NAME_LEN];
+    static char tape[ORIC_MENU_NAME_LEN];
+    memset(drives, 0, sizeof(drives));
+    tape[0] = 0;
+    while (f_gets(line, sizeof(line), &f)) {
+        const char *v;
+        if ((v = oric_config_value(line, "fdc"))) {
+            fdc = oric_config_fdc(v);
+        } else if ((v = oric_config_value(line, "tape"))) {
+            oric_config_copy(tape, sizeof(tape), v);
+        } else {
+            for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
+                const char key[2] = {(char)('a' + d), 0};
+                if ((v = oric_config_value(line, key))) oric_config_copy(drives[d], sizeof(drives[d]), v);
+            }
+        }
+    }
+    f_close(&f);
+    if (fdc >= 0) panel_set_fdc(fdc);
+    for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
+        if (drives[d][0] && !dsk_insert(d, drives[d])) printf("ORIC.CFG: cannot open %s\n", drives[d]);
+    }
+    if (tape[0] && !tap_insert(tape)) printf("ORIC.CFG: cannot open %s\n", tape);
+    oric_reset(&state.oric);   // Boot from the disk in drive A
+    printf("ORIC.CFG applied\n");
+}
+
+static void config_save(void) {
+    static char old[1024], out[1536];
+    old[0] = 0;
+    FIL f;
+    UINT n = 0;
+    if (f_open(&f, ORIC_CONFIG_FILE, FA_READ) == FR_OK) {
+        if (f_read(&f, old, sizeof(old) - 1, &n) != FR_OK) n = 0;
+        old[n] = 0;
+        f_close(&f);
+    }
+    const char *drives[ORIC_MENU_DRIVES] = {menu.drive[0], menu.drive[1], menu.drive[2], menu.drive[3]};
+    size_t len = oric_config_merge(old, menu.fdc, drives, menu.tape, out, sizeof(out));
+    bool ok = f_open(&f, ORIC_CONFIG_FILE, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK;
+    if (ok) {
+        ok = f_write(&f, out, (UINT)len, &n) == FR_OK && n == len;
+        ok = (f_close(&f) == FR_OK) && ok;
+    }
+    oric_menu_message(&menu, !ok, ok ? "Configuration enregistrée dans ORIC.CFG" : "ORIC.CFG : écriture impossible");
+}
+
+// Called every frame: once the USB drive is mounted, list its images and apply ORIC.CFG
+static void usb_poll(void) {
+    msc_poll();
+    if (usb_scanned || !msc_inquiry_complete) return;
+    usb_scanned = true;
+    usb_scan();
+    config_load();
+}
+
+/*-- Control panel (F1) --------------------------------------------------------*/
+// Core 0 builds the surface (osd), core 1 draws it in place of the Oric picture
+// while panel_open is set. The emulation is paused while the panel is open.
+
+static void panel_refresh(void) {
+    menu.fdc = (int)state.oric.fdc_type;
+    oric_td_t *td = &state.oric.td;
+    menu.tape_motor = td->valid && oric_td_is_motor_on(td);
+    menu.tape_percent = (td->valid && td->tap_size) ? (int)((uint64_t)td->tap_pos * 100 / td->tap_size) : 0;
+    oric_menu_draw(&menu, &osd);
+}
+
+static void panel_toggle(void) {
+    if (panel_open) {
+        panel_open = false;
+        return;
+    }
+    menu.message[0] = 0;
+    menu.page = ORIC_PAGE_MAIN;
+    menu.cursor = ORIC_ITEM_RESUME;
+    panel_refresh();
+    panel_open = true;
+}
+
+static void panel_action(oric_menu_action_t a) {
+    char msg[96];
+    switch (a.type) {
+        case ORIC_ACT_SET_FDC:
+            if (panel_set_fdc(a.file)) {
+                snprintf(msg, sizeof(msg), "Interface %s : l'Oric redémarre", oric_menu_fdc_names[a.file]);
+                oric_menu_message(&menu, false, msg);
+            } else {
+                oric_menu_message(&menu, true, "Interface indisponible (ROM absente)");
+            }
+            break;
+        case ORIC_ACT_INSERT:
+            if (dsk_insert(a.target, menu.files[a.file].name)) {
+                snprintf(msg, sizeof(msg), "%.48s dans le lecteur %c%s", menu.files[a.file].name, 'A' + a.target,
+                         a.target == 0 ? " : Redémarrer pour démarrer dessus" : "");
+                oric_menu_message(&menu, false, msg);
+            } else {
+                snprintf(msg, sizeof(msg), "%.48s : image MFM_DISK illisible", menu.files[a.file].name);
+                oric_menu_message(&menu, true, msg);
+            }
+            break;
+        case ORIC_ACT_EJECT:
+            dsk_close(a.target);
+            snprintf(msg, sizeof(msg), "Lecteur %c vide", 'A' + a.target);
+            oric_menu_message(&menu, false, msg);
+            break;
+        case ORIC_ACT_TAPE_INSERT:
+            if (tap_insert(menu.files[a.file].name)) {
+                snprintf(msg, sizeof(msg), "%.48s en place : taper CLOAD\"\"", menu.files[a.file].name);
+                oric_menu_message(&menu, false, msg);
+            } else {
+                oric_menu_message(&menu, true, "Cassette illisible");
+            }
+            break;
+        case ORIC_ACT_TAPE_EJECT:
+            tap_close();
+            oric_menu_message(&menu, false, "Cassette éjectée");
+            break;
+        case ORIC_ACT_RESET:
+            oric_reset(&state.oric);
+            panel_open = false;
+            return;
+        case ORIC_ACT_SAVE:
+            if (menu.usb_present) config_save();
+            else oric_menu_message(&menu, true, "Pas de clé USB");
+            break;
+        case ORIC_ACT_RESUME:
+            panel_open = false;
+            return;
+        default:
+            break;
+    }
+    panel_refresh();
+}
+
+// Keys while the panel is open (codes of hid_app.c: ASCII, or HID usage | 0x100)
+static bool panel_key(int code) {
+    int key;
+    switch (code) {
+        case 0x152: key = OSD_KEY_UP; break;
+        case 0x151: key = OSD_KEY_DOWN; break;
+        case 0x150: key = OSD_KEY_LEFT; break;
+        case 0x14F: key = OSD_KEY_RIGHT; break;
+        case 0x0D: key = OSD_KEY_ENTER; break;
+        case 0x1B: key = OSD_KEY_ESC; break;
+        case 0x7F:
+        case 0x08: key = OSD_KEY_DEL; break;
+        case 0x14B: key = OSD_KEY_PGUP; break;
+        case 0x14E: key = OSD_KEY_PGDN; break;
+        case 0x14A: key = OSD_KEY_HOME; break;
+        case 0x14D: key = OSD_KEY_END; break;
+        default:
+            if (code <= ' ' || code >= 0x7F) return false;
+            key = code;
+            break;
+    }
+    panel_action(oric_menu_key(&menu, key));
+    return true;
+}
+
 // extern void oric_render_scanline_2x(const uint32_t *pixbuf, uint32_t *scanbuf, size_t n_pix);
 extern void oric_render_scanline_3x(const uint32_t *pixbuf, uint32_t *scanbuf, size_t n_pix);
 extern void copy_tmdsbuf(uint32_t *dest, const uint32_t *src);
@@ -313,6 +655,20 @@ static inline void __not_in_flash_func(render_frame)() {
     }
 }
 
+// Control panel: each OSD line shown twice (OSD_LINES = FRAME_HEIGHT / 2)
+static inline void __not_in_flash_func(render_panel)() {
+    for (int y = 0; y < OSD_LINES; y++) {
+        uint32_t *tmdsbuf, *second;
+        queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
+        osd_render_line(&osd, y, scanbuf);
+        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
+        queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
+        queue_remove_blocking_u32(&dvi0.q_tmds_free, &second);
+        copy_tmdsbuf(second, tmdsbuf);
+        queue_add_blocking_u32(&dvi0.q_tmds_valid, &second);
+    }
+}
+
 void __not_in_flash_func(core1_main()) {
     audio_init(_AUDIO_PIN, 22050);
 
@@ -320,6 +676,10 @@ void __not_in_flash_func(core1_main()) {
     dvi_start(&dvi0);
 
     while (1) {
+        if (panel_open) {
+            render_panel();
+            continue;
+        }
         render_empty_scanlines();
         render_frame();
         render_empty_scanlines();
@@ -358,9 +718,19 @@ int main() {
     while (1) {
         uint32_t start_time_in_micros = time_us_32();
 
-        uint32_t num_ticks = 19968;
+        uint32_t num_ticks = panel_open ? 0 : 19968;   // Paused while the control panel is open
         for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
             oric_tick(&state.oric);
+        }
+        usb_poll();
+        while (panel_keys_head != panel_keys_tail) {
+            int code = panel_keys[panel_keys_head & 15];
+            panel_keys_head++;
+            if (panel_open) panel_key(code);
+        }
+        if (panel_open) {
+            static uint32_t refresh;
+            if ((++refresh & 15) == 0) panel_refresh();   // Tape position, motor
         }
 
         oric_screen_update(&state.oric);

@@ -46,3 +46,12 @@ add_test(NAME oric_devices COMMAND oric_devices_test)
 add_test(NAME oric_integration
          COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/run_integration.sh $<TARGET_FILE:oric_headless>)
 set_tests_properties(oric_integration PROPERTIES SKIP_RETURN_CODE 77)
+
+#=== EXECUTABLE: oric_menu_test (control panel, ORIC.CFG, OSD rendering)
+
+add_executable(oric_menu_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/test_oric_menu.c)
+target_include_directories(oric_menu_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+if (NOT MSVC)
+    target_compile_options(oric_menu_test PUBLIC -Wall -Wextra -Wsign-compare)
+endif()
+add_test(NAME oric_menu COMMAND oric_menu_test)
