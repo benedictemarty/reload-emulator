@@ -31,6 +31,15 @@
 #include "pico/stdlib.h"
 
 #include "roms/pravetz8d_roms.h"
+// Microdisc / Jasmin ROMs: optional
+#if __has_include("roms/oric_microdisc_rom.h")
+#include "roms/oric_microdisc_rom.h"
+#define HAVE_MICRODISC_ROM 1
+#endif
+#if __has_include("roms/oric_jasmin_rom.h")
+#include "roms/oric_jasmin_rom.h"
+#define HAVE_JASMIN_ROM 1
+#endif
 #include "images/oric_images.h"
 
 #include "chips/chips_common.h"
@@ -48,6 +57,8 @@
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/oric_fdc_rom.h"
+#include "devices/oric_dsk.h"
+#include "devices/wd1793.h"
 #include "systems/oric.h"
 
 #include "hardware/clocks.h"
@@ -109,6 +120,12 @@ oric_desc_t oric_desc(void) {
             {
                 .rom = {.ptr = oric_rom, .size = sizeof(oric_rom)},
                 .boot_rom = {.ptr = oric_fdc_rom, .size = sizeof(oric_fdc_rom)},
+#ifdef HAVE_MICRODISC_ROM
+                .microdisc_rom = {.ptr = oric_microdisc_rom, .size = sizeof(oric_microdisc_rom)},
+#endif
+#ifdef HAVE_JASMIN_ROM
+                .jasmin_rom = {.ptr = oric_jasmin_rom, .size = sizeof(oric_jasmin_rom)},
+#endif
             },
     };
 }

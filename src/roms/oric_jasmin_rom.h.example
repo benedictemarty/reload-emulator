@@ -1,0 +1,8 @@
+#pragma once
+#include <stdint.h>
+// Oric Jasmin ROM (2048 bytes), tools/bin2hdr
+uint8_t __not_in_flash() oric_jasmin_rom[] = {
+    // Put the content of your ROM here
+    //
+    // MD5 (jasmin.rom) = 5136f764a7dbd1352519351fbb53a9f3 (version tested)
+};

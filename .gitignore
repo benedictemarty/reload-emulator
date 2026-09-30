@@ -4,3 +4,8 @@ src/roms/*.h
 **/.vscode
 **/build
 platforms/rp2040/build_mb/
+# Tenus en local uniquement (jamais suivis par git)
+CHANGELOG.md
+ROADMAP.md
+changelog.md
+roadmap.md

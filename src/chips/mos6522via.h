@@ -316,6 +316,8 @@ static inline void _mos6522via_write_ier(mos6522via_t* c, uint8_t data) {
         c->intr.ier |= data & 0x7F;
     } else {
         c->intr.ier &= ~(data & 0x7F);
+        // IRQ = IFR & IER: disabling the active sources releases IRQ (and IFR bit 7)
+        _mos6522via_clear_intr(c, 0);
     }
 }
 

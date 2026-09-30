@@ -1,0 +1,8 @@
+#pragma once
+#include <stdint.h>
+// Oric Microdisc EPROM (8192 bytes), tools/bin2hdr
+uint8_t __not_in_flash() oric_microdisc_rom[] = {
+    // Put the content of your ROM here
+    //
+    // MD5 (microdis.rom) = df864344d2a2091c3f952bd1c5ce1707 (version tested)
+};

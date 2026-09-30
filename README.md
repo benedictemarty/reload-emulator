@@ -17,7 +17,14 @@ Emulated systems:
 ### Oric Atmos
   - 64 KB RAM installed
   - 16 KB Overlay RAM installed
-  - Disk II controller installed and 1 drive
+  - Tape drive: `.tap` images (played as a real tape signal) or WAVE images
+  - Disk interfaces (one at a time):
+    - Pravetz 8D (Disk II compatible, NIB images)
+    - Microdisc (WD1793, Sedoric, MFM_DISK `.dsk` images, 4 drives)
+    - Jasmin (WD1793, FT-DOS, MFM_DISK `.dsk` images, 4 drives)
+  - Printer port (always acknowledging, bytes available to the host)
+
+See [docs/ORIC-DISQUES-CASSETTES.md](docs/ORIC-DISQUES-CASSETTES.md) (French) for the disk and tape support, its sources and its tests.
 
 ## Requirements (RP2040)
 ### Tools
@@ -63,6 +70,25 @@ make
 
 # Done
 ```
+
+### Oric on the PC
+
+```bash
+# Sedoric disk (Microdisc) or FT-DOS disk (Jasmin): the interface is chosen from the disk
+./systems/oric/oric disk=Sedoric.dsk
+# Force an interface, other drives, write the modified disks back on exit
+./systems/oric/oric fdc=microdisc disk=a.dsk disk1=b.dsk write=true
+# Tape: CLOAD"" is typed for you; the emulation runs 16x faster while the tape motor runs
+./systems/oric/oric tape=game.tap
+./systems/oric/oric tape=game.tap tape-turbo=false
+```
+
+`.dsk` and `.tap` files can also be dropped on the window. The Microdisc and Jasmin
+interfaces need their ROMs as headers: `src/roms/oric_microdisc_rom.h` and
+`src/roms/oric_jasmin_rom.h` (see the `.example` files); without them the interface is not available.
+
+Tests: `ctest -R oric` in `platforms/pc/build` (unit tests without ROM, integration
+tests with the ROMs and images listed in `tests/oric/run_integration.sh`).
 
 ## Building firmware
 Original firmware is not distributed with emulator sources. Please, make sure you have the proper license to use and build the headers from your own binaries.
