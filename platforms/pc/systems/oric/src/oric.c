@@ -42,7 +42,11 @@
 
 #include "chips/chips_common.h"
 #include "common.h"
-#include "chips/mos6502cpu.h"
+#ifdef ORIC_NMOS
+#include "chips/mos6502cpu.h"   // NMOS 6502 of the original Oric (cmake -DORIC_PC_NMOS=ON)
+#else
+#include "chips/w65c02cpu.h"    // W65C02, as on the Neo6502 board (default)
+#endif
 #include "chips/mos6522via.h"
 #include "chips/ay38910psg.h"
 #include "chips/beeper.h"
@@ -231,7 +235,7 @@ oric_desc_t oric_desc(void) {
         .audio =
             {
                 .callback = {.func = audio_callback},
-                .sample_rate = 44100,
+                .sample_rate = saudio_sample_rate(),   // Rate opened by sokol_audio (saudio_setup runs first)
             },
         .roms =
             {

@@ -96,6 +96,19 @@ interfaces need their ROMs as headers: `src/roms/oric_microdisc_rom.h` and
 Tests: `ctest -R oric` in `platforms/pc/build` (unit tests without ROM, integration
 tests with the ROMs and images listed in `tests/oric/run_integration.sh`).
 
+The PC build runs on the W65C02 core, as the Neo6502 board (real W65C02); the NMOS
+6502 of the original Oric (undocumented opcodes) with `cmake -DORIC_PC_NMOS=ON`.
+
+CPU cores: `ctest -R cpu_` runs Tom Harte's SingleStepTests and Klaus Dormann's
+tests (data outside the tree, see [docs/CPU-TESTS.md](docs/CPU-TESTS.md), French).
+
+### Apple on the Neo6502
+
+The ProDOS hard disk image named in `src/images/apple2_images.h` is opened on the
+USB drive; without the drive (3 s at start-up) or the image, the Autostart ROM goes on
+to BASIC. Pause returns to the Neo6502 firmware (multi-boot, `NEO_SLOT_APPLE2`,
+`NEO_SLOT_APPLE2E`).
+
 ## Building firmware
 Original firmware is not distributed with emulator sources. Please, make sure you have the proper license to use and build the headers from your own binaries.
 

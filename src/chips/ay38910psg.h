@@ -174,6 +174,10 @@ void ay38910psg_tick_envelope_generator(ay38910psg_t* c);
 
 void ay38910psg_tick_sample_generator(ay38910psg_t* c);
 
+// Current output, three channels mixed in integers: 0..255, each channel 0..85 (no
+// overflow, no float; `magnitude` is not applied)
+uint8_t ay38910psg_sample_u8(const ay38910psg_t* c);
+
 uint8_t ay38910psg_read(ay38910psg_t* c);
 
 void ay38910psg_write(ay38910psg_t* c, uint8_t data);
@@ -238,6 +242,9 @@ static const float _ay38910psg_volumes[16] = {0.0f,
                                               0.635324635691f,
                                               0.805584802014f,
                                               1.0f};
+
+// _ay38910psg_volumes * 85: three channels at full volume give 255
+static const uint8_t _ay38910psg_volumes_u8[16] = {0, 1, 1, 2, 3, 4, 5, 9, 11, 17, 25, 32, 42, 54, 68, 85};
 
 // Canned envelope generator shapes
 static const uint8_t _ay38910psg_shapes[16][32] = {
@@ -410,6 +417,18 @@ CHIPS_HOT void ay38910psg_tick_sample_generator(ay38910psg_t* c) {
     }
     // c->sample = _ay38910psg_dcadjust(c, sm) * c->mag;
     c->sample = sm * c->mag;
+}
+
+CHIPS_HOT uint8_t ay38910psg_sample_u8(const ay38910psg_t* c) {
+    uint32_t sm = 0;
+    for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
+        const ay38910psg_tone_t* chn = &c->tone[i];
+        if ((chn->bit | chn->tone_disable) & ((c->noise.rng & 1) | chn->noise_disable)) {
+            uint8_t amp = c->reg[AY38910PSG_REG_AMP_A + i];
+            sm += _ay38910psg_volumes_u8[(amp & (1 << 4)) ? c->env.shape_state : (amp & 0x0F)];
+        }
+    }
+    return (uint8_t)sm;
 }
 
 CHIPS_HOT uint8_t ay38910psg_read(ay38910psg_t* c) {

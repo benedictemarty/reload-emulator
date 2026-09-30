@@ -1,3 +1,10 @@
+# CPU of the PC build: W65C02 as on the Neo6502 board (default), or the NMOS 6502
+# of the original Oric (undocumented opcodes)
+option(ORIC_PC_NMOS "Oric PC build on the NMOS 6502 core (mos6502cpu.h)" OFF)
+if (ORIC_PC_NMOS)
+    add_compile_definitions(ORIC_NMOS)
+endif()
+
 #=== EXECUTABLE: oric
 
 if(CMAKE_SYSTEM_NAME STREQUAL Windows)

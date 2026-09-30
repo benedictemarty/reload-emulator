@@ -152,6 +152,8 @@ typedef struct {
     chips_debug_t debug;
 
     chips_audio_callback_t audio_callback;
+    uint32_t sample_rate;    // Audio samples per second (desc.audio.sample_rate)
+    uint32_t sample_acc;     // Fractional sample clock: + sample_rate per cycle
 
     uint8_t ram[0xC000];
     uint8_t overlay_ram[0x4000];
@@ -265,6 +267,7 @@ void oric_init(oric_t* sys, const oric_desc_t* desc) {
     sys->valid = true;
     sys->debug = desc->debug;
     sys->audio_callback = desc->audio.callback;
+    sys->sample_rate = (uint32_t)CHIPS_DEFAULT(desc->audio.sample_rate, 22050);
     sys->printer_cb = desc->printer_cb;
     sys->printer_user_data = desc->printer_user_data;
 
@@ -656,15 +659,14 @@ ORIC_HOT void oric_tick(oric_t* sys) {
         ay38910psg_tick_envelope_generator(&sys->psg);
     }
 
-    static uint8_t t1 = 0;
-    t1++;
-    if (t1 == 46) {
-        ay38910psg_tick_sample_generator(&sys->psg);
+    // Exactly sample_rate samples per second of emulated time (fractional clock),
+    // three PSG channels mixed in integers (no overflow when several are loud)
+    sys->sample_acc += sys->sample_rate;
+    if (sys->sample_acc >= ORIC_FREQUENCY) {
+        sys->sample_acc -= ORIC_FREQUENCY;
         if (sys->audio_callback.func) {
-            // New sample is ready
-            sys->audio_callback.func((uint8_t)((uint8_t)(sys->psg.sample * 255.0f)), sys->audio_callback.user_data);
+            sys->audio_callback.func(ay38910psg_sample_u8(&sys->psg), sys->audio_callback.user_data);
         }
-        t1 = 0;
     }
 
     // Tick FDC

@@ -51,7 +51,11 @@ static uint8_t test_boot_rom[0x200];
 static uint8_t* oric_nib_images[1];
 
 #include "chips/chips_common.h"
-#include "chips/mos6502cpu.h"
+#ifdef ORIC_NMOS
+#include "chips/mos6502cpu.h"   // NMOS 6502 of the original Oric (cmake -DORIC_PC_NMOS=ON)
+#else
+#include "chips/w65c02cpu.h"    // W65C02, as on the Neo6502 board (default)
+#endif
 #include "chips/mos6522via.h"
 #include "chips/ay38910psg.h"
 #include "chips/kbd.h"
@@ -703,6 +707,52 @@ static void bus_write(uint16_t addr, uint8_t v) {
 
 static void printer_cb(uint8_t c, void* user) { *(int*)user = c; }
 
+// PSG mix and sample clock: integer mix without overflow, exactly sample_rate
+// samples per emulated second
+static uint32_t audio_samples;
+static uint8_t audio_max;
+static void audio_cb(const uint8_t sample, void* user_data) {
+    (void)user_data;
+    audio_samples++;
+    if (sample > audio_max) audio_max = sample;
+}
+
+static void test_audio(void) {
+    static ay38910psg_t psg;
+    ay38910psg_init(&psg, &(ay38910psg_desc_t){.type = AY38910PSG_TYPE_8912, .magnitude = 1.0f});
+    CHECK(ay38910psg_sample_u8(&psg) == 0);
+    // Tones and noise disabled: outputs follow the amplitudes
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_ENABLE);
+    ay38910psg_write(&psg, 0xFF);
+    for (int i = 0; i < 3; i++) {
+        ay38910psg_latch_address(&psg, (uint8_t)(AY38910PSG_REG_AMP_A + i));
+        ay38910psg_write(&psg, 15);
+    }
+    CHECK(ay38910psg_sample_u8(&psg) == 255);   // Three channels at full volume: no wrap
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_AMP_B);
+    ay38910psg_write(&psg, 0);
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_AMP_C);
+    ay38910psg_write(&psg, 0);
+    CHECK(ay38910psg_sample_u8(&psg) == 85);    // One channel: a third of the range
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_AMP_A);
+    ay38910psg_write(&psg, 0x10);               // Envelope control
+    psg.env.shape_state = 15;
+    CHECK(ay38910psg_sample_u8(&psg) == 85);
+
+    const uint32_t rates[] = {22050, 44100};
+    for (int r = 0; r < 2; r++) {
+        oric_desc_t desc = {
+            .audio = {.callback = {.func = audio_cb}, .sample_rate = (int)rates[r]},
+            .roms = {.rom = {.ptr = oric_rom, .size = sizeof(oric_rom)},
+                     .boot_rom = {.ptr = test_boot_rom, .size = sizeof(test_boot_rom)}},
+        };
+        oric_init(&sys, &desc);
+        audio_samples = 0;
+        for (uint32_t i = 0; i < ORIC_FREQUENCY; i++) oric_tick(&sys);   // One emulated second
+        CHECK(audio_samples == rates[r]);
+    }
+}
+
 static void test_oric_interfaces(void) {
     oric_rom[0x3FFC] = 0x00;
     oric_rom[0x3FFD] = 0xC0;
@@ -827,6 +877,7 @@ int main(void) {
     test_tape_streamed();
     test_via_ier();
     test_oric_interfaces();
+    test_audio();
     free(image);
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
