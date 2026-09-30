@@ -180,6 +180,7 @@ typedef struct {
     uint8_t* microdisc_rom;
     uint8_t* jasmin_rom;
     bool via_irq;
+    bool irq_line;           // Last level driven on the CPU IRQ line (written only when it changes)
     uint8_t md_ctrl;         // Microdisc control register ($0314)
     bool romdis;             // BASIC ROM disabled
     bool diskrom;            // Microdisc EPROM enabled
@@ -645,34 +646,43 @@ static ORIC_HOT void _oric_mem_rw(oric_t* sys, uint16_t addr, bool rw) {
 
 static uint8_t _last_motor_state = 0;
 
+// One cycle. The work done every 4 cycles (system_ticks multiple of 4) is grouped
+// in the `quad` blocks: the PSG, Disk II and VIA periods are multiples of 4, and
+// the sample clock advances by 4 cycles at a time (same count per second).
 ORIC_HOT void oric_tick(oric_t* sys) {
     MOS6502CPU_TICK(&sys->cpu);
 
     _oric_mem_rw(sys, sys->cpu.addr, sys->cpu.rw);
 
-    // Tick PSG
-    if ((sys->system_ticks & 63) == 0) {
-        ay38910psg_tick_channels(&sys->psg);
-    }
-
-    if ((sys->system_ticks & 127) == 0) {
-        ay38910psg_tick_envelope_generator(&sys->psg);
-    }
-
-    // Exactly sample_rate samples per second of emulated time (fractional clock),
-    // three PSG channels mixed in integers (no overflow when several are loud)
-    sys->sample_acc += sys->sample_rate;
-    if (sys->sample_acc >= ORIC_FREQUENCY) {
-        sys->sample_acc -= ORIC_FREQUENCY;
-        if (sys->audio_callback.func) {
-            sys->audio_callback.func(ay38910psg_sample_u8(&sys->psg), sys->audio_callback.user_data);
+    const bool quad = (sys->system_ticks & 3) == 0;
+    if (quad) {
+        // Tick PSG
+        if ((sys->system_ticks & 63) == 0) {
+            ay38910psg_tick_channels(&sys->psg);
+            if ((sys->system_ticks & 127) == 0) {
+                ay38910psg_tick_envelope_generator(&sys->psg);
+                // Tick Disk II
+                if (sys->fdc.valid) {
+                    disk2_fdc_tick(&sys->fdc);
+                }
+            }
         }
+
+        // Exactly sample_rate samples per second of emulated time (fractional clock),
+        // three PSG channels mixed in integers (no overflow when several are loud)
+        sys->sample_acc += 4 * sys->sample_rate;
+        if (sys->sample_acc >= ORIC_FREQUENCY) {
+            sys->sample_acc -= ORIC_FREQUENCY;
+            if (sys->audio_callback.func) {
+                sys->audio_callback.func(ay38910psg_sample_u8(&sys->psg), sys->audio_callback.user_data);
+            }
+        }
+
+        // Tick VIA (lazy: while no timer can reach zero, only the cycles are counted)
+        sys->via_irq = mos6522via_tick(&sys->via, 4);
     }
 
-    // Tick FDC
-    if (sys->fdc.valid && (sys->system_ticks & 127) == 0) {
-        disk2_fdc_tick(&sys->fdc);
-    }
+    // Tick WD1793 (Microdisc, Jasmin)
     if (sys->fdc_type >= ORIC_FDC_MICRODISC) {
         if (sys->wd.state != WD1793_IDLE) {
             wd1793_tick(&sys->wd);
@@ -686,11 +696,8 @@ ORIC_HOT void oric_tick(oric_t* sys) {
         }
     }
 
-    // Tick VIA
-    if ((sys->system_ticks & 3) == 0) {
-        sys->via_irq = mos6522via_tick(&sys->via, 4);
-    }
-    // IRQ line: VIA, plus Microdisc INTRQ (when enabled) or Jasmin DRQ
+    // IRQ line: VIA, plus Microdisc INTRQ (when enabled) or Jasmin DRQ; driven
+    // only when it changes (on the board, a GPIO write per cycle otherwise)
     {
         bool irq = sys->via_irq;
         if (sys->fdc_type == ORIC_FDC_MICRODISC) {
@@ -698,10 +705,13 @@ ORIC_HOT void oric_tick(oric_t* sys) {
         } else if (sys->fdc_type == ORIC_FDC_JASMIN) {
             irq |= sys->wd.drq;
         }
-        MOS6502CPU_SET_IRQ(&sys->cpu, irq);
+        if (irq != sys->irq_line) {
+            sys->irq_line = irq;
+            MOS6502CPU_SET_IRQ(&sys->cpu, irq);
+        }
     }
 
-    if ((sys->system_ticks & 3) == 0) {
+    if (quad) {
 
         // Update PSG state
         if (mos6522via_get_cb2(&sys->via)) {
@@ -723,10 +733,11 @@ ORIC_HOT void oric_tick(oric_t* sys) {
         if (line >= 0 && line <= 7) {
             uint8_t line_mask = 1 << line;
             // Any key of this line (another line may have a key down too, e.g. SHIFT)
-            if (kbd_scan_lines(&sys->kbd) & line_mask) {
-                mos6522via_set_pb(&sys->via, pb | (1 << 3));
-            } else {
-                mos6522via_set_pb(&sys->via, pb & ~(1 << 3));
+            const uint8_t data = (kbd_scan_lines(&sys->kbd) & line_mask) ? (pb | (1 << 3)) : (pb & ~(1 << 3));
+            // Same input and no PB6 edge pending: the call would change nothing, and
+            // it would leave the VIA's lazy mode (timers ticked every 4 cycles)
+            if (data != sys->via.pb.inpr || sys->via.pb6_triggered) {
+                mos6522via_set_pb(&sys->via, data);
             }
         }
 
@@ -765,10 +776,10 @@ ORIC_HOT void oric_tick(oric_t* sys) {
                 oric_td_tick(&sys->td);
                 t2 = 0;
             }
-            if (sys->td.port & ORIC_TD_PORT_READ) {
-                mos6522via_set_cb1(&sys->via, true);
-            } else {
-                mos6522via_set_cb1(&sys->via, false);
+            // Only when it changes (or an edge is pending): same reason as PB above
+            const bool cb1 = (sys->td.port & ORIC_TD_PORT_READ) != 0;
+            if (cb1 != sys->via.pb.c1_in || sys->via.pb.c1_triggered) {
+                mos6522via_set_cb1(&sys->via, cb1);
             }
         }
     }

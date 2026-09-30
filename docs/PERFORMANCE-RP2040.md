@@ -111,6 +111,22 @@ par `gpio_put`, VIA). Pistes : regrouper le travail par 4 cycles comme
 `bbc_tick4`, VIA « paresseuse » (`mos6522via_tick_inline`, déjà utilisée par le
 BBC), broche IRQ écrite seulement quand elle change.
 
+### `oric_tick` restructuré (2026-09-30, même programme, même carte)
+
+| Firmware | Avant | Après | 40 000 cycles : bus seul / `oric_tick` |
+|---|---|---|---|
+| `oric_diag_pio` | 106,6 % | **82,9 %** (16 546 µs) | 9 896 / 33 942 µs |
+| `oric_diag` | 112,7 % | **86,3 %** (17 230 µs) | 9 583 / 34 318 µs |
+
+Les périphériques passent de ≈ 0,85 à ≈ 0,60 µs par cycle ; l'Oric tient 1 MHz avec
+≈ 17 % de marge. Changements (comportement émulé inchangé, tests PC identiques) :
+- `mos6522via_set_pb` et `mos6522via_set_cb1` appelés seulement quand l'entrée change
+  (ou qu'un front est en attente) : chaque appel remettait la VIA hors de son mode
+  paresseux, et le clavier l'appelait tous les 4 cycles ;
+- travail « tous les 4 cycles » regroupé (PSG, Disk II, horloge des échantillons par
+  pas de 4, VIA) ;
+- broche IRQ écrite seulement quand elle change.
+
 Méthode d'échantillonnage (sans laisser un cœur arrêté) : OpenOCD avec
 `-c "set USE_CORE 0"` avant `target/rp2040.cfg`, boucle Tcl `halt` / `get_reg pc` /
 `resume` ; sans `USE_CORE 0`, les deux cœurs sont arrêtés ensemble et la reprise
