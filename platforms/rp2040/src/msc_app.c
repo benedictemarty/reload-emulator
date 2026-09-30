@@ -5,8 +5,16 @@
 #include "ff.h"
 #include "diskio.h"
 
-static FATFS msc_fatfs_volumes[CFG_TUH_DEVICE_MAX];
-static volatile bool msc_volume_busy[CFG_TUH_DEVICE_MAX];
+// FatFs drive (pdrv) = slot = USB address - 1: the addresses go from 1 to
+// CFG_TUH_DEVICE_MAX, the tables and the FatFs drives from 0 (a drive indexed by
+// the address overflowed them with 5 devices behind the hub)
+#define MSC_SLOTS (CFG_TUH_DEVICE_MAX < FF_VOLUMES ? CFG_TUH_DEVICE_MAX : FF_VOLUMES)
+static FATFS msc_fatfs_volumes[MSC_SLOTS];
+static volatile bool msc_volume_busy[MSC_SLOTS];
+
+static inline int msc_slot(uint8_t dev_addr) {
+    return (dev_addr >= 1 && dev_addr <= MSC_SLOTS) ? dev_addr - 1 : -1;
+}
 static scsi_inquiry_resp_t msc_inquiry_resp;
 
 bool msc_inquiry_complete = false;
@@ -36,10 +44,15 @@ void msc_poll(void) {
     if (!msc_pending_mount) return;
     uint8_t dev_addr = (uint8_t)(msc_pending_mount - 1);
     msc_pending_mount = 0;
+    const int slot = msc_slot(dev_addr);
+    if (slot < 0) {
+        printf("MSC: USB address %u beyond the %d drives\r\n", dev_addr, MSC_SLOTS);
+        return;
+    }
 
     char drive_path[3] = "0:";
-    drive_path[0] += dev_addr;
-    FRESULT result = f_mount(&msc_fatfs_volumes[dev_addr], drive_path, 1);
+    drive_path[0] += slot;
+    FRESULT result = f_mount(&msc_fatfs_volumes[slot], drive_path, 1);
     if (result != FR_OK) {
         printf("MSC filesystem mount failed (%d)\r\n", result);
         return;
@@ -61,8 +74,10 @@ void tuh_msc_mount_cb(uint8_t dev_addr) {
 }
 
 void tuh_msc_umount_cb(uint8_t dev_addr) {
+    const int slot = msc_slot(dev_addr);
+    if (slot < 0) return;
     char drive_path[3] = "0:";
-    drive_path[0] += dev_addr;
+    drive_path[0] += slot;
     f_unmount(drive_path);
 }
 
@@ -86,12 +101,14 @@ static bool wait_for_disk_io(BYTE pdrv) {
 
 static bool disk_io_complete(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_data) {
     (void)cb_data;
-    msc_volume_busy[dev_addr] = false;
+    const int slot = msc_slot(dev_addr);
+    if (slot >= 0) msc_volume_busy[slot] = false;
     return true;
 }
 
 DSTATUS disk_status(BYTE pdrv) {
-    uint8_t dev_addr = pdrv;
+    if (pdrv >= MSC_SLOTS) return STA_NOINIT;
+    uint8_t dev_addr = (uint8_t)(pdrv + 1);
     return tuh_msc_mounted(dev_addr) ? 0 : STA_NODISK;
 }
 
@@ -101,7 +118,8 @@ DSTATUS disk_initialize(BYTE pdrv) {
 }
 
 DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
-    uint8_t const dev_addr = pdrv;
+    if (pdrv >= MSC_SLOTS) return RES_PARERR;
+    uint8_t const dev_addr = (uint8_t)(pdrv + 1);
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
     if (!tuh_msc_read10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
@@ -112,7 +130,8 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
 }
 
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
-    uint8_t const dev_addr = pdrv;
+    if (pdrv >= MSC_SLOTS) return RES_PARERR;
+    uint8_t const dev_addr = (uint8_t)(pdrv + 1);
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
     if (!tuh_msc_write10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
@@ -123,7 +142,8 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
-    uint8_t const dev_addr = pdrv;
+    if (pdrv >= MSC_SLOTS) return RES_PARERR;
+    uint8_t const dev_addr = (uint8_t)(pdrv + 1);
     uint8_t const lun = 0;
     switch (cmd) {
         case CTRL_SYNC:

@@ -418,7 +418,9 @@ int main() {
 
     dvi0.timing = &DVI_TIMING;
     dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
-    dvi_init(&dvi0, next_striped_spin_lock_num(), next_striped_spin_lock_num());
+    // Dedicated spin locks: the striped ones are shared with FatFs and TinyUSB (core 1
+    // then waits with its IRQs masked: late lines, red dashes; docs/STRATEGIE-NEO6502.md)
+    dvi_init(&dvi0, spin_lock_claim_unused(true), spin_lock_claim_unused(true));
 
     tmds_palette_init();
     tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, empty_tmdsbuf, FRAME_WIDTH, PALETTE_BITS);

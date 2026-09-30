@@ -17,7 +17,8 @@ extern "C" {
 void audio_init(uint8_t audio_pin, uint16_t sample_freq);
 void audio_push_sample(const uint8_t sample);
 
-// Output volume (every system): levels 0..HID_VOLUME_MAX (devices/hid_media.h,
+// Output volume (every system; also used by ~/Neo6502TeleStrat: keep these
+// functions and hid_media_key_down stable, or tell it first): levels 0..HID_VOLUME_MAX (devices/hid_media.h,
 // ~3 dB per step, the maximum leaves the samples unchanged) and mute; set by
 // the multimedia keys of the keyboard (hid_media_key_down) or by a menu.
 void audio_set_volume(uint8_t level, bool muted);

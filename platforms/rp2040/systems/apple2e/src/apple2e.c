@@ -133,12 +133,13 @@ void app_init(void) {
 }
 
 #ifdef OLIMEX_NEO6502
-// TMDS bit clock 400 MHz
-// DVDD 1.3V
+// TMDS bit clock 295.2 MHz, DVDD 1.2V: the 800x480 mode of the Oric and BBC builds,
+// accepted by bmarty's screen (800x600 at 400 MHz / 1.3V before, never tried on the
+// board); the 560x384 picture fits
 #define FRAME_WIDTH  800
-#define FRAME_HEIGHT 600
-#define VREG_VSEL    VREG_VOLTAGE_1_30
-#define DVI_TIMING   dvi_timing_800x600p_60hz
+#define FRAME_HEIGHT 480
+#define VREG_VSEL    VREG_VOLTAGE_1_20
+#define DVI_TIMING   dvi_timing_800x480p_60hz
 #else
 // TMDS bit clock 400 MHz
 // DVDD 1.3V
@@ -462,7 +463,9 @@ int main() {
 
     dvi0.timing = &DVI_TIMING;
     dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
-    dvi_init(&dvi0, next_striped_spin_lock_num(), next_striped_spin_lock_num());
+    // Dedicated spin locks: the striped ones are shared with FatFs and TinyUSB (core 1
+    // then waits with its IRQs masked: late lines, red dashes; docs/STRATEGIE-NEO6502.md)
+    dvi_init(&dvi0, spin_lock_claim_unused(true), spin_lock_claim_unused(true));
 
     tmds_palette_init();
     tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, empty_tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
