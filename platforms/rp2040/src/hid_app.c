@@ -645,6 +645,11 @@ static uint32_t get_button_state_1C59002X(uint8_t const* report) {
 static void process_gamepad_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len) {
     uint16_t id = dev_addr << 8 | instance;
     gamepad_t* gamepad = find_gamepad(id);
+    if (!gamepad) {
+        // Interface not registered (more than GAMEPAD_MAX_DEVICES HID interfaces of
+        // protocol NONE, e.g. a multimedia keyboard next to two gamepads)
+        return;
+    }
 
     switch (gamepad->type) {
         case 0x04284001: // Xbox One controller
