@@ -434,7 +434,7 @@ static void test_no_disk(void) {
     uint8_t buf[256];
     int count;
     st = read_sector(0, 0, 1, buf, &count);
-    CHECK((st & WD1793_ST_NOT_READY) && (st & WD1793_ST_SEEK_RNF) && count == 0);
+    CHECK(st == WD1793_ST_NOT_READY && count == 0);   // Type II not executed (data sheet): $80 only
     wd1793_select(&fdc, 0, 0);
 }
 
@@ -576,6 +576,23 @@ static void test_drq_timing(void) {
     }
     CHECK(n == WD1793_TYPE1_US);
     wd1793_read(&fdc, 0);
+}
+
+// No disk in the selected drive (READY low): type II/III commands are not
+// executed, INTRQ at once, status NOT READY only ($80); type I still runs
+static void test_not_ready(void) {
+    wd1793_t f;
+    wd1793_init(&f);
+    wd1793_select(&f, 1, 0);
+    const uint8_t cmds[] = {0x80, 0x90, 0xA0, 0xC0, 0xE0, 0xF0};
+    int bad = 0;
+    for (unsigned i = 0; i < sizeof(cmds); i++) {
+        wd1793_write(&f, 0, cmds[i]);
+        if (!f.intrq || f.drq || f.state != WD1793_IDLE || wd1793_read(&f, 0) != 0x80) bad++;
+    }
+    CHECK(bad == 0);
+    wd1793_write(&f, 0, 0x00);   // Restore: runs regardless of READY
+    CHECK(f.state != WD1793_IDLE);
 }
 
 static void test_tick_n(void) {
@@ -979,6 +996,7 @@ int main(void) {
     test_streamed();
     test_tick_n();
     test_drq_timing();
+    test_not_ready();
     test_tape();
     test_tape_padding();
     test_tape_streamed();

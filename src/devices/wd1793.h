@@ -251,6 +251,8 @@ static void _wd1793_set_drq(wd1793_t* fdc, bool on) {
     }
 }
 
+static void _wd1793_end(wd1793_t* fdc);
+
 static void _wd1793_wait(wd1793_t* fdc, uint32_t us, wd1793_state_t next) {
     fdc->wait_us = us;
     fdc->next = next;
@@ -398,6 +400,15 @@ static void _wd1793_command(wd1793_t* fdc, uint8_t cmd) {
     fdc->status = WD1793_ST_BUSY | WD1793_ST_NOT_READY;
     bool present = fdc->present[fdc->drive];
     bool wp = present && fdc->disk[fdc->drive].write_protected;
+    if (!present) {
+        // No disk = READY low: "the command is not executed and an interrupt is
+        // generated", status NOT READY only (FD179X data sheet, READY pin and
+        // READ ADDRESS; the Telestrat's STRATSED shows its in-memory catalogue on $80)
+        fdc->op = WD1793_OP_NONE;
+        fdc->end_status = WD1793_ST_NOT_READY;
+        _wd1793_end(fdc);
+        return;
+    }
     switch (cmd & 0xF0) {
         case 0x80:
         case 0x90:
@@ -412,7 +423,7 @@ static void _wd1793_command(wd1793_t* fdc, uint8_t cmd) {
             }
             int s = _wd1793_find_sector(fdc);
             if (s < 0) {
-                fdc->end_status = WD1793_ST_SEEK_RNF | (present ? 0 : WD1793_ST_NOT_READY);
+                fdc->end_status = WD1793_ST_SEEK_RNF;
                 _wd1793_wait(fdc, WD1793_TYPE1_US, WD1793_END);
                 return;
             }
@@ -425,7 +436,7 @@ static void _wd1793_command(wd1793_t* fdc, uint8_t cmd) {
             // Read address: ID field of the next sector passing under the head
             fdc->op = WD1793_OP_READ_ADDRESS;
             if (!_wd1793_track(fdc) || fdc->cache.num_sectors == 0) {
-                fdc->end_status = WD1793_ST_SEEK_RNF | (present ? 0 : WD1793_ST_NOT_READY);
+                fdc->end_status = WD1793_ST_SEEK_RNF;
                 _wd1793_wait(fdc, WD1793_TYPE1_US, WD1793_END);
                 return;
             }
@@ -440,7 +451,7 @@ static void _wd1793_command(wd1793_t* fdc, uint8_t cmd) {
             // Read track / write track (format)
             fdc->op = (cmd & 0x10) ? WD1793_OP_WRITE_TRACK : WD1793_OP_READ_TRACK;
             if (!_wd1793_track(fdc)) {
-                fdc->end_status = WD1793_ST_SEEK_RNF | (present ? 0 : WD1793_ST_NOT_READY);
+                fdc->end_status = WD1793_ST_SEEK_RNF;
                 _wd1793_wait(fdc, WD1793_TYPE1_US, WD1793_END);
                 return;
             }

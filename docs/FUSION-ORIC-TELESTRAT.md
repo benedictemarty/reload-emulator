@@ -40,9 +40,10 @@ changeant d'étiquette de socle quand il le décide, et retire alors sa copie.
 - **NES v0.5.1** : `w65c02cpu.h` commun (copie figée, provenance notée) ; son par `audio.c`,
   verrous `spin_lock_claim_unused`.
 
-Question ouverte : sans disque, `DIR` sous STRATSED reçoit maintenant le statut $90 (not ready +
-record not found) et affiche « Abandonner,Recommencer,Ignorer ? » ; l'ancien WD1793 du
-Telestrat renvoyait $80. Comportement d'un vrai Telestrat non mesuré.
+Statut sans disque (réglé dans socle-2026-09-30-6) : une commande de type II ou III sur un
+lecteur vide n'est pas exécutée, INTRQ immédiat, statut $80 seul, d'après la fiche FD179X
+(l'ancien WD1793 du Telestrat faisait de même ; Oricutron renvoie $10 ou attend le disque).
+Le câblage réel de READY sur la Microdisc et le Telestrat n'est pas mesuré.
 
 Choix encore ouverts, à trancher par les deux suites d'intégration : pause après
 l'en-tête de cassette (1248 ou 1281 cycles), fin de bande (4 bits 1 ou 2 alternances).
