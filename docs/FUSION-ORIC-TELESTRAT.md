@@ -32,6 +32,18 @@ changeant d'étiquette de socle quand il le décide, et retire alors sa copie.
 | 9 | VIA 6522 | reload | le Telestrat reprend d'abord le correctif IER seul ; le mode paresseux ensuite, avec `sync` dans ses fonctions de saut (sinon IRQ perdue) ; arbitrage avec la VIA du Vic20 (étape 4b) | élevé |
 | 10 | Pilote de bus | `wdc65C02bus.h` (SIO puis PIO) | étape 5 ; carte (TELEMON, banques, disquettes) | élevé |
 
+## Migrations constatées (2026-09-30)
+
+- **Telestrat v0.16.15** : cassette, puces communes, `osd.h` (avec `OSD_NOINLINE`), WD1793 et
+  `oric_dsk.h`, 65C02 commun ; `make test` entier, rejeu 3/3 ; charge 58 % en moyenne, 66 % au
+  pire. Restent en copie : `mos6522via.h` (étape 9), `ay38910psg.h`, `hid_app.c`.
+- **NES v0.5.1** : `w65c02cpu.h` commun (copie figée, provenance notée) ; son par `audio.c`,
+  verrous `spin_lock_claim_unused`.
+
+Question ouverte : sans disque, `DIR` sous STRATSED reçoit maintenant le statut $90 (not ready +
+record not found) et affiche « Abandonner,Recommencer,Ignorer ? » ; l'ancien WD1793 du
+Telestrat renvoyait $80. Comportement d'un vrai Telestrat non mesuré.
+
 Choix encore ouverts, à trancher par les deux suites d'intégration : pause après
 l'en-tête de cassette (1248 ou 1281 cycles), fin de bande (4 bits 1 ou 2 alternances).
 
