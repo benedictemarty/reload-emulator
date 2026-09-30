@@ -122,6 +122,21 @@ icônes du projet), `src/osd/oric_menu.h` (menu, indépendant de la plate-forme)
 `src/osd/oric_config.h` (`ORIC.CFG`), `platforms/rp2040/systems/oric/src/oric.c`
 (clé USB, flux, rendu par le cœur 1).
 
+### Essai sur la carte (Neo6502, 2026-10-01, `oric_diag` à 8b3a6b0, bus PIO, 345 MHz)
+
+Par la sonde SWD (`tools/oric_carte.py`) et à l'écran et à l'oreille par l'utilisateur :
+
+| Essai | Résultat |
+|---|---|
+| `CSAVE"RLCARTE"` vers la clé | `RLCARTE.TAP` créé (1 Ko), listé par le menu |
+| Menu → cassette `RLCARTE.TAP`, `NEW`, `CLOAD""`, `LIST`, `RUN` | programme relu à l'identique, `4242` affiché |
+| Microdisc, `RLSED.DSK` en flux depuis la clé, redémarrage | menu de Sedoric 4.0 |
+| 8 `DIR` enchaînés (rafale FatFs) | catalogue complet ; **0 ligne en retard** (`dvi0.late_scanline_ctr`, lu par la sonde) et aucun trait vu |
+| Note continue (`SOUND` + `PLAY`) plus d'une minute | **son propre** (avant le correctif `audio_pwm_rate_q8` : craquements au bout d'≈ 40 s) |
+
+Constaté aussi : la première touche après un RETURN est encore parfois perdue (défaut
+connu, ROADMAP).
+
 ### Essai sur la carte (Neo6502, 2026-09-30)
 
 Validé par l'utilisateur à l'écran et par la sonde SWD (`tools/oric_carte.py`) :
