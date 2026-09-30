@@ -94,12 +94,31 @@ le dit dans un ADR.
   ailleurs est d'abord signalé (SendMessage), puis fait dans le socle ; les
   projets le reprennent en suivant le socle, pas en recopiant.
 - **Avant tout commit qui touche le socle** (`platforms/rp2040/src`, `src/`) :
-  `tools/socle_consommateurs.sh` compile le NES et le Telestrat contre lui
+  `tools/socle_consommateurs.sh` compile le NES et les deux variantes du Telestrat
+  contre lui et affiche la RAM restant au-delà du tas de chaque firmware
   (leçon du 2026-09-30 : une inclusion ajoutée à `hid_app.c` a cassé le NES, qui
   n'a pas `src/` dans ses chemins ; les sources du socle incluent donc par chemin
   relatif).
-- Chaque projet note le commit du socle qu'il utilise ; le socle garde une
-  interface stable, annoncée avant tout changement (comme `harte.c`).
+- **Versions du socle épinglées** : reload pose une étiquette `socle-AAAA-MM-JJ[-n]`
+  sur un commit vérifié (tests PC, firmwares de reload, consommateurs). Un projet
+  consommateur compile contre une étiquette, pas contre la tête de reload :
+  ```
+  git -C ~/reload-emulator worktree add ~/.cache/reload-socle/socle-2026-09-30 socle-2026-09-30
+  cmake … -DRELOAD_DIR=~/.cache/reload-socle/socle-2026-09-30
+  ```
+  et change d'étiquette quand il le décide. Le socle garde une interface stable,
+  annoncée avant tout changement (comme `harte.c`, le volume de `audio.c`).
+
+### Contraintes des consommateurs (à respecter par le socle)
+
+| Consommateur | Contrainte | Conséquence pour le socle |
+|---|---|---|
+| Telestrat, variante RAM 64 Ko | 376 octets de RAM au-delà du tas réservé (2026-09-30) ; `CFG_TUH_ENUMERATION_BUFSIZE` 256 faute de place (ADR du Telestrat) | tout ajout de RAM (code en RAM, tampons) est vérifié par `socle_consommateurs.sh` avant commit |
+| Telestrat | volume : `audio_set_volume`, `audio_volume_level`, `audio_volume_muted`, `audio_volume_serial`, `hid_media_key_down` ; `tools/cputest/harte.c` (`-x`, codes 0/1/77, `USE_65C02`) | interfaces stables |
+| Telestrat | pilote de bus SIO intégré au tick (`neo6502_bus.h`), sans PIO | écart à la règle 6 jusqu'à l'étape 5 |
+| NES | compile `hid_app.c` sans `src/` dans ses chemins d'inclusion | les sources du socle incluent par chemin relatif |
+| Apple IIe (reload) | 0,6 Ko au-delà du tas | idem Telestrat 64 Ko |
+| Atari2600 (futur) | chaque accès du 65C02 visible, factices compris | le pilote de bus ne filtre aucun cycle |
 - Tout écart aux règles de la section 3 fait l'objet d'un ADR dans le projet.
 
 ## 6. Plan
