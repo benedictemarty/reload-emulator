@@ -93,7 +93,7 @@ cœur 1 (SysTick, `carte.py video` de Tangerine). Budget : ≈ 31 µs par ligne 
 | Ligne en retard ? | Cause (projet qui l'a mesurée) | Remède |
 |---|---|---|
 | oui | **Code du cœur 1 en flash** : un appel caché (`memset` recréé par GCC) attend la flash quand le cœur 0 y accède ; 70 µs au lieu de 31 (Tangerine) | tout le chemin du cœur 1 en RAM (`__not_in_flash_func`, `.time_critical`), **vérifié à l'objdump** : aucun appel vers `0x10…` |
-| oui | **Bande passante mémoire** : le cœur 0 martèle la SRAM (FatFs, TinyUSB), le cœur 1 n'a plus assez d'accès (Trinity) | **réduire la demande** : moins de transactions par ligne (4 pixels par mot de 32 bits : Trinity T-58). **Pas d'arbitrage** : chez Trinity, la priorité au DMA a nettement empiré les traits (T-56) et la priorité au cœur 1 (`PROC1`) a rendu l'écran noir dès `MODE 1`, lectures SWD comprises (T-71, annulée). L'Oric, les Apple et le BBC fixent `PROC1` sans défaut constaté : à mesurer, pas à généraliser |
+| oui | **Bande passante mémoire** : le cœur 0 martèle la SRAM (FatFs, TinyUSB), le cœur 1 n'a plus assez d'accès (Trinity) | **réduire la demande** : moins de transactions par ligne (4 pixels par mot de 32 bits : Trinity T-58). **Pas d'arbitrage** : chez Trinity, la priorité au DMA a nettement empiré les traits (T-56) et la priorité au cœur 1 (`PROC1`) a rendu l'écran noir dès `MODE 1`, lectures SWD comprises (T-71, annulée). Tangerine (depuis v0.5.0), l'Oric, les Apple et le BBC fixent `PROC1` sans défaut constaté ; l'effet dépend donc du firmware (chez Trinity, le cœur 1 à plein en mode 1 monopolisait la SRAM) : à mesurer, pas à généraliser |
 | oui | **Pas assez d'avance** : sans répétition verticale, 3 tampons TMDS ne laissent qu'une ligne d'avance (Tangerine) | `DVI_N_TMDS_BUFFERS=6` (Tangerine) ; avec `DVI_VERTICAL_REPEAT=2`, 3 suffisent |
 | oui | **Verrous partagés** : `next_striped_spin_lock_num()` avec FatFs et TinyUSB (reload, Trinity) | `spin_lock_claim_unused(true)` (règle 2) |
 | non | **Source changée pendant l'encodage** : le rouge est encodé en dernier depuis un tampon de ligne que le rappel réécrit déjà (Trinity T-53 : bleu et vert justes, rouge faux) | au moins 4 tampons de ligne ; ne jamais réécrire un tampon avant que ses trois canaux soient encodés |
@@ -108,7 +108,7 @@ cause retenue par Trinity : les verrous partagés, corrigée par des verrous dé
 disquette) ; la frappe au clavier ; un jeu en régime établi. **Critère** : 0 ligne en retard
 et 0 trait pendant la rafale, photo à l'appui.
 
-**État par projet (2026-10-01)** : Tangerine : réglé et mesuré (0 trait en régime établi).
+**État par projet (2026-10-01)** : Tangerine : réglé et mesuré (0 trait en régime établi, plus aucun à la frappe constaté par bmarty ; `PROC1` en place depuis v0.5.0, les traits venaient du `memset` en flash et de l'avance d'une ligne).
 Trinity : réglé en septembre (T-53, T-58), **traits revenus** (signalés par bmarty le
 2026-10-01, après les versions 0.16.64 et 0.16.65 ; cause non établie). Oric : plans +
 `PROC1`, à revérifier sous rafale FatFs. BBC : plans + `PROC1` **et** DMA, à mesurer. Apple II
