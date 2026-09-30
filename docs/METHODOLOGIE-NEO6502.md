@@ -121,6 +121,10 @@ Une amélioration n'existe que si une mesure sur la carte la montre.
 sur la carte, elle a donné… **un Oric un peu plus lent** (112,7 % contre 109,1 %).
 Sans mesure, on aurait cru avoir gagné.
 
+*Suite vécue* : la boucle BASIC montrait 17 % de marge ; l'écran-titre d'un vrai jeu
+(*3D Fongus*) a montré **105 %**. **Mesurer sous une vraie charge**, pas seulement sur
+un banc léger.
+
 ### Règle 3 — Chercher où va vraiment le temps
 
 Avant d'optimiser, on découpe le coût. Deux outils simples :
@@ -199,6 +203,12 @@ carte pour imiter un ordinateur autour du vrai 6502.
 6. **RAM n'est pas toujours plus rapide que flash** : si le code tient dans le cache
    de la flash, le mettre en RAM peut le ralentir, car la RAM est partagée avec
    l'image (cœur 1 et DMA prioritaires). À mesurer, pas à supposer.
+7b. **Mesurer sous charge réelle** : un jeu sollicite davantage les minuteurs, le
+   son et les lecteurs qu'une boucle BASIC ; la marge doit être mesurée en jeu.
+7c. **L'horloge est un levier** : le même affichage 800×480 à 345 MHz au lieu de
+   295,2 MHz (effacement allongé) donne 17 % de calcul en plus ; l'Oric en jeu passe
+   de 105 % à 90 % du budget. À valider écran par écran, et l'échauffement à 1,25 V
+   reste à mesurer.
 7. **Le PIO libère le processeur** pendant les délais du bus : gain de quelques
    points seul (106,6 % contre 109,1 % en flash et 112,7 % en RAM), et toujours le
    meilleur une fois le reste allégé (82,9 % contre 86,3 %).
@@ -258,6 +268,8 @@ carte pour imiter un ordinateur autour du vrai 6502.
 | Sprint 2 | bus en PIO | 106,6 % : un peu mieux | le bus n'était pas la cause principale |
 | Profilage | découper le coût | bus ¼, puces ¾ ; VIA 14 %, jamais paresseuse | règle 3 : chercher où va le temps |
 | Correctif | VIA laissée paresseuse, travail groupé par 4, IRQ sur changement | **82,9 %** : temps réel, 17 % de marge | une cause trouvée vaut mieux que deux paris |
+| Vrai jeu | *3D Fongus* | **105 %** : pas en temps réel | mesurer sous charge réelle |
+| Horloge | 345 MHz, même image | **90 %** en jeu, 70 % en BASIC | l'horloge est un levier, à valider à l'écran |
 
 Chaque étape est dans l'historique (git) et chiffrée dans PERFORMANCE-RP2040.md.
 
