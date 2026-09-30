@@ -145,6 +145,10 @@ def mesure(secondes=10.0):
     print(f"trames         {d[3]} en {secondes:g} s ({d[1]} émulées)")
     print(f"émulation      moyenne {tick:.0f} us, pire {apres[4]} us ({100 * tick / 19968:.1f} % du budget de 19968 us)")
     print(f"trame entière  moyenne {trame:.0f} us, pire {apres[5]} us")
+    if "diag_bench" in s:
+        bus, tick = lire_mots([s["diag_bench"], s["diag_bench"] + 4])
+        print(f"au démarrage   40 000 cycles : bus seul {bus} us ({bus / 40:.2f} us/1000), "
+              f"oric_tick complet {tick} us ; périphériques ≈ {tick - bus} us")
 
 
 def envoyer(fichiers):

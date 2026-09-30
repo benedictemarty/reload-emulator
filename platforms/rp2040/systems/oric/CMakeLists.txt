@@ -46,7 +46,7 @@ function(oric_diag_variant name)
 		${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 		${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 	)
-	target_compile_options(${name} PRIVATE -Wall)
+	target_compile_options(${name} PRIVATE -Wall -g)   # -g: line tables for the SWD PC sampling (same code)
 	target_compile_definitions(${name} PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1 ${ARGN})
 	target_link_libraries(${name} pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs hardware_pio)
 	pico_generate_pio_header(${name} ${CMAKE_CURRENT_SOURCE_DIR}/../../src/chips/bus6502.pio)

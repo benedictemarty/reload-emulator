@@ -84,5 +84,34 @@ NEO_ELF=…/systems/oric/oric_diag_XXX.elf tools/oric_carte.py mesure 10   # fir
 Le budget d'une trame est de 19 968 µs (1 MHz, 50 Hz) ; l'émulation seule doit en
 laisser assez pour l'USB, le panneau et la mise à jour de l'écran.
 
-Résultats sur la carte : **à mesurer** (carte partagée, prise de la sonde à
-décider).
+### Résultats sur la carte (2026-09-30, BASIC `10 A=A+1:GOTO 10`, 800×480 à 295,2 MHz)
+
+| Firmware | Émulation par trame | Budget (19 968 µs) | Au démarrage, 40 000 cycles : bus seul / `oric_tick` complet |
+|---|---|---|---|
+| `oric_diag_cold` (flash, appels) | 21 784 µs | 109,1 % | 9 324 / 44 557 µs |
+| `oric_diag` (RAM, appels) | 22 507 µs | 112,7 % | 9 578 / 45 212 µs |
+| `oric_diag_inline` (RAM, SIO intégré) | 22 144 µs | 110,9 % | — |
+| `oric_diag_pio` (RAM, PIO) | 21 289 µs | **106,6 %** | 9 911 / 43 617 µs |
+
+- **Aucune variante ne tient 1 MHz** : l'Oric tourne à ≈ 93 % de sa vitesse sur la
+  carte (déjà le cas avant ces travaux : variante `cold`).
+- **Le bus n'est qu'un quart du coût** (≈ 0,24 µs par cycle) : les trois quarts
+  sont l'émulation des périphériques dans `oric_tick` (≈ 0,85 µs par cycle).
+- Code en RAM : pas de gain, même un peu plus lent que la flash (le code tenait
+  dans le cache XIP ; en RAM il partage le bus mémoire avec le cœur 1 et le DMA de
+  la vidéo, qui ont la priorité : hypothèse non vérifiée).
+- Bus PIO : le meilleur des quatre (−2,3 % par rapport au code en flash).
+
+Échantillonnage du compteur ordinal du cœur 0 par la sonde (800 échantillons,
+`oric_diag_pio` compilé avec `-g`, même code) : `oric_tick` et ses fonctions
+intégrées ≈ 77 %, `mos6522via_tick` ≈ 14 % ; dans `oric_tick`, le bus (attente du
+FIFO, clôture du cycle, donnée) ≈ 18 %, le reste réparti ligne par ligne (tests par
+cycle : PSG, horloge d'échantillons, FDC, Jasmin, ligne IRQ réécrite à chaque cycle
+par `gpio_put`, VIA). Pistes : regrouper le travail par 4 cycles comme
+`bbc_tick4`, VIA « paresseuse » (`mos6522via_tick_inline`, déjà utilisée par le
+BBC), broche IRQ écrite seulement quand elle change.
+
+Méthode d'échantillonnage (sans laisser un cœur arrêté) : OpenOCD avec
+`-c "set USE_CORE 0"` avant `target/rp2040.cfg`, boucle Tcl `halt` / `get_reg pc` /
+`resume` ; sans `USE_CORE 0`, les deux cœurs sont arrêtés ensemble et la reprise
+échoue (« core1 not halted ») : `reset run` a été nécessaire.

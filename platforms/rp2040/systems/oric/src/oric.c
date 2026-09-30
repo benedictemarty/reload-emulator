@@ -314,6 +314,9 @@ volatile uint16_t diag_keyq[256];
 volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames, diag_exec_us, diag_exec_max;
 // Emulation alone (the 19968 ticks of a frame, panel closed): sum, frames, slowest
 volatile uint32_t diag_tick_us, diag_tick_frames, diag_tick_max;
+// Start-up micro-benchmarks, 40 000 cycles each (us): [0] bus cycles alone (65C02
+// answered from RAM), [1] full oric_tick (bus, memory decoding, VIA, PSG, tape…)
+volatile uint32_t diag_bench[2];
 
 static void diag_key_service(void) {
     static int phase, timer;
@@ -932,6 +935,35 @@ static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
     }
 }
 
+#ifdef ORIC_DIAG
+// Bus cycles alone: the 65C02 runs whatever the RAM holds (reset afterwards)
+#ifdef ORIC_COLD
+static void __attribute__((noinline)) bench_bus(uint32_t n) {
+#else
+static void __no_inline_not_in_flash_func(bench_bus)(uint32_t n) {
+#endif
+    oric_t *sys = &state.oric;
+    for (uint32_t i = 0; i < n; i++) {
+        MOS6502CPU_TICK(&sys->cpu);
+        const uint16_t a = sys->cpu.addr;
+        if (sys->cpu.rw) {
+            MOS6502CPU_SET_DATA(&sys->cpu, sys->ram[a & 0xBFFF]);
+        } else {
+            sys->ram[a & 0xBFFF] = MOS6502CPU_GET_DATA(&sys->cpu);
+        }
+    }
+}
+
+static void diag_bench_run(void) {
+    uint32_t t = time_us_32();
+    bench_bus(40000);
+    diag_bench[0] = time_us_32() - t;
+    t = time_us_32();
+    run_ticks(40000);
+    diag_bench[1] = time_us_32() - t;
+}
+#endif
+
 int main() {
     vreg_set_voltage(VREG_VSEL);
     sleep_ms(10);
@@ -960,6 +992,10 @@ int main() {
     app_init();
 #ifdef ORIC_BUS_PIO
     bus_pio_start();   // GPIO 0-10 and PHI2 to the state machine (after wdc65C02cpu_init)
+#endif
+#ifdef ORIC_DIAG
+    diag_bench_run();
+    oric_reset(&state.oric);
 #endif
 
     uint32_t deadline = time_us_32();
