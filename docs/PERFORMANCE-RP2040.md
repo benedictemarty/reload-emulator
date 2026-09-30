@@ -45,16 +45,40 @@ Sur le IIe (ROM de 16 Ko en RAM, lue à chaque cycle) :
 
 (Apple : non essayé sur la carte.)
 
+## Bus du W65C02 : appels, SIO intégré ou PIO
+
+`platforms/rp2040/src/chips/wdc65C02bus.h` (repris du BBC, binaires BBC identiques
+après l'extraction) intègre le cycle de bus dans la fonction `*_tick` du système :
+
+- par défaut, accès directs aux registres SIO (même séquence et mêmes délais que
+  `wdc65C02cpu.h`, sans les appels) ;
+- `WDC65C02_BUS_PIO` : cycles séquencés par une machine d'état PIO
+  (`platforms/rp2040/src/chips/bus6502.pio`, PIO1 SM0 ; PicoDVI utilise PIO0) ; les
+  délais des 74HC245 se recouvrent avec le travail de l'émulation. `bus_pio_start()`
+  après `wdc65C02cpu_init()`.
+
+| Système | Bus |
+|---|---|
+| BBC | PIO par défaut, SIO intégré avec `-DBBC_BUS_SIO` (validé sur la carte) |
+| Oric | appels de `wdc65C02cpu.h` par défaut ; `-DORIC_BUS_INLINE` (SIO intégré) et `-DORIC_BUS_PIO` : **à essayer sur la carte** |
+| Apple II / IIe | appels de `wdc65C02cpu.h` |
+
 ## Mesure avant / après (Oric)
 
-`oric_diag_cold` est `oric_diag` compilé avec `ORIC_COLD` : le même code, laissé en
-flash. `oric_diag` et `oric_diag_cold` comptent le temps des 19 968 cycles d'une
+Firmwares de banc (même code, définitions en plus) :
+
+| Firmware | Code par cycle | Bus |
+|---|---|---|
+| `oric_diag_cold` | en flash (`ORIC_COLD`, avant le sprint 1) | appels |
+| `oric_diag` | en RAM | appels |
+| `oric_diag_inline` | en RAM | SIO intégré |
+| `oric_diag_pio` | en RAM | PIO |
+ `oric_diag` et `oric_diag_cold` comptent le temps des 19 968 cycles d'une
 trame (`diag_tick_us`, `diag_tick_frames`, `diag_tick_max`) et de la trame entière
 (`diag_exec_us`, `diag_exec_max`).
 
 ```
-tools/oric_carte.py mesure 10                                   # oric_diag flashé
-NEO_ELF=…/oric_diag_cold.elf tools/oric_carte.py mesure 10      # oric_diag_cold flashé
+NEO_ELF=…/systems/oric/oric_diag_XXX.elf tools/oric_carte.py mesure 10   # firmware flashé
 ```
 
 Le budget d'une trame est de 19 968 µs (1 MHz, 50 Hz) ; l'émulation seule doit en

@@ -55,6 +55,14 @@
 #include "chips/chips_common.h"
 #ifdef OLIMEX_NEO6502
 #include "chips/wdc65C02cpu.h"
+// Bus of the real 65C02 inlined in oric_tick (-DORIC_BUS_INLINE: SIO, as wdc65C02cpu.h;
+// -DORIC_BUS_PIO: PIO state machine, as the BBC); default: wdc65C02cpu.h calls
+#ifdef ORIC_BUS_PIO
+#define WDC65C02_BUS_PIO 1
+#endif
+#if defined(ORIC_BUS_PIO) || defined(ORIC_BUS_INLINE)
+#include "chips/wdc65C02bus.h"
+#endif
 #else
 #include "chips/mos6502cpu.h"
 #endif
@@ -921,6 +929,9 @@ int main() {
     multicore_launch_core1(core1_main);
 
     app_init();
+#ifdef ORIC_BUS_PIO
+    bus_pio_start();   // GPIO 0-10 and PHI2 to the state machine (after wdc65C02cpu_init)
+#endif
 
     uint32_t deadline = time_us_32();
     while (1) {
