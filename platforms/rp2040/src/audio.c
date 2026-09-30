@@ -14,11 +14,12 @@
 #define SAMPLES_BUFFER_SIZE    2048
 #define SAMPLES_CHUNK_SIZE     32
 #define SAMPLE_REPETITION_RATE 4
+_Static_assert(SAMPLES_CHUNK_SIZE == 32, "audio_buffer_dequeue fills empty_samples with 8 words");
 
 typedef struct {
     critical_section_t cs;
     uint8_t samples[SAMPLES_BUFFER_SIZE];
-    uint8_t empty_samples[SAMPLES_CHUNK_SIZE];
+    uint8_t empty_samples[SAMPLES_CHUNK_SIZE] __attribute__((aligned(4)));
     uint16_t head;
     uint16_t tail;
     uint16_t size;
@@ -31,7 +32,9 @@ static uint32_t *single_sample_ptr = &single_sample;
 static int pwm_dma_channel, trigger_dma_channel, sample_dma_channel;
 
 static inline void __not_in_flash_func(audio_buffer_init)(audio_buffer_t *audio_buffer) {
-    critical_section_init(&audio_buffer->cs);
+    // Dedicated spin lock: the "striped" ones of critical_section_init are shared
+    // with the rest of the SDK (the cause of Trinity's T-77 on PicoDVI)
+    critical_section_init_with_lock_num(&audio_buffer->cs, (uint)spin_lock_claim_unused(true));
     memset(audio_buffer->samples, 0, SAMPLES_BUFFER_SIZE);
     memset(audio_buffer->empty_samples, 0, SAMPLES_CHUNK_SIZE);
     audio_buffer->head = 0;
@@ -65,7 +68,12 @@ static inline uint8_t *__not_in_flash_func(audio_buffer_dequeue)(audio_buffer_t 
     } else {
         int p = audio_buffer->tail == 0 ? SAMPLES_BUFFER_SIZE : audio_buffer->tail;
         int c = audio_buffer->samples[p - 1];
-        memset(audio_buffer->empty_samples, c, SAMPLES_CHUNK_SIZE);
+        // Called from the DMA interrupt: no memset, which lives in flash (reported by
+        // Neo6502Tangerine); eight explicit word stores (a loop could be turned back
+        // into a memset call by GCC)
+        const uint32_t w = (uint32_t)(uint8_t)c * 0x01010101u;
+        uint32_t *e = (uint32_t *)audio_buffer->empty_samples;
+        e[0] = w; e[1] = w; e[2] = w; e[3] = w; e[4] = w; e[5] = w; e[6] = w; e[7] = w;
         return audio_buffer->empty_samples;    
     }
 }

@@ -310,6 +310,11 @@ static AY38910_HOT void _ay38910psg_update_values(ay38910psg_t* c) {
         if (0 == chn->period) {
             chn->period = 1;
         }
+        // A counter past a shorter new period restarts, as on the chip (and keeps the
+        // tick functions to one edge per call)
+        if (chn->counter >= chn->period) {
+            chn->counter = 0;
+        }
         // Set 'enable bit' actually means 'disabled'
         chn->tone_disable = (c->enable >> i) & 1;
         chn->noise_disable = (c->enable >> (3 + i)) & 1;
@@ -319,10 +324,16 @@ static AY38910_HOT void _ay38910psg_update_values(ay38910psg_t* c) {
     if (c->noise.period == 0) {
         c->noise.period = 1;
     }
+    if (c->noise.counter >= c->noise.period) {
+        c->noise.counter = 0;
+    }
     // Envelope generator values
     c->env.period = (c->period_env_coarse << 8) | c->period_env_fine;
     if (c->env.period == 0) {
         c->env.period = 1;
+    }
+    if (c->env.counter >= c->env.period) {
+        c->env.counter = 0;
     }
 }
 
@@ -361,21 +372,32 @@ void ay38910psg_reset(ay38910psg_t* c) {
     _ay38910psg_restart_env_shape(c);
 }
 
+// Called every 64 clock cycles (8 steps of the AY's divide-by-8 prescaler): a
+// half period of the tone is 8 x period cycles. The remainder is kept from one
+// call to the next, so the mean frequency is exact (clock / (16 x period));
+// periods below 8 (above clock / 128) cannot be followed at this rate and are
+// mixed as their mean, half the volume (ay38910psg_sample_u8): inaudible, as on
+// the chip, instead of a whistle at clock / 128 (period 0 = 1 on the chip:
+// clock / 16). Reported by Neo6502Tangerine (berzerk, compared with MAME).
 AY38910_HOT void ay38910psg_tick_channels(ay38910psg_t* c) {
-    // Tick the tone channels
+    // Tick the tone channels (period >= 8: at most one edge per call)
     for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
         ay38910psg_tone_t* chn = &c->tone[i];
+        if (chn->period < 8) {
+            chn->counter = 0;
+            continue;
+        }
         chn->counter += 8;
         if (chn->counter >= chn->period) {
-            chn->counter = 0;
+            chn->counter -= chn->period;
             chn->bit ^= 1;
         }
     }
 
-    // Tick the noise channel
+    // Tick the noise channel (period 1-31: up to 8 edges per call)
     c->noise.counter += 8;
-    if (c->noise.counter >= c->noise.period) {
-        c->noise.counter = 0;
+    while (c->noise.counter >= c->noise.period) {
+        c->noise.counter -= c->noise.period;
         c->noise.bit ^= 1;
         if (c->noise.bit) {
             // Random number generator from MAME:
@@ -391,9 +413,10 @@ AY38910_HOT void ay38910psg_tick_channels(ay38910psg_t* c) {
 
 AY38910_HOT void ay38910psg_tick_envelope_generator(ay38910psg_t* c) {
     // Tick the envelope generator
+    // Remainder kept (exact mean step rate); period 1-7: several steps per call
     c->env.counter += 8;
-    if (c->env.counter >= c->env.period) {
-        c->env.counter = 0;
+    while (c->env.counter >= c->env.period) {
+        c->env.counter -= c->env.period;
         if (!c->env.shape_holding) {
             c->env.shape_counter = (c->env.shape_counter + 1) & 0x1F;
             if (c->env.shape_hold && (0x1F == c->env.shape_counter)) {
@@ -408,7 +431,8 @@ AY38910_HOT void ay38910psg_tick_sample_generator(ay38910psg_t* c) {
     float sm = 0.0f;
     for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
         const ay38910psg_tone_t* chn = &c->tone[i];
-        int vol_enable = (chn->bit | chn->tone_disable) & ((c->noise.rng & 1) | (chn->noise_disable));
+        const int tone = chn->tone_disable ? 2 : (chn->period < 8 ? 1 : 2 * chn->bit);   // In halves
+        int vol_enable = tone && ((c->noise.rng & 1) | (chn->noise_disable));
         if (vol_enable) {
             float vol;
             if (0 == (c->reg[AY38910PSG_REG_AMP_A + i] & (1 << 4))) {
@@ -418,7 +442,7 @@ AY38910_HOT void ay38910psg_tick_sample_generator(ay38910psg_t* c) {
                 // Envelope control
                 vol = _ay38910psg_volumes[c->env.shape_state];
             }
-            sm += vol;
+            sm += tone == 1 ? vol * 0.5f : vol;
         }
     }
     // c->sample = _ay38910psg_dcadjust(c, sm) * c->mag;
@@ -429,9 +453,11 @@ AY38910_HOT uint8_t ay38910psg_sample_u8(const ay38910psg_t* c) {
     uint32_t sm = 0;
     for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
         const ay38910psg_tone_t* chn = &c->tone[i];
-        if ((chn->bit | chn->tone_disable) & ((c->noise.rng & 1) | chn->noise_disable)) {
+        // Tone above clock / 128 (period < 8): its mean, half the volume
+        const uint32_t tone = chn->tone_disable ? 2 : (chn->period < 8 ? 1 : 2u * chn->bit);
+        if (tone && ((c->noise.rng & 1) | chn->noise_disable)) {
             uint8_t amp = c->reg[AY38910PSG_REG_AMP_A + i];
-            sm += _ay38910psg_volumes_u8[(amp & (1 << 4)) ? c->env.shape_state : (amp & 0x0F)];
+            sm += (_ay38910psg_volumes_u8[(amp & (1 << 4)) ? c->env.shape_state : (amp & 0x0F)] * tone) >> 1;
         }
     }
     return (uint8_t)sm;

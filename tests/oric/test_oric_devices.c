@@ -882,6 +882,47 @@ static void test_audio(void) {
     CHECK(audio_samples == 220927);
 }
 
+// AY tone frequency (reported by Neo6502Tangerine): clock / (16 x period), with the
+// channels ticked every 64 cycles; periods below 8 mixed as half the volume
+static void test_psg_frequency(void) {
+    static ay38910psg_t psg;
+    ay38910psg_init(&psg, &(ay38910psg_desc_t){.type = AY38910PSG_TYPE_8912, .magnitude = 1.0f});
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_ENABLE);
+    ay38910psg_write(&psg, 0x3E);   // Tone A only
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_AMP_A);
+    ay38910psg_write(&psg, 15);
+    const uint16_t periods[] = {17, 64, 100, 4095};
+    int bad = 0;
+    for (int k = 0; k < 4; k++) {
+        ay38910psg_latch_address(&psg, AY38910PSG_REG_PERIOD_A_FINE);
+        ay38910psg_write(&psg, (uint8_t)periods[k]);
+        ay38910psg_latch_address(&psg, AY38910PSG_REG_PERIOD_A_COARSE);
+        ay38910psg_write(&psg, (uint8_t)(periods[k] >> 8));
+        // One emulated second at 1 MHz: 15625 calls; edges = 2 x clock / (16 x period)
+        uint32_t edges = 0;
+        for (int n = 0; n < 15625; n++) {
+            const uint8_t b = psg.tone[0].bit;
+            ay38910psg_tick_channels(&psg);
+            edges += psg.tone[0].bit != b;
+        }
+        const uint32_t want = 1000000u / (8u * periods[k]);
+        if (edges + 1 < want || edges > want + 1) bad++;
+    }
+    CHECK(bad == 0);   // Before: period 17 gave 5208 edges instead of 7352
+    // Period 0 (1 on the chip, 62.5 kHz): half the volume, steady (no whistle)
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_PERIOD_A_FINE);
+    ay38910psg_write(&psg, 0);
+    ay38910psg_latch_address(&psg, AY38910PSG_REG_PERIOD_A_COARSE);
+    ay38910psg_write(&psg, 0);
+    int changes = 0;
+    uint8_t last = ay38910psg_sample_u8(&psg);
+    for (int n = 0; n < 1000; n++) {
+        ay38910psg_tick_channels(&psg);
+        changes += ay38910psg_sample_u8(&psg) != last;
+    }
+    CHECK(changes == 0 && last > 0 && last < 85);
+}
+
 static void test_oric_interfaces(void) {
     oric_rom[0x3FFC] = 0x00;
     oric_rom[0x3FFD] = 0xC0;
@@ -1003,6 +1044,7 @@ int main(void) {
     test_streamed();
     test_tick_n();
     test_drq_timing();
+    test_psg_frequency();
     test_not_ready();
     test_tape();
     test_tape_padding();
