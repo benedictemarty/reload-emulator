@@ -60,7 +60,7 @@ après l'extraction) intègre le cycle de bus dans la fonction `*_tick` du syst�
 | Système | Bus |
 |---|---|
 | BBC | PIO par défaut, SIO intégré avec `-DBBC_BUS_SIO` (validé sur la carte) |
-| Oric | appels de `wdc65C02cpu.h` par défaut ; `-DORIC_BUS_INLINE` (SIO intégré) et `-DORIC_BUS_PIO` : **à essayer sur la carte** |
+| Oric | **PIO par défaut** (`oric`, `oric_diag`) depuis le 2026-09-30 : le plus rapide, validé sur la carte (clavier, Sedoric et FT-DOS depuis la clé, cassette) ; `oric_diag_calls` (appels), `oric_diag_inline` (SIO intégré) |
 | Apple II / IIe | appels de `wdc65C02cpu.h` |
 
 ## Mesure avant / après (Oric)
@@ -70,9 +70,13 @@ Firmwares de banc (même code, définitions en plus) :
 | Firmware | Code par cycle | Bus |
 |---|---|---|
 | `oric_diag_cold` | en flash (`ORIC_COLD`, avant le sprint 1) | appels |
-| `oric_diag` | en RAM | appels |
+| `oric_diag_calls` | en RAM | appels |
 | `oric_diag_inline` | en RAM | SIO intégré |
-| `oric_diag_pio` | en RAM | PIO |
+| `oric_diag` | en RAM | PIO (comme `oric`) |
+
+(Avant le 2026-09-30 au soir, `oric_diag` avait le bus par appels et la variante PIO
+s'appelait `oric_diag_pio` : c'est sous ces noms que les tableaux ci-dessous ont été
+mesurés.)
  `oric_diag` et `oric_diag_cold` comptent le temps des 19 968 cycles d'une
 trame (`diag_tick_us`, `diag_tick_frames`, `diag_tick_max`) et de la trame entière
 (`diag_exec_us`, `diag_exec_max`).

@@ -16,6 +16,7 @@ target_compile_definitions(oric PRIVATE
     PICO_HEAP_SIZE=0x5800   # dvi_init: 3 TMDS buffers + newlib malloc rounding (~21.8 KB measured); link fails if RAM runs short
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_sock_cfg
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
+	ORIC_BUS_PIO=1   # 65C02 bus on a PIO state machine (measured fastest, validated on the board 2026-09-30)
 	# DVI_DEFAULT_SERIAL_CONFIG=olimex_rp2040pc_cfg
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_zero_cfg
 )
@@ -27,7 +28,9 @@ target_link_libraries(oric
 	libdvi
 	tinyusb_host
 	fatfs
+	hardware_pio
 )
+pico_generate_pio_header(oric ${CMAKE_CURRENT_SOURCE_DIR}/../../src/chips/bus6502.pio)
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(oric)
@@ -55,7 +58,7 @@ function(oric_diag_variant name)
 	pico_enable_stdio_uart(${name} 1)
 endfunction()
 
-oric_diag_variant(oric_diag)                          # Code of oric (bus by wdc65C02cpu.h calls)
-oric_diag_variant(oric_diag_cold ORIC_COLD=1)         # Per-cycle code left in flash (before sprint 1)
-oric_diag_variant(oric_diag_inline ORIC_BUS_INLINE=1) # SIO bus inlined in oric_tick (wdc65C02bus.h)
-oric_diag_variant(oric_diag_pio ORIC_BUS_PIO=1)       # PIO bus (wdc65C02bus.h, bus6502.pio), as the BBC
+oric_diag_variant(oric_diag ORIC_BUS_PIO=1)            # Same as oric: PIO bus (wdc65C02bus.h, bus6502.pio)
+oric_diag_variant(oric_diag_calls)                     # Bus by wdc65C02cpu.h calls (before sprint 2)
+oric_diag_variant(oric_diag_cold ORIC_COLD=1)          # Calls, per-cycle code left in flash (before sprint 1)
+oric_diag_variant(oric_diag_inline ORIC_BUS_INLINE=1)  # SIO bus inlined in oric_tick (wdc65C02bus.h)

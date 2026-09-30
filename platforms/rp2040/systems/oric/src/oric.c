@@ -55,8 +55,9 @@
 #include "chips/chips_common.h"
 #ifdef OLIMEX_NEO6502
 #include "chips/wdc65C02cpu.h"
-// Bus of the real 65C02 inlined in oric_tick (-DORIC_BUS_INLINE: SIO, as wdc65C02cpu.h;
-// -DORIC_BUS_PIO: PIO state machine, as the BBC); default: wdc65C02cpu.h calls
+// Bus of the real 65C02 inlined in oric_tick (-DORIC_BUS_PIO: PIO state machine, as the
+// BBC, the default of the oric and oric_diag builds; -DORIC_BUS_INLINE: SIO, as
+// wdc65C02cpu.h); neither: wdc65C02cpu.h calls
 #ifdef ORIC_BUS_PIO
 #define WDC65C02_BUS_PIO 1
 #endif
