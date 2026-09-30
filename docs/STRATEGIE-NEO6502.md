@@ -103,6 +103,27 @@ Trinity). Budget : ≈ 31 µs par ligne en 800 × 480.
 | non | **Encodeur à palette** sans équilibrage DC : traits sur les grands aplats, selon l'écran (reload, Oric `PAPER 4`) | 3 plans de 1 bit `tmds_encode_1bpp` (règle 1) ; Apple II : à juger sur la carte |
 | non | **Mémoire vidéo fausse** (hypothèse à écarter) : chez Trinity, `VRAMCHK` (T-55) a montré que la mémoire vidéo restait saine pendant les traits ; le débordement des tableaux MSC (T-54) expliquait des plantages, pas les traits | vérifier la mémoire vidéo avant et après une rafale : `VRAMCHK.NEO` pour les firmwares à l'API Neo6502, sinon vidage de la mémoire vidéo par la sonde (`dump_image`) |
 
+**Réglages vidéo des ports (relevés dans les sources le 2026-10-01)** et traits vus par
+bmarty (2026-10-01 : « Trinity, NES, Tangerine » ; pas l'Oric ni le Telestrat, même carte,
+même écran) :
+
+| Port | Timing, horloge, tension | Encodeur | Répétition | Tampons TMDS | Traits |
+|---|---|---|---|---|---|
+| Oric | 800×480, 345 MHz, 1,25 V | 3 plans 1 bpp | 2 | 3 | non vus |
+| BBC | 800×480 (295,2 MHz, 1,20 V) ou 960×544 (372, 1,30 V) | 3 plans 1 bpp | 2 | 3 | ? |
+| Telestrat | 800×480 (295,2 MHz, 1,20 V) ou 960×544 (372, 1,30 V) | 3 plans 1 bpp | 2 | ? | non vus |
+| Vic20 | 800×480, 345 MHz, 1,25 V | 16 bpp (RGB565) | 2 | 3 | ? |
+| NES | 960×544, 372 MHz, 1,30 V | 16 bpp (RGB565) | 2 | 3 | **oui** : 22 lignes au démarrage (montage USB, hub), 0 ensuite |
+| Tangerine | 800×480, 1,20 V | 1 bpp monochrome | **1** | 6 | **oui** (v0.10.0, à mesurer) |
+| Trinity 0.16.64 | mode 0/2 : 640×480, 252 MHz ; mode 1 : 720×480, 283 MHz, 1,25 V | 16 bpp (palette) | 2 (modes 0/2), 1 (mode 1) | ? | **oui** : ≈ 76 épisodes au démarrage, 0 en régime, 0-1 en rafale clé |
+
+Premier constat commun (NES, Trinity) : les lignes manquées arrivent **au démarrage, pendant
+le montage USB**, puis plus rien. Pistes à départager par le protocole commun (total cumulé,
+temps maximal par ligne, trois phases) : verrou « striped » ou code en flash sur le cœur 1
+pendant l'énumération (l'IRQ du son d'`audio.c` avant socle-2026-10-01-4 : NES, Tangerine) ;
+marge du cœur 1 (encodeur 16 bpp ou sans répétition). Le Vic20 (16 bpp, 345 MHz) est le
+point de comparaison : a-t-il des traits au démarrage ?
+
 À ne pas confondre : une **lane qui glisse** (une seule couleur décalée, Trinity T-77 : en
 mode 1, deux canaux DMA de données repartent avec la configuration d'une autre lane) ;
 cause retenue par Trinity : les verrous partagés, corrigée par des verrous dédiés (0.16.35).
