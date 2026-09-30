@@ -39,6 +39,13 @@ include_directories(
 	${CMAKE_CURRENT_SOURCE_DIR}/src
 	)
 
+# PicoDVI (sous-module) : compatibilité pico-sdk 2.x (tcr -> dbg_tcr), sans effet avec le SDK 1.5.1.
+# Le correctif est appliqué à la copie de travail du sous-module, de façon idempotente.
+execute_process(COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/patches/picodvi-dbg-tcr.sh ${CMAKE_CURRENT_SOURCE_DIR}/lib/PicoDVI
+                RESULT_VARIABLE picodvi_patch_rc)
+if (NOT picodvi_patch_rc EQUAL 0)
+	message(FATAL_ERROR "PicoDVI : échec de patches/picodvi-dbg-tcr.sh")
+endif()
 add_subdirectory(lib/PicoDVI/software/libdvi)
 add_subdirectory(lib/fatfs/source)
 add_subdirectory(systems)
