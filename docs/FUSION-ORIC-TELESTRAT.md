@@ -54,6 +54,27 @@ Inventaire de ses composants (lecture seule chez elle, v0.4.1) :
 Conséquence pour l'étape 7 : le moteur de menu commun doit servir trois machines
 (Oric, Telestrat, NES) ; le sélecteur de fichiers est le premier besoin de la NES.
 
+## Tangerine (Neo6502Tangerine, Microtan 65) dans la fusion
+
+Ajouté le 2026-09-30 (lecture seule chez Tangerine, v0.8.0). Tangerine est **autonome** :
+son propre SDK (2.2.0) et PicoDVI, TinyUSB 0.21.0 (le sien ou celui de reload), licence
+EUPL-1.2. Il applique les règles communes (section 3 de la stratégie) avec deux écarts
+justifiés dans son ADR 0004 : `DVI_VERTICAL_REPEAT` 1 (256 lignes mises à l'échelle
+vers 480) et bus en bit-bang SIO (co-simulation Phosphoneo). **Le choix « A : adopter le
+socle » ou « B : rester autonome et appliquer les règles » est à trancher par bmarty**
+(option B en attendant).
+
+| Composant | État chez Tangerine | Si A (socle) | Si B (autonome) |
+|---|---|---|---|
+| VIA 6522 `src/via6522.c` (207 lignes, `IFR_DELAY 3`) | **4e VIA** (reload, Telestrat — même que reload —, Vic20, Tangerine) | VIA unique de l'étape 4b | à inclure dans l'arbitrage 4b (tests VICE du Vic20) |
+| Clavier `pico/usb_kbd.c` + `src/hid_keys.c` | propre (touches F1, F12, Échap) | `hid_app.c` + `kbd.h` du socle | reste |
+| Bus `pico/bus.h` (bit-bang SIO, 750 kHz) | propre, donnée tenue jusqu'à PHI2 | pilote commun (étape 10), co-simulation à adapter | reste (écart justifié) |
+| `tusb_config.h` | clavier seul, énumération 512 | celui du socle (réglable) | reste |
+| Menu F1 (jeux intégrés) | texte dans la RAM vidéo du Microtan (32 × 16, monochrome) | `osd.h` (un plan sur trois suffit) + sélecteur commun | reste |
+| Clé USB, son (AY-3-8910), Pause → multiboot | absents | `msc_app.c`, `audio.c`, `neo_multiboot.h` | reprise des fichiers du socle au besoin (son ADR le prévoit) |
+
+Tangerine n'est pas dans `tools/socle_consommateurs.sh` (il ne compile rien du socle).
+
 ## Ordre
 
 1 → 4 (sans risque, surtout côté Telestrat), puis **5 (WD1793)** et **6 (cassette)**
