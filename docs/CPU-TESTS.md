@@ -70,5 +70,10 @@ branchements avec changement de page…), et `BRK` lit l'octet qui suit la
 signature. À corriger avant que la version PC d'un système à entrées-sorties
 sensibles aux lectures (Apple II, commutateurs `$C0xx`) n'utilise ce cœur.
 
-Le Telestrat (`~/Neo6502TeleStrat/src/chips/w65c02cpu.h`, copie figée) a les mêmes
-défauts SBC et BBR/BBS.
+Le Telestrat (`~/Neo6502TeleStrat`, copie de `w65c02cpu.h`) a repris ces
+corrections en v0.16.7 (0 échec fonctionnel hors `$5C`).
+
+**Interface à garder stable** : la cible `make cpu_harte` du Telestrat compile
+`tools/cputest/harte.c` (avec son propre `-Isrc` en premier) et s'appuie sur
+l'option `-x`, les codes de sortie (0, 1, 77) et le choix du cœur par
+`-DUSE_65C02`.

@@ -18,6 +18,9 @@
 // - bus: in addition, the address and value of every read cycle, dummy reads
 //   included (they matter only if they hit an I/O register).
 // P is compared without bits 4 (B) and 5, which are not stored in the core.
+//
+// Also built by ~/Neo6502TeleStrat (make cpu_harte): keep -x, the exit codes and
+// USE_65C02 stable.
 #define CHIPS_IMPL
 #include <stdio.h>
 #include <stdlib.h>
