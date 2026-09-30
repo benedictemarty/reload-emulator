@@ -199,6 +199,12 @@ void ay38910psg_snapshot_onload(ay38910psg_t* snapshot, ay38910psg_t* sys);
 #ifndef CHIPS_HOT
 #define CHIPS_HOT
 #endif
+// Placement of the PSG functions: CHIPS_HOT by default; a system that calls the
+// PSG rarely (the Telestrat: every 64 cycles) defines AY38910_HOT empty to keep
+// them in flash and save ~1 KB of RAM
+#ifndef AY38910_HOT
+#define AY38910_HOT CHIPS_HOT
+#endif
 #include <string.h>
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -293,7 +299,7 @@ static float _ay38910psg_dcadjust(ay38910psg_t* c, float s) {
 }
 
 // Update computed values after registers have been reprogrammed
-static CHIPS_HOT void _ay38910psg_update_values(ay38910psg_t* c) {
+static AY38910_HOT void _ay38910psg_update_values(ay38910psg_t* c) {
     for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
         ay38910psg_tone_t* chn = &c->tone[i];
         // "...Note also that due to the design technique used in the Tone Period
@@ -355,7 +361,7 @@ void ay38910psg_reset(ay38910psg_t* c) {
     _ay38910psg_restart_env_shape(c);
 }
 
-CHIPS_HOT void ay38910psg_tick_channels(ay38910psg_t* c) {
+AY38910_HOT void ay38910psg_tick_channels(ay38910psg_t* c) {
     // Tick the tone channels
     for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
         ay38910psg_tone_t* chn = &c->tone[i];
@@ -383,7 +389,7 @@ CHIPS_HOT void ay38910psg_tick_channels(ay38910psg_t* c) {
     }
 }
 
-CHIPS_HOT void ay38910psg_tick_envelope_generator(ay38910psg_t* c) {
+AY38910_HOT void ay38910psg_tick_envelope_generator(ay38910psg_t* c) {
     // Tick the envelope generator
     c->env.counter += 8;
     if (c->env.counter >= c->env.period) {
@@ -398,7 +404,7 @@ CHIPS_HOT void ay38910psg_tick_envelope_generator(ay38910psg_t* c) {
     }
 }
 
-CHIPS_HOT void ay38910psg_tick_sample_generator(ay38910psg_t* c) {
+AY38910_HOT void ay38910psg_tick_sample_generator(ay38910psg_t* c) {
     float sm = 0.0f;
     for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
         const ay38910psg_tone_t* chn = &c->tone[i];
@@ -419,7 +425,7 @@ CHIPS_HOT void ay38910psg_tick_sample_generator(ay38910psg_t* c) {
     c->sample = sm * c->mag;
 }
 
-CHIPS_HOT uint8_t ay38910psg_sample_u8(const ay38910psg_t* c) {
+AY38910_HOT uint8_t ay38910psg_sample_u8(const ay38910psg_t* c) {
     uint32_t sm = 0;
     for (int i = 0; i < AY38910PSG_NUM_CHANNELS; i++) {
         const ay38910psg_tone_t* chn = &c->tone[i];
@@ -431,7 +437,7 @@ CHIPS_HOT uint8_t ay38910psg_sample_u8(const ay38910psg_t* c) {
     return (uint8_t)sm;
 }
 
-CHIPS_HOT uint8_t ay38910psg_read(ay38910psg_t* c) {
+AY38910_HOT uint8_t ay38910psg_read(ay38910psg_t* c) {
     // Read from register using the currently latched address.
     // See 'write' for why the latched address must be in the
     // valid register range to have an effect.
@@ -471,7 +477,7 @@ CHIPS_HOT uint8_t ay38910psg_read(ay38910psg_t* c) {
     }
 }
 
-CHIPS_HOT void ay38910psg_write(ay38910psg_t* c, uint8_t data) {
+AY38910_HOT void ay38910psg_write(ay38910psg_t* c, uint8_t data) {
     // Write to register using the currently latched address.
     // The whole 8-bit address is considered, the low 4 bits
     // are the register index, and the upper bits are burned

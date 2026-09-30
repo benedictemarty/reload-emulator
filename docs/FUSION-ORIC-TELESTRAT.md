@@ -34,6 +34,9 @@ changeant d'étiquette de socle quand il le décide, et retire alors sa copie.
 
 ## Migrations constatées (2026-09-30)
 
+- **Telestrat v0.16.16** (socle-2026-10-01) : `ay38910psg.h` et `hid_app.c` pris aussi dans le
+  socle ; seule copie restante : `mos6522via.h`. AY produit à la cadence réelle du PWM
+  (arrondie à l'Hz) ; AY gardé en flash (`AY38910_HOT` vide, socle-2026-10-01-2).
 - **Telestrat v0.16.15** : cassette, puces communes, `osd.h` (avec `OSD_NOINLINE`), WD1793 et
   `oric_dsk.h`, 65C02 commun ; `make test` entier, rejeu 3/3 ; charge 58 % en moyenne, 66 % au
   pire. Restent en copie : `mos6522via.h` (étape 9), `ay38910psg.h`, `hid_app.c`.
