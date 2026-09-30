@@ -262,15 +262,18 @@ static void _w65_adc(w65c02cpu_t* c, uint8_t v) {
 
 static void _w65_sbc(w65c02cpu_t* c, uint8_t v) {
     if (c->df) {
+        // 65C02 decimal subtraction (B. Clark, "Decimal Mode", 6502.org, appendix A):
+        // correct the binary difference, which also gives the non-BCD operands'
+        // results of the chip (SingleStepTests wdc65c02)
         int cin = c->cf ? 0 : 1;
         int r = c->A - v - cin;
         int lo = (c->A & 0x0F) - (v & 0x0F) - cin;
-        int hi = (c->A >> 4) - (v >> 4);
-        if (lo < 0) { lo -= 6; hi--; }
-        if (hi < 0) hi -= 6;
+        int d = r;
+        if (d < 0) d -= 0x60;
+        if (lo < 0) d -= 0x06;
         c->vf = ((c->A ^ v) & (c->A ^ r) & 0x80) != 0;
         c->cf = r >= 0;
-        c->A = (uint8_t)(((hi & 0x0F) << 4) | (lo & 0x0F));
+        c->A = (uint8_t)d;
         _w65_nz(c, c->A);
     } else {
         int r = c->A - v - (c->cf ? 0 : 1);
@@ -678,24 +681,27 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
             _W65_DONE();
 
         case W65_ZPREL:   // BBRx / BBSx: 5 cycles, +1 if branch taken, +1 more on page cross
+            // zp address, zp byte read twice, offset; taken: dummy read(s) of the next opcode
+            // address (cycle sequence of SingleStepTests wdc65c02)
             if (s == 1) { _w65_rd(c, c->PC); c->PC++; c->step = 2; return; }
-            if (s == 2) { _w65_rd(c, c->data); c->step = 3; return; }
-            if (s == 3) { c->tmp = c->data; _w65_rd(c, c->PC); c->PC++; c->step = 4; return; }   // Offset (data now = zp value; keep in tmp)
-            if (s == 4) {
+            if (s == 2) { c->ea = c->data; _w65_rd(c, c->ea); c->step = 3; return; }
+            if (s == 3) { c->tmp = c->data; _w65_rd(c, c->ea); c->step = 4; return; }   // Zp value kept in tmp
+            if (s == 4) { _w65_rd(c, c->PC); c->PC++; c->step = 5; return; }             // Offset
+            if (s == 5) {
                 uint8_t bit = (uint8_t)(1 << ((op >> 4) & 7));
                 bool set = (c->tmp & bit) != 0;
                 bool taken = (op & 0x80) ? set : !set;
                 int8_t off = (int8_t)c->data;
+                if (!taken) _W65_DONE();
                 _w65_rd(c, c->PC);   // Dummy read
-                if (!taken) { c->step = 5; c->ea = c->PC; c->page_cross = false; return; }
                 uint16_t target = (uint16_t)(c->PC + off);
                 c->page_cross = ((target ^ c->PC) & 0xFF00) != 0;
                 c->ea = target;
-                c->step = 5;
+                c->step = 6;
                 return;
             }
-            if (s == 5) {
-                if (c->page_cross) { _w65_rd(c, c->PC); c->step = 6; c->PC = c->ea; return; }
+            if (s == 6) {
+                if (c->page_cross) { _w65_rd(c, c->PC); c->step = 7; c->PC = c->ea; return; }
                 c->PC = c->ea;
                 _W65_DONE();
             }
