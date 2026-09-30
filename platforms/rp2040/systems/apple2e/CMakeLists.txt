@@ -31,6 +31,7 @@ target_link_libraries(apple2e
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(apple2e)
+neo_multiboot_slot(apple2e "${NEO_SLOT_APPLE2E}")
 
 pico_enable_stdio_usb(apple2e 0)
 pico_enable_stdio_uart(apple2e 1)

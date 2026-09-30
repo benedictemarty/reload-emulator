@@ -78,6 +78,7 @@
 #include "pico/multicore.h"
 
 #include "tmds_encode.h"
+#include "neo_multiboot.h"
 
 #include "common_dvi_pin_configs.h"
 #include "dvi.h"
@@ -157,6 +158,7 @@ struct dvi_inst dvi0;
 void tmds_palette_init() { tmds_setup_palette24_symbols(apple2e_palette, tmds_palette, PALETTE_SIZE); }
 
 void kbd_raw_key_down(int code) {
+    if (code == (NEO_MULTIBOOT_RETURN_KEY | 0x100)) neo_multiboot_return();   // Pause: back to the Neo6502 firmware
     if (isascii(code)) {
         if (isupper(code)) {
             code = tolower(code);
@@ -430,8 +432,11 @@ void __not_in_flash_func(core1_main()) {
 extern bool msc_inquiry_complete;
 extern void msc_poll(void);
 
+// Waits at most 3 s for the USB key: without a key (or without the image), the
+// slot 7 ROM finds no disk and the Autostart ROM goes on to BASIC
 void wait_for_msc_ready(void) {
-    while (!msc_inquiry_complete) {
+    uint32_t start = time_us_32();
+    while (!msc_inquiry_complete && time_us_32() - start < 3000000) {
         sleep_us(16666);
         tuh_task();
         msc_poll();   // Mounts the volume outside tuh_task

@@ -10,6 +10,7 @@ project(rp2040 C CXX ASM)
 
 # Neo6502 multi-boot (Neo6502firmware/multiboot, F-80) : link a system for a flash slot.
 #   cmake -DNEO_MULTIBOOT_DIR=~/Neo6502firmware/multiboot -DNEO_SLOT_BBC=1 -DNEO_SLOT_ORIC=2 ..
+#   (slots: NEO_SLOT_BBC, NEO_SLOT_BBC_MASTER, NEO_SLOT_ORIC, NEO_SLOT_APPLE2, NEO_SLOT_APPLE2E)
 set(NEO_MULTIBOOT_DIR "" CACHE PATH "Neo6502firmware/multiboot directory (memmap_slot_N.ld)")
 function(neo_multiboot_slot target slot)
     if (NOT "${slot}" STREQUAL "")
