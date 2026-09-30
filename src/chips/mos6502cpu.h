@@ -207,6 +207,9 @@
 extern "C" {
 #endif
 
+// MOS6502_NO_MACROS: use this core next to another provider of the MOS6502CPU_*
+// macros (Neo6502Vic20: 6502 of the 1541 drive beside the 65C02 of the machine)
+#ifndef MOS6502_NO_MACROS
 #define MOS6502CPU_T                 mos6502cpu_t
 #define MOS6502CPU_DESC_T            mos6502cpu_desc_t
 #define MOS6502CPU_INIT(c, desc)     mos6502cpu_init(c, desc)
@@ -221,7 +224,8 @@ extern "C" {
 #define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered = ((state) && !(c)->nmi), (c)->nmi = (state))
 // True during an opcode fetch cycle (not available from the real CPU: no SYNC pin on the board)
 #define MOS6502CPU_SYNC(c)           ((c)->sync)
-#define MOS6510CPU_SET_PORT(c, p)    ((c)->port = p)
+#endif  // MOS6502_NO_MACROS
+#define MOS6510CPU_SET_PORT(c, p)    ((c)->port = p)   // Also used by the implementation
 #define MOS6510CPU_CHECK_IO(c)       (((c)->addr & 0xFFFEULL) == 0)
 
 // IO port callback prototypes (mos6510cpu)

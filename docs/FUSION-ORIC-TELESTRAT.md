@@ -32,6 +32,22 @@ changeant d'étiquette de socle quand il le décide, et retire alors sa copie.
 | 9 | VIA 6522 | reload | le Telestrat reprend d'abord le correctif IER seul ; le mode paresseux ensuite, avec `sync` dans ses fonctions de saut (sinon IRQ perdue) ; arbitrage avec la VIA du Vic20 (étape 4b) | élevé |
 | 10 | Pilote de bus | `wdc65C02bus.h` (SIO puis PIO) | étape 5 ; carte (TELEMON, banques, disquettes) | élevé |
 
+## Le Vic20 (Neo6502Vic20) dans la fusion
+
+Ajouté le 2026-10-01 (lecture seule chez le Vic20, v0.3.3). Consommateur exemplaire du
+socle : `RELOAD_DIR` épinglé (socle-2026-10-01), `hid_app.c`, `audio.c`
+(`audio_pwm_rate_q8`), `msc_app.c`, FatFs, PicoDVI, `neo_dvi_timings.h`,
+`neo_multiboot.h`, bus PIO (`wdc65C02cpu.h`, `wdc65C02bus.h`, `bus6502.pio`). Vérifié à la
+compilation par `tools/socle_consommateurs.sh` depuis le 2026-10-01.
+
+| Composant | État au Vic20 | Décision |
+|---|---|---|
+| `w65c02cpu.h` (PC) | copie d'avant la fusion avec la NES (sans la scrutation à l'avant-dernier cycle) | reprendre celle du socle (socle-2026-09-30-5 ou plus) |
+| `mos6502cpu.h` | + option `MOS6502_NO_MACROS` (6502 du 1541 à côté du 65C02) | **reprise dans le socle** (2026-10-01) ; le Vic20 peut supprimer sa copie |
+| VIA 6522 `via6522.c` | 61/61 tests VIC-20 de VICE, chemin paresseux prouvé par rejeu | **référence de l'arbitrage 4b** (VIA unique, avec reload, Telestrat, Tangerine) |
+| Menu (`vic20_osd.h`) | texte dans l'image du VIC-I (police de la ROM, couleurs du VIC) | reste au Vic20 ; le sélecteur commun de l'étape 7 pourra servir |
+| `mos6561vic.h`, `c1541.h`, `vic20_tape.h` | propres à la machine | restent au Vic20 |
+
 ## Migrations constatées (2026-09-30)
 
 - **Telestrat v0.16.16** (socle-2026-10-01) : `ay38910psg.h` et `hid_app.c` pris aussi dans le

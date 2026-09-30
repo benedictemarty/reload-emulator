@@ -12,7 +12,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 status=0
 # project|cmake options|name of the build
-for v in "Neo6502nes||nes" "Neo6502TeleStrat||telestrat" "Neo6502TeleStrat|-DTELESTRAT_RAM64K=ON|telestrat_ram64k"; do
+for v in "Neo6502nes||nes" "Neo6502TeleStrat||telestrat" "Neo6502TeleStrat|-DTELESTRAT_RAM64K=ON|telestrat_ram64k" "Neo6502Vic20||vic20"; do
     p="${v%%|*}"
     rest="${v#*|}"
     opts="${rest%%|*}"
