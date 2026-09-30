@@ -16,9 +16,12 @@
 //
 // Un seul rendu : osd_render_line() écrit une ligne de tampon dans trois plans
 // de 1 bit (rouge, vert, bleu ; bit 0 d'un mot = pixel de gauche, comme
-// tmds_encode_1bpp de PicoDVI). Sans table en RAM ; sur Cortex-M0+ simulé
-// (tools/osd_cost.py du Telestrat), 3 à 5 % plus rapide que l'ancien rendu à
-// tables du Telestrat. OSD_NO_DITHER : fonds tramés rendus pleins.
+// tmds_encode_1bpp de PicoDVI), sans table en RAM. Coût comparable à l'ancien
+// rendu à tables du Telestrat : un peu moins cher dans un banc isolé, 6 % plus
+// cher en moyenne mesuré dans le firmware du Telestrat (tools/osd_cost.py).
+// OSD_NO_DITHER : fonds tramés rendus pleins. OSD_NOINLINE : les deux
+// fonctions de rendu ne sont pas recopiées à chaque appel (RAM ; section via
+// OSD_HOT).
 //
 // ## Licence zlib/libpng
 //
@@ -61,6 +64,12 @@
 #else
 #define OSD_HOT
 #endif
+#endif
+
+#ifdef OSD_NOINLINE
+#define OSD_RENDER_FN static __attribute__((noinline, unused))
+#else
+#define OSD_RENDER_FN static inline
 #endif
 
 // Couleurs (bit 0 rouge, 1 vert, 2 bleu), comme l'Oric
@@ -203,7 +212,7 @@ static inline uint16_t _osd_widen(uint8_t b) {
 // Ligne y (0-7) d'une rangée de cellules dans trois plans de 1 bit (rouge,
 // vert, bleu ; bit 0 d'un mot = pixel de gauche, comme tmds_encode_1bpp de
 // PicoDVI) : OSD_COLS / 4 mots par plan ; parity : parité de la ligne (trame)
-static inline void OSD_HOT osd_render_cells(const uint8_t* chs, const uint8_t* attrs, const uint8_t* bigs, int y,
+OSD_RENDER_FN void OSD_HOT osd_render_cells(const uint8_t* chs, const uint8_t* attrs, const uint8_t* bigs, int y,
                                             int parity, uint32_t* red, uint32_t* green, uint32_t* blue) {
     const uint32_t dither = (parity & 1) ? 0xAAu : 0x55u;   // Fond sur les pixels pairs (lignes paires) ou impairs
     for (int w = 0; w < OSD_COLS / 4; w++) {
@@ -234,7 +243,7 @@ static inline void OSD_HOT osd_render_cells(const uint8_t* chs, const uint8_t* a
 }
 
 // Une ligne de tampon (0 à OSD_LINES - 1) de la surface dans les trois plans
-static inline void OSD_HOT osd_render_line(const osd_surface_t* s, int line, uint32_t* red, uint32_t* green,
+OSD_RENDER_FN void OSD_HOT osd_render_line(const osd_surface_t* s, int line, uint32_t* red, uint32_t* green,
                                            uint32_t* blue) {
     const int row = line >> 3;
     osd_render_cells(s->ch[row], s->attr[row], s->big[row], line & 7, line & 1, red, green, blue);
