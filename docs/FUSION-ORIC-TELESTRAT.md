@@ -50,6 +50,11 @@ compilation par `tools/socle_consommateurs.sh` depuis le 2026-10-01.
 
 ## Migrations constatées (2026-09-30)
 
+- **Validé sur la carte le 2026-10-01** avec le socle commun : Oric (tête a3132f4 : CSAVE /
+  CLOAD par la clé, Sedoric en flux sous 8 `DIR`, 0 ligne en retard, son propre) et
+  Telestrat v0.16.17 (socle-2026-10-01-2 : WD1793 en flux, `DIR` et `SAVE` sur la clé, image
+  relue, 0 ligne en retard ; image en flash au retrait de la clé ; démarrage sans clé ; son
+  « très bien » selon bmarty).
 - **Telestrat v0.16.16** (socle-2026-10-01) : `ay38910psg.h` et `hid_app.c` pris aussi dans le
   socle ; seule copie restante : `mos6522via.h`. AY produit à la cadence réelle du PWM
   (arrondie à l'Hz) ; AY gardé en flash (`AY38910_HOT` vide, socle-2026-10-01-2).
