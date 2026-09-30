@@ -60,9 +60,11 @@ Ajouté le 2026-09-30 (lecture seule chez Tangerine, v0.8.0). Tangerine est **au
 son propre SDK (2.2.0) et PicoDVI, TinyUSB 0.21.0 (le sien ou celui de reload), licence
 EUPL-1.2. Il applique les règles communes (section 3 de la stratégie) avec deux écarts
 justifiés dans son ADR 0004 : `DVI_VERTICAL_REPEAT` 1 (256 lignes mises à l'échelle
-vers 480) et bus en bit-bang SIO (co-simulation Phosphoneo). **Le choix « A : adopter le
-socle » ou « B : rester autonome et appliquer les règles » est à trancher par bmarty**
-(option B en attendant).
+vers 480) et bus en bit-bang SIO (co-simulation Phosphoneo). **Décision de bmarty (2026-09-30) :
+option B avec reprise des briques** — Tangerine reste autonome (SDK 2.2.0, bus bit-bang
+pour la co-simulation) et reprend les fichiers du socle quand il en a besoin (`msc_app.c`,
+`audio.c`, `neo_multiboot.h`) plutôt que des copies modifiées ; sa VIA entre dans
+l'arbitrage de l'étape 4b. Colonne « Si B » ci-dessous.
 
 | Composant | État chez Tangerine | Si A (socle) | Si B (autonome) |
 |---|---|---|---|
