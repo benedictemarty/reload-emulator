@@ -126,8 +126,12 @@ typedef struct {
     bool building;             // Being filled (BBC_LUT_PROGRESSIVE)
     uint8_t ctrl;
     uint8_t pal[16];
-    uint16_t fill;             // Entries built so far
+    uint16_t fill;             // Next entry of the progressive build
+    uint16_t ndone;            // Entries built (BBC_LUT_PROGRESSIVE: in any order)
     uint32_t used;
+    uint32_t done[8];          // BBC_LUT_PROGRESSIVE: entries built, one bit per byte value
+    uint8_t phys[16];          // Physical colour of each logical colour
+    uint8_t ppb, px_w;         // Pixels per byte, output pixels per pixel
     uint16_t px[256][3];
 } bbc_lut_slot_t;
 typedef struct {
@@ -1398,37 +1402,58 @@ static BBC_HOT void _bbc_render_teletext_line(const bbc_t* sys, const bbc_line_t
 }
 
 // Entries [from, to) of a byte -> pixels table (ctrl and pal already set)
-static BBC_HOT void _bbc_lut_fill(bbc_lut_slot_t* l, int from, int to) {
+// Pixel geometry and physical colours of a slot (its ctrl and pal set)
+static void _bbc_lut_setup(bbc_lut_slot_t* l) {
     uint8_t ctrl = l->ctrl;
     int cpl_sel = (ctrl >> 2) & 3;
     bool fast = ctrl & 0x10;
     int px_per_byte = fast ? 8 : 16;
     int bpp = fast ? ((cpl_sel == 3) ? 1 : (cpl_sel == 2) ? 2 : 4) : ((cpl_sel == 2) ? 1 : (cpl_sel == 1) ? 2 : 4);
-    int pixels_per_byte = 8 / bpp;
-    int px_w = px_per_byte / pixels_per_byte;
-    uint16_t wmask = (uint16_t)((1 << px_w) - 1);
-    uint8_t phys[16];
-    for (int i = 0; i < 16; i++) phys[i] = _bbc_phys_colour(ctrl, l->pal, (uint8_t)i);
-    for (int b = from; b < to; b++) {
-        uint16_t m0 = 0, m1 = 0, m2 = 0;
-        uint8_t byte = (uint8_t)b;
-        for (int p = 0, x = 0; p < pixels_per_byte; p++, x += px_w) {
-            uint8_t col = phys[_bbc_ula_index(byte)];
-            byte = (uint8_t)((byte << 1) | 1);
-            uint16_t w = (uint16_t)(wmask << x);
-            if (col & 1) m0 |= w;
-            if (col & 2) m1 |= w;
-            if (col & 4) m2 |= w;
-        }
-        l->px[b][0] = m0;
-        l->px[b][1] = m1;
-        l->px[b][2] = m2;
-    }
-    l->fill = (uint16_t)to;
+    l->ppb = (uint8_t)(8 / bpp);
+    l->px_w = (uint8_t)(px_per_byte / l->ppb);
+    for (int i = 0; i < 16; i++) l->phys[i] = _bbc_phys_colour(ctrl, l->pal, (uint8_t)i);
 }
 
+// One entry: pixels of screen byte b in the 3 colour planes
+static BBC_HOT void _bbc_lut_entry(bbc_lut_slot_t* l, int b) {
+    int px_w = l->px_w;
+    uint16_t wmask = (uint16_t)((1 << px_w) - 1);
+    uint16_t m0 = 0, m1 = 0, m2 = 0;
+    uint8_t byte = (uint8_t)b;
+    for (int p = 0, x = 0; p < l->ppb; p++, x += px_w) {
+        uint8_t col = l->phys[_bbc_ula_index(byte)];
+        byte = (uint8_t)((byte << 1) | 1);
+        uint16_t w = (uint16_t)(wmask << x);
+        if (col & 1) m0 |= w;
+        if (col & 2) m1 |= w;
+        if (col & 4) m2 |= w;
+    }
+    l->px[b][0] = m0;
+    l->px[b][1] = m1;
+    l->px[b][2] = m2;
+}
+
+#if !defined(BBC_LUT_PROGRESSIVE) || BBC_LUT_PROGRESSIVE == 0
+static BBC_HOT void _bbc_lut_fill(bbc_lut_slot_t* l, int from, int to) {
+    for (int b = from; b < to; b++) _bbc_lut_entry(l, b);
+    l->fill = (uint16_t)to;
+}
+#else
+// Progressive build: entry b on demand (the bytes a line shows), marked done
+static BBC_HOT void _bbc_lut_need(bbc_lut_slot_t* l, uint8_t b) {
+    uint32_t bit = 1u << (b & 31);
+    if (l->done[b >> 5] & bit) return;
+    l->done[b >> 5] |= bit;
+    _bbc_lut_entry(l, b);
+    if (++l->ndone == 256) {
+        l->building = false;
+        l->valid = true;
+    }
+}
+#endif
+
 // Byte -> pixels table for a ULA control/palette (only the bits that shape pixels)
-static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, const uint8_t* pal) {
+static BBC_HOT bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, const uint8_t* pal) {
     ctrl &= 0x1D;   // Flash, characters per line, 2 MHz clock
     lut->clock++;
     bbc_lut_slot_t* victim = &lut->slot[0];
@@ -1464,23 +1489,26 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
         b->building = true;
         b->ctrl = ctrl;
         _bbc_copy(b->pal, pal, 16);
+        _bbc_lut_setup(b);
         b->fill = 0;
+        b->ndone = 0;
+        for (int i = 0; i < 8; i++) b->done[i] = 0;
     }
     if (!lut->chunk_done) {
         // One slice per line, however many palette writes the line has
         lut->chunk_done = true;
-        int to = b->fill + BBC_LUT_PROGRESSIVE;
-        _bbc_lut_fill(b, b->fill, to > 256 ? 256 : to);
+        for (int n = 0; n < BBC_LUT_PROGRESSIVE && b->fill < 256; b->fill++) {
+            uint8_t e = (uint8_t)b->fill;
+            if (!(b->done[e >> 5] & (1u << (e & 31)))) {
+                _bbc_lut_need(b, e);
+                n++;
+            }
+        }
     }
-    if (b->fill == 256) {
-        b->building = false;
-        b->valid = true;
-        b->used = lut->clock;
-        if (b->ctrl == ctrl && _bbc_same16(b->pal, pal)) return b;
-        if (!recent) recent = b;
-    }
+    b->used = lut->clock;
     (void)recent;
-    return 0;   // Not ready: the line is drawn pixel by pixel (right colours)
+    if (b->ctrl == ctrl && _bbc_same16(b->pal, pal)) return b;   // Complete, or filled on demand by the caller
+    return 0;   // Another palette is being built: the line is drawn pixel by pixel (right colours)
 #else
     bbc_lut_slot_t* l = victim;
 #ifdef BBC_LUT_BUILD_HOOK
@@ -1488,6 +1516,7 @@ static BBC_HOT const bbc_lut_slot_t* _bbc_lut_use(bbc_lut_t* lut, uint8_t ctrl, 
 #endif
     l->ctrl = ctrl;
     _bbc_copy(l->pal, pal, 16);
+    _bbc_lut_setup(l);
     _bbc_lut_fill(l, 0, 256);
     l->valid = true;
     l->used = lut->clock;
@@ -1556,7 +1585,7 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
         uint8_t pal[16];
         _bbc_copy(pal, ln->pal, 16);
         if (!lut->idx_ready) _bbc_lut_idx_init(lut);
-        const bbc_lut_slot_t* ls = _bbc_lut_use(lut, ctrl, pal);
+        bbc_lut_slot_t* ls = _bbc_lut_use(lut, ctrl, pal);
         uint8_t phys[16];
         if (!ls) {
             for (int i = 0; i < 16; i++) phys[i] = _bbc_phys_colour(ctrl, pal, (uint8_t)i);
@@ -1579,6 +1608,9 @@ BBC_HOT void bbc_render_line(const bbc_t* sys, const bbc_line_t* ln, bbc_lut_t* 
             uint16_t md[3];
             const uint16_t* m;
             if (ls) {
+#if defined(BBC_LUT_PROGRESSIVE) && BBC_LUT_PROGRESSIVE > 0
+                if (!ls->valid) _bbc_lut_need(ls, ln->data[c]);
+#endif
                 m = ls->px[ln->data[c]];
             } else {
                 _bbc_px_direct(lut, ctrl, phys, ln->data[c], md);
