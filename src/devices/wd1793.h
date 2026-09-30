@@ -10,8 +10,8 @@
 // write track control bytes F5/F6/F7); the behaviours left open by the data
 // sheet follow Oricutron (the reference Oric emulator, disk.c), which runs
 // Sedoric and FT-DOS:
-//   - data transfers are paced by the CPU: the next DRQ comes 32 us after
-//     the CPU has read/written the data register (a byte takes 32 us in MFM
+//   - data transfers are paced by the CPU: the next DRQ comes exactly 32 us
+//     (WD1793_BYTE_US ticks) after the CPU has read/written the data register (a byte takes 32 us in MFM
 //     at 250 kbit/s), so a slow CPU never loses data;
 //   - type I commands complete after 20 us (no real head movement time) and
 //     set "head loaded" and "index" in the status;
@@ -140,7 +140,8 @@ typedef struct {
 } wd1793_t;
 
 void wd1793_init(wd1793_t* fdc);
-// Master reset (MR pin): aborts the command, clears DRQ/INTRQ
+// Master reset (MR pin): aborts the command, clears DRQ/INTRQ; the heads stay
+// where they are (as with the real MR pin: the DOS restores to track 0)
 void wd1793_reset(wd1793_t* fdc);
 // Insert an in-memory MFM_DISK image (buffer kept, written in place); false if not a valid image
 bool wd1793_insert_mem(wd1793_t* fdc, int drive, uint8_t* data, uint32_t size, bool write_protected);
@@ -150,6 +151,10 @@ bool wd1793_insert_streamed(wd1793_t* fdc, int drive, const uint8_t* header, uin
 // Same, the header read through `read`
 bool wd1793_insert_streamed_file(wd1793_t* fdc, int drive, uint32_t size, oric_dsk_read_t read, oric_dsk_write_t write,
                                  void* ctx);
+// Eject: a streamed image gets its cached track written back first; the drive
+// state is then cleared, including disk[drive].modified: a caller that saves an
+// in-memory image when it was written must do so BEFORE ejecting (or inserting
+// another image, which ejects)
 void wd1793_eject(wd1793_t* fdc, int drive);
 bool wd1793_disk_present(const wd1793_t* fdc, int drive);
 // Write back the cached track of a streamed image
@@ -486,7 +491,11 @@ CHIPS_HOT void wd1793_tick(wd1793_t* fdc) {
                 fdc->wait_us--;
                 return;
             }
+            // The next state acts on this tick: a wait of n µs ends exactly n ticks
+            // after it started (DRQ BYTE_US after the data register access); `next`
+            // is never WAIT, so this recurses once at most
             fdc->state = fdc->next;
+            wd1793_tick(fdc);
             return;
 
         case WD1793_READ_BYTE:

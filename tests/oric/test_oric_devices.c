@@ -530,6 +530,54 @@ static uint32_t run_read_multiple(wd1793_t* w, bool skip, uint8_t* out, int* n) 
     return elapsed;
 }
 
+// Ticks until DRQ (or the end of the command)
+static int ticks_to_drq(void) {
+    int n = 0;
+    while (!fdc.drq && fdc.state != WD1793_IDLE && n < 100000) {
+        wd1793_tick(&fdc);
+        n++;
+    }
+    return n;
+}
+
+// DRQ exactly FIRST_DRQ_US after the command, then BYTE_US after each data
+// register access (read and write); no extra tick at the end of a wait
+static void test_drq_timing(void) {
+    seek(1);
+    wd1793_write(&fdc, 1, 1);
+    wd1793_write(&fdc, 2, 9);
+    wd1793_write(&fdc, 0, 0x80);
+    CHECK(ticks_to_drq() == WD1793_FIRST_DRQ_US);
+    int bad = 0;
+    for (int k = 0; k < 255; k++) {
+        wd1793_read(&fdc, 3);
+        if (ticks_to_drq() != WD1793_BYTE_US) bad++;
+    }
+    CHECK(bad == 0);
+    wd1793_read(&fdc, 3);
+    run_until_idle();
+    wd1793_write(&fdc, 2, 9);
+    wd1793_write(&fdc, 0, 0xA0);
+    CHECK(ticks_to_drq() == WD1793_FIRST_DRQ_US);
+    bad = 0;
+    for (int k = 0; k < 255; k++) {
+        wd1793_write(&fdc, 3, (uint8_t)(255 - k));
+        if (ticks_to_drq() != WD1793_BYTE_US) bad++;
+    }
+    CHECK(bad == 0);
+    wd1793_write(&fdc, 3, 0);
+    run_until_idle();
+    // Type I: busy for exactly TYPE1_US ticks
+    wd1793_write(&fdc, 0, 0x00);
+    int n = 0;
+    while (fdc.state != WD1793_IDLE && n < 100000) {
+        wd1793_tick(&fdc);
+        n++;
+    }
+    CHECK(n == WD1793_TYPE1_US);
+    wd1793_read(&fdc, 0);
+}
+
 static void test_tick_n(void) {
     static wd1793_t a, b;
     static uint8_t out_a[8192], out_b[8192];
@@ -930,6 +978,7 @@ int main(void) {
     test_no_disk();
     test_streamed();
     test_tick_n();
+    test_drq_timing();
     test_tape();
     test_tape_padding();
     test_tape_streamed();
