@@ -81,8 +81,9 @@ le dit dans un ADR.
 
 ## 3 bis. Traits rouges : un seul diagnostic pour tous
 
-Un trait rouge (ou vert, bleu) horizontal a eu **six causes différentes** sur la carte,
-trouvées par Trinity (T-38 à T-77), Tangerine (v0.9.4) et reload (Oric). Le symptôme est le
+Un trait rouge (ou vert, bleu) horizontal a eu **plusieurs causes différentes** sur la
+carte, trouvées par Trinity (T-53 à T-58), Tangerine (v0.9.4) et reload (Oric) ; lectures
+relues et corrigées par Trinity le 2026-10-01. Le symptôme est le
 même, les remèdes non : **mesurer avant de corriger**, dans cet ordre.
 
 **Première mesure : la ligne est-elle en retard ?** Compteur `dvi0.late_scanline_ctr` de
@@ -92,24 +93,27 @@ cœur 1 (SysTick, `carte.py video` de Tangerine). Budget : ≈ 31 µs par ligne 
 | Ligne en retard ? | Cause (projet qui l'a mesurée) | Remède |
 |---|---|---|
 | oui | **Code du cœur 1 en flash** : un appel caché (`memset` recréé par GCC) attend la flash quand le cœur 0 y accède ; 70 µs au lieu de 31 (Tangerine) | tout le chemin du cœur 1 en RAM (`__not_in_flash_func`, `.time_critical`), **vérifié à l'objdump** : aucun appel vers `0x10…` |
-| oui | **Bande passante mémoire** : le cœur 0 martèle la SRAM (FatFs, TinyUSB), le cœur 1 attend l'arbitre (Trinity) | `bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_PROC1_BITS` ; moins de transactions par ligne (4 pixels par mot de 32 bits : Trinity T-58). **Priorité au DMA seule : a empiré chez Trinity** (T-56) |
+| oui | **Bande passante mémoire** : le cœur 0 martèle la SRAM (FatFs, TinyUSB), le cœur 1 n'a plus assez d'accès (Trinity) | **réduire la demande** : moins de transactions par ligne (4 pixels par mot de 32 bits : Trinity T-58). **Pas d'arbitrage** : chez Trinity, la priorité au DMA a nettement empiré les traits (T-56) et la priorité au cœur 1 (`PROC1`) a rendu l'écran noir dès `MODE 1`, lectures SWD comprises (T-71, annulée). L'Oric, les Apple et le BBC fixent `PROC1` sans défaut constaté : à mesurer, pas à généraliser |
 | oui | **Pas assez d'avance** : sans répétition verticale, 3 tampons TMDS ne laissent qu'une ligne d'avance (Tangerine) | `DVI_N_TMDS_BUFFERS=6` (Tangerine) ; avec `DVI_VERTICAL_REPEAT=2`, 3 suffisent |
 | oui | **Verrous partagés** : `next_striped_spin_lock_num()` avec FatFs et TinyUSB (reload, Trinity) | `spin_lock_claim_unused(true)` (règle 2) |
 | non | **Source changée pendant l'encodage** : le rouge est encodé en dernier depuis un tampon de ligne que le rappel réécrit déjà (Trinity T-53 : bleu et vert justes, rouge faux) | au moins 4 tampons de ligne ; ne jamais réécrire un tampon avant que ses trois canaux soient encodés |
 | non | **Encodeur à palette** sans équilibrage DC : traits sur les grands aplats, selon l'écran (reload, Oric `PAPER 4`) | 3 plans de 1 bit `tmds_encode_1bpp` (règle 1) ; Apple II : à juger sur la carte |
-| non | **Mémoire écrasée** : des octets parasites dans la mémoire vidéo s'affichent en couleur (Trinity T-54 : tableaux MSC indexés par l'adresse USB 1-5, taille 5) | emplacement = adresse − 1 et index bornés (`msc_app.c` du socle : emplacements attribués au montage) ; outil de contrôle de la mémoire vidéo (`VRAMCHK` de Trinity) |
+| non | **Mémoire vidéo fausse** (hypothèse à écarter) : chez Trinity, `VRAMCHK` (T-55) a montré que la mémoire vidéo restait saine pendant les traits ; le débordement des tableaux MSC (T-54) expliquait des plantages, pas les traits | vérifier la mémoire vidéo avant et après une rafale : `VRAMCHK.NEO` pour les firmwares à l'API Neo6502, sinon vidage de la mémoire vidéo par la sonde (`dump_image`) |
 
-À ne pas confondre : une **lane qui glisse** (une seule couleur décalée, Trinity T-77) est un
-débordement de blanking, pas une ligne manquante.
+À ne pas confondre : une **lane qui glisse** (une seule couleur décalée, Trinity T-77 : en
+mode 1, deux canaux DMA de données repartent avec la configuration d'une autre lane) ;
+cause retenue par Trinity : les verrous partagés, corrigée par des verrous dédiés (0.16.35).
 
 **Reproducteurs** : une rafale FatFs (Tab dans NeoDOS, `DIR` répétés, chargement d'une
 disquette) ; la frappe au clavier ; un jeu en régime établi. **Critère** : 0 ligne en retard
 et 0 trait pendant la rafale, photo à l'appui.
 
-**État par projet (2026-10-01)** : Trinity et Tangerine : réglés et mesurés sur la carte.
-Oric : plans + `PROC1`, à revérifier sous rafale FatFs. BBC : plans + `PROC1` **et** DMA (à
-mesurer : la priorité au DMA a empiré chez Trinity). Apple II / IIe : encodeur à palette +
-`PROC1`, à juger sur la carte (priorité). Telestrat, NES, Vic20 : à relever par chaque projet.
+**État par projet (2026-10-01)** : Tangerine : réglé et mesuré (0 trait en régime établi).
+Trinity : réglé en septembre (T-53, T-58), **traits revenus** (signalés par bmarty le
+2026-10-01, après les versions 0.16.64 et 0.16.65 ; cause non établie). Oric : plans +
+`PROC1`, à revérifier sous rafale FatFs. BBC : plans + `PROC1` **et** DMA, à mesurer. Apple II
+/ IIe : encodeur à palette + `PROC1`, à juger sur la carte (priorité). Telestrat, NES, Vic20 :
+à relever par chaque projet.
 
 ## 4. Validation commune
 
@@ -181,7 +185,7 @@ mesurer : la priorité au DMA a empiré chez Trinity). Apple II / IIe : encodeur
   jusqu'où l'aligner.
 - **Interfaces du socle déjà utilisées ailleurs**, à garder stables : `tools/cputest/harte.c`
   (Telestrat), volume de `audio.c` et `hid_media_key_down` (Telestrat v0.16.10).
-- **Priorité mémoire au DMA** : Trinity a vu les traits rouges empirer avec elle et les a
-  réglés par la priorité au cœur 1 (`PROC1`) ; le BBC, le NES et le Telestrat utilisent le
-  DMA sans défaut mesuré. Proposition : `PROC1` pour tous, le DMA seulement si une mesure
-  sous rafale FatFs le justifie (section 3 bis).
+- **Priorité mémoire** : chez Trinity, la priorité au DMA a empiré les traits (T-56) et la
+  priorité au cœur 1 a noirci l'écran (T-71) : aucune des deux n'y est réglée. Le BBC, le NES
+  et le Telestrat fixent le DMA, l'Oric et les Apple `PROC1`, sans défaut constaté. Pas de
+  règle commune tant qu'une mesure sous rafale FatFs n'a pas départagé (section 3 bis).
