@@ -5,15 +5,35 @@
 #include "ff.h"
 #include "diskio.h"
 
-// FatFs drive (pdrv) = slot = USB address - 1: the addresses go from 1 to
-// CFG_TUH_DEVICE_MAX, the tables and the FatFs drives from 0 (a drive indexed by
-// the address overflowed them with 5 devices behind the hub)
-#define MSC_SLOTS (CFG_TUH_DEVICE_MAX < FF_VOLUMES ? CFG_TUH_DEVICE_MAX : FF_VOLUMES)
+// FatFs drive (pdrv) = slot, given to a USB drive when it is mounted (its USB
+// address, 1 to CFG_TUH_DEVICE_MAX, is kept in msc_slot_addr; indexing the tables
+// by the address overflowed them with 5 devices behind the hub). MSC_VOLUMES = 1:
+// one FATFS only (588 bytes each), taken by the first drive mounted, whatever its
+// address (as Neo6502TeleStrat).
+#ifndef MSC_VOLUMES
+#define MSC_VOLUMES (CFG_TUH_DEVICE_MAX < FF_VOLUMES ? CFG_TUH_DEVICE_MAX : FF_VOLUMES)
+#endif
+#define MSC_SLOTS MSC_VOLUMES
 static FATFS msc_fatfs_volumes[MSC_SLOTS];
 static volatile bool msc_volume_busy[MSC_SLOTS];
+static uint8_t msc_slot_addr[MSC_SLOTS];   // USB address of the drive in each slot, 0: free
 
-static inline int msc_slot(uint8_t dev_addr) {
-    return (dev_addr >= 1 && dev_addr <= MSC_SLOTS) ? dev_addr - 1 : -1;
+static int msc_slot(uint8_t dev_addr) {
+    for (int i = 0; dev_addr && i < MSC_SLOTS; i++) {
+        if (msc_slot_addr[i] == dev_addr) return i;
+    }
+    return -1;
+}
+
+static int msc_slot_take(uint8_t dev_addr) {
+    int slot = msc_slot(dev_addr);
+    for (int i = 0; slot < 0 && i < MSC_SLOTS; i++) {
+        if (!msc_slot_addr[i]) {
+            msc_slot_addr[i] = dev_addr;
+            slot = i;
+        }
+    }
+    return slot;
 }
 static scsi_inquiry_resp_t msc_inquiry_resp;
 
@@ -44,9 +64,9 @@ void msc_poll(void) {
     if (!msc_pending_mount) return;
     uint8_t dev_addr = (uint8_t)(msc_pending_mount - 1);
     msc_pending_mount = 0;
-    const int slot = msc_slot(dev_addr);
+    const int slot = msc_slot_take(dev_addr);
     if (slot < 0) {
-        printf("MSC: USB address %u beyond the %d drives\r\n", dev_addr, MSC_SLOTS);
+        printf("MSC: no free volume for USB address %u (%d volumes)\r\n", dev_addr, MSC_SLOTS);
         return;
     }
 
@@ -79,6 +99,7 @@ void tuh_msc_umount_cb(uint8_t dev_addr) {
     char drive_path[3] = "0:";
     drive_path[0] += slot;
     f_unmount(drive_path);
+    msc_slot_addr[slot] = 0;
 }
 
 // Give up on a transfer after this long: on the RP2040 host a bulk transfer can
@@ -107,8 +128,8 @@ static bool disk_io_complete(uint8_t dev_addr, tuh_msc_complete_data_t const *cb
 }
 
 DSTATUS disk_status(BYTE pdrv) {
-    if (pdrv >= MSC_SLOTS) return STA_NOINIT;
-    uint8_t dev_addr = (uint8_t)(pdrv + 1);
+    if (pdrv >= MSC_SLOTS || !msc_slot_addr[pdrv]) return STA_NOINIT;
+    uint8_t dev_addr = msc_slot_addr[pdrv];
     return tuh_msc_mounted(dev_addr) ? 0 : STA_NODISK;
 }
 
@@ -118,8 +139,8 @@ DSTATUS disk_initialize(BYTE pdrv) {
 }
 
 DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
-    if (pdrv >= MSC_SLOTS) return RES_PARERR;
-    uint8_t const dev_addr = (uint8_t)(pdrv + 1);
+    if (pdrv >= MSC_SLOTS || !msc_slot_addr[pdrv]) return RES_PARERR;
+    uint8_t const dev_addr = msc_slot_addr[pdrv];
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
     if (!tuh_msc_read10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
@@ -130,8 +151,8 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
 }
 
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
-    if (pdrv >= MSC_SLOTS) return RES_PARERR;
-    uint8_t const dev_addr = (uint8_t)(pdrv + 1);
+    if (pdrv >= MSC_SLOTS || !msc_slot_addr[pdrv]) return RES_PARERR;
+    uint8_t const dev_addr = msc_slot_addr[pdrv];
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
     if (!tuh_msc_write10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
@@ -142,8 +163,8 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
-    if (pdrv >= MSC_SLOTS) return RES_PARERR;
-    uint8_t const dev_addr = (uint8_t)(pdrv + 1);
+    if (pdrv >= MSC_SLOTS || !msc_slot_addr[pdrv]) return RES_PARERR;
+    uint8_t const dev_addr = msc_slot_addr[pdrv];
     uint8_t const lun = 0;
     switch (cmd) {
         case CTRL_SYNC:
