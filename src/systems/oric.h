@@ -232,6 +232,10 @@ bool oric_insert_tap(oric_t* sys, const uint8_t* tap, uint32_t size);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef ORIC_HOT
+#define ORIC_HOT
+#endif
 #include <string.h> /* memcpy, memset */
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -472,7 +476,7 @@ void oric_reset(oric_t* sys) {
 }
 
 // Microdisc registers ($0310-$031F; the other addresses reach the VIA)
-static void _oric_microdisc_rw(oric_t* sys, uint16_t addr, bool rw) {
+static ORIC_HOT void _oric_microdisc_rw(oric_t* sys, uint16_t addr, bool rw) {
     if (addr >= 0x0310 && addr <= 0x0313) {
         if (rw) {
             MOS6502CPU_SET_DATA(&sys->cpu, wd1793_read(&sys->wd, addr & 3));
@@ -504,7 +508,7 @@ static void _oric_microdisc_rw(oric_t* sys, uint16_t addr, bool rw) {
 }
 
 // Jasmin registers ($03F4-$03FF; the other addresses reach the VIA)
-static void _oric_jasmin_rw(oric_t* sys, uint16_t addr, bool rw) {
+static ORIC_HOT void _oric_jasmin_rw(oric_t* sys, uint16_t addr, bool rw) {
     if (addr >= 0x03F4 && addr <= 0x03F7) {
         if (rw) {
             MOS6502CPU_SET_DATA(&sys->cpu, wd1793_read(&sys->wd, addr & 3));
@@ -548,7 +552,7 @@ static void _oric_jasmin_press_boot(oric_t* sys) {
     MOS6502CPU_RESET(&sys->cpu);
 }
 
-static void _oric_mem_rw(oric_t* sys, uint16_t addr, bool rw) {
+static ORIC_HOT void _oric_mem_rw(oric_t* sys, uint16_t addr, bool rw) {
     if ((addr >= 0x0300) && (addr <= 0x03FF)) {
         // Memory-mapped IO area
         if (sys->fdc_type == ORIC_FDC_MICRODISC && addr >= 0x0310) {
@@ -638,7 +642,7 @@ static void _oric_mem_rw(oric_t* sys, uint16_t addr, bool rw) {
 
 static uint8_t _last_motor_state = 0;
 
-void oric_tick(oric_t* sys) {
+ORIC_HOT void oric_tick(oric_t* sys) {
     MOS6502CPU_TICK(&sys->cpu);
 
     _oric_mem_rw(sys, sys->cpu.addr, sys->cpu.rw);

@@ -9,6 +9,10 @@ firmware oric_diag (platforms/rp2040/build/systems/oric/oric_diag.elf).
   oric_carte.py ecran             écran texte de l'Oric ($BB80, 40 x 28)
   oric_carte.py envoyer F [F…]    copie des fichiers à la racine de la clé USB de la carte
                                   (FICHIER ou FICHIER=NOM), puis relit la clé (ORIC.CFG)
+  oric_carte.py mesure [SECONDES]  temps de l'émulation seule (19968 cycles par trame) et de
+                                  la trame entière, moyenne et pire cas sur SECONDES (10)
+                                  (oric_diag : code chaud en RAM ; oric_diag_cold : en flash,
+                                  NEO_ELF=…/oric_diag_cold.elf)
 
 Variables : NEO_ELF (oric_diag.elf), NEO_OPENOCD (OpenOCD qui connaît la flash
 Puya P25Q16 du Neo6502).
@@ -18,6 +22,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 ELF = os.environ.get("NEO_ELF", os.path.expanduser(
     "~/reload-emulator/platforms/rp2040/build/systems/oric/oric_diag.elf"))
@@ -111,6 +116,37 @@ def etat():
     print("clé USB (msc_inquiry_complete)", lire(s["msc_inquiry_complete"], 1)[0], "scannée", lire(s["usb_scanned"], 1)[0])
 
 
+def lire_mots(adresses):
+    """Mots de 32 bits aux adresses données, lus par une seule session OpenOCD."""
+    journal = openocd(*[f"mdw 0x{a:08x}" for a in adresses])
+    valeurs = {}
+    for m in re.finditer(r"0x([0-9a-f]{8}):\s+([0-9a-f]{8})", journal):
+        valeurs[int(m.group(1), 16)] = int(m.group(2), 16)
+    return [valeurs[a] for a in adresses]
+
+
+def mesure(secondes=10.0):
+    """Temps passé dans les 19968 cycles d'une trame (budget 19968 us) et dans la trame
+    entière (émulation, USB, écran), moyenne et pire cas sur l'intervalle."""
+    s = symboles()
+    if "diag_tick_us" not in s:
+        raise SystemExit("ELF sans diag_tick_us : compiler et flasher oric_diag (ou oric_diag_cold)")
+    noms = ["diag_tick_us", "diag_tick_frames", "diag_exec_us", "diag_frames"]
+    # Pires cas remis à zéro au début de l'intervalle
+    openocd(f"mww 0x{s['diag_tick_max']:08x} 0", f"mww 0x{s['diag_exec_max']:08x} 0")
+    avant = lire_mots([s[n] for n in noms])
+    time.sleep(secondes)
+    apres = lire_mots([s[n] for n in noms] + [s["diag_tick_max"], s["diag_exec_max"]])
+    d = [(b - a) & 0xFFFFFFFF for a, b in zip(avant, apres[:4])]
+    if d[1] == 0 or d[3] == 0:
+        raise SystemExit("aucune trame émulée (panneau ouvert ?)")
+    tick, trame = d[0] / d[1], d[2] / d[3]
+    print(f"firmware       {os.path.basename(ELF)}")
+    print(f"trames         {d[3]} en {secondes:g} s ({d[1]} émulées)")
+    print(f"émulation      moyenne {tick:.0f} us, pire {apres[4]} us ({100 * tick / 19968:.1f} % du budget de 19968 us)")
+    print(f"trame entière  moyenne {trame:.0f} us, pire {apres[5]} us")
+
+
 def envoyer(fichiers):
     """Copie des fichiers sur la clé USB par la boîte aux lettres diag_file_* du firmware."""
     s = symboles()
@@ -168,6 +204,8 @@ if __name__ == "__main__":
         ecran()
     elif cmd == "envoyer":
         envoyer(sys.argv[2:])
+    elif cmd == "mesure":
+        mesure(float(sys.argv[2]) if len(sys.argv) > 2 else 10.0)
     else:
         print(__doc__)
         sys.exit(1)

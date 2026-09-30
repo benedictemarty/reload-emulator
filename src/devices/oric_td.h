@@ -122,6 +122,10 @@ void oric_td_snapshot_onload(oric_td_t* snapshot, oric_td_t* sys);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef CHIPS_HOT
+#define CHIPS_HOT
+#endif
 #include <string.h>  // memcpy, memset
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -332,7 +336,7 @@ static void _oric_td_tap_unit(oric_td_t* sys) {
     sys->tap_units = (uint8_t)(sys->tap_len - 1);   // The low level lasts as long as the high level
 }
 
-void oric_td_tick(oric_td_t* sys) {
+CHIPS_HOT void oric_td_tick(oric_td_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     if (sys->tap_mode) {
         bool motor = oric_td_is_motor_on(sys);

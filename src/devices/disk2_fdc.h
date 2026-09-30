@@ -92,6 +92,10 @@ void disk2_fdc_snapshot_onload(disk2_fdc_t* snapshot, disk2_fdc_t* sys);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef CHIPS_HOT
+#define CHIPS_HOT
+#endif
 #include <string.h>  // memcpy, memset
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -121,13 +125,13 @@ void disk2_fdc_reset(disk2_fdc_t* sys) {
     // disk2_fdd_reset(&sys->fdd[1]);
 }
 
-void disk2_fdc_tick(disk2_fdc_t* sys) {
+CHIPS_HOT void disk2_fdc_tick(disk2_fdc_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     disk2_fdd_tick(&sys->fdd[0]);
     // disk2_fdd_tick(&sys->fdd[1]);
 }
 
-uint8_t disk2_fdc_read_byte(disk2_fdc_t* sys, uint8_t addr) {
+CHIPS_HOT uint8_t disk2_fdc_read_byte(disk2_fdc_t* sys, uint8_t addr) {
     _disk2_fdc_process_soft_switches(sys, addr);
     if (addr & 1) {
         return 0;
@@ -136,7 +140,7 @@ uint8_t disk2_fdc_read_byte(disk2_fdc_t* sys, uint8_t addr) {
     return disk2_fdd_read_byte(fdd);
 }
 
-void disk2_fdc_write_byte(disk2_fdc_t* sys, uint8_t addr, uint8_t byte) {
+CHIPS_HOT void disk2_fdc_write_byte(disk2_fdc_t* sys, uint8_t addr, uint8_t byte) {
     _disk2_fdc_process_soft_switches(sys, addr);
     if ((addr & 1) == 0) {
         return;
@@ -149,7 +153,7 @@ void disk2_fdc_snapshot_onsave(disk2_fdc_t* snapshot) { CHIPS_ASSERT(snapshot); 
 
 void disk2_fdc_snapshot_onload(disk2_fdc_t* snapshot, disk2_fdc_t* sys) { CHIPS_ASSERT(snapshot && sys); }
 
-static void _disk2_fdc_process_soft_switches(disk2_fdc_t* sys, uint8_t addr) {
+static CHIPS_HOT void _disk2_fdc_process_soft_switches(disk2_fdc_t* sys, uint8_t addr) {
     disk2_fdd_t* fdd = &sys->fdd[sys->selected_drive];
 
     switch (addr & 0xF) {

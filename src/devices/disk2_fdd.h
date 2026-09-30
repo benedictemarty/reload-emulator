@@ -76,6 +76,10 @@ void disk2_fdd_write_byte(disk2_fdd_t* sys, uint8_t byte);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef CHIPS_HOT
+#define CHIPS_HOT
+#endif
 #include <string.h>
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -104,7 +108,7 @@ void disk2_fdd_discard(disk2_fdd_t* sys) {
 
 void disk2_fdd_reset(disk2_fdd_t* sys) { CHIPS_ASSERT(sys && sys->valid); }
 
-void disk2_fdd_tick(disk2_fdd_t* sys) {
+CHIPS_HOT void disk2_fdd_tick(disk2_fdd_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     if (sys->motor_timer_ticks > 0) {
         sys->motor_timer_ticks--;
@@ -148,14 +152,14 @@ bool disk2_fdd_is_motor_on(disk2_fdd_t* sys) {
     return sys->motor_state != 0;
 }
 
-static void _disk2_fdd_update_offset(disk2_fdd_t* sys) {
+static CHIPS_HOT void _disk2_fdd_update_offset(disk2_fdd_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     if (sys->motor_state) {
         sys->offset = (sys->offset + 1) % DISK2_FDD_BYTES_PER_NIB_TRACK;
     }
 }
 
-uint8_t disk2_fdd_read_byte(disk2_fdd_t* sys) {
+CHIPS_HOT uint8_t disk2_fdd_read_byte(disk2_fdd_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     sys->write_ready = 0x80;
     switch (sys->control_bits) {
@@ -177,7 +181,7 @@ uint8_t disk2_fdd_read_byte(disk2_fdd_t* sys) {
     }
 }
 
-void disk2_fdd_write_byte(disk2_fdd_t* sys, uint8_t byte) {
+CHIPS_HOT void disk2_fdd_write_byte(disk2_fdd_t* sys, uint8_t byte) {
     CHIPS_ASSERT(sys && sys->valid);
 
     if (!sys->nib_image_loaded || sys->write_protected || byte < 0x96) {

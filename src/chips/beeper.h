@@ -72,6 +72,10 @@ bool beeper_tick(beeper_t* beeper);
 #endif
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef CHIPS_HOT
+#define CHIPS_HOT
+#endif
 #include <string.h>
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -109,7 +113,7 @@ static float _beeper_dcadjust(beeper_t* bp, float s) {
     return s - (bp->dcadj_sum / BEEPER_DCADJ_BUFLEN);
 }
 
-bool beeper_tick(beeper_t* bp) {
+CHIPS_HOT bool beeper_tick(beeper_t* bp) {
     // Generate a new sample?
     bp->counter -= BEEPER_FIXEDPOINT_SCALE;
     if (bp->counter <= 0) {

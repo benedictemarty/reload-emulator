@@ -49,3 +49,19 @@ target_link_libraries(oric_diag pico_stdlib pico_multicore pico_util libdvi tiny
 pico_add_extra_outputs(oric_diag)
 pico_enable_stdio_usb(oric_diag 0)
 pico_enable_stdio_uart(oric_diag 1)
+
+#=== oric_diag_cold: oric_diag with the per-cycle code left in flash (ORIC_COLD),
+# the reference of the before/after measurements (tools/oric_carte.py mesure)
+add_executable(oric_diag_cold
+	${CMAKE_CURRENT_SOURCE_DIR}/src/oric.c
+	${CMAKE_CURRENT_SOURCE_DIR}/src/utils.S
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
+)
+target_compile_options(oric_diag_cold PRIVATE -Wall)
+target_compile_definitions(oric_diag_cold PRIVATE DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1 ORIC_COLD=1)
+target_link_libraries(oric_diag_cold pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
+pico_add_extra_outputs(oric_diag_cold)
+pico_enable_stdio_usb(oric_diag_cold 0)
+pico_enable_stdio_uart(oric_diag_cold 1)

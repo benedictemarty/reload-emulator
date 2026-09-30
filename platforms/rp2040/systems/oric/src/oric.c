@@ -43,6 +43,15 @@
 #endif
 #include "images/oric_images.h"
 
+// Code run every emulated cycle goes to RAM (as the BBC does): from XIP flash,
+// the bus driver, memory decoding, VIA, PSG, tape and FDC ticks miss the 16 KB
+// cache. -DORIC_COLD leaves them in flash (before/after measurements)
+#ifndef ORIC_COLD
+#define ORIC_HOT     __attribute__((section(".time_critical.oric")))
+#define CHIPS_HOT    __attribute__((section(".time_critical.oric")))
+#define WDC65C02_HOT __attribute__((section(".time_critical.oric")))
+#endif
+
 #include "chips/chips_common.h"
 #ifdef OLIMEX_NEO6502
 #include "chips/wdc65C02cpu.h"
@@ -295,6 +304,8 @@ void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_stat
 // for 4 frames.
 volatile uint16_t diag_keyq[256];
 volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames, diag_exec_us, diag_exec_max;
+// Emulation alone (the 19968 ticks of a frame, panel closed): sum, frames, slowest
+volatile uint32_t diag_tick_us, diag_tick_frames, diag_tick_max;
 
 static void diag_key_service(void) {
     static int phase, timer;
@@ -873,6 +884,17 @@ void __not_in_flash_func(core1_main()) {
     __builtin_unreachable();
 }
 
+// The emulation loop, with oric_tick inlined, runs from RAM too (unless ORIC_COLD)
+#ifdef ORIC_COLD
+static void __attribute__((noinline)) run_ticks(uint32_t n) {
+#else
+static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
+#endif
+    for (uint32_t i = 0; i < n; i++) {
+        oric_tick(&state.oric);
+    }
+}
+
 int main() {
     vreg_set_voltage(VREG_VSEL);
     sleep_ms(10);
@@ -905,9 +927,15 @@ int main() {
         uint32_t start_time_in_micros = time_us_32();
 
         uint32_t num_ticks = panel_open ? 0 : 19968;   // Paused while the control panel is open
-        for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
-            oric_tick(&state.oric);
+        run_ticks(num_ticks);
+#ifdef ORIC_DIAG
+        if (num_ticks) {
+            uint32_t tick_us = time_us_32() - start_time_in_micros;
+            diag_tick_us += tick_us;
+            diag_tick_frames++;
+            if (tick_us > diag_tick_max) diag_tick_max = tick_us;
         }
+#endif
         usb_poll();
         banner_update();
 #ifdef ORIC_DIAG

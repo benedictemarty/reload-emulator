@@ -37,6 +37,12 @@
 #include "tusb.h"
 #include "ff.h"
 
+// Code run every emulated cycle goes to RAM (as the BBC and the Oric do): from
+// XIP flash, the bus driver and the memory decoding miss the 16 KB cache
+#define APPLE2_HOT    __attribute__((section(".time_critical.apple2")))
+#define CHIPS_HOT    __attribute__((section(".time_critical.apple2")))
+#define WDC65C02_HOT __attribute__((section(".time_critical.apple2")))
+
 #include "chips/chips_common.h"
 #ifdef OLIMEX_NEO6502
 #include "chips/wdc65C02cpu.h"
@@ -388,6 +394,13 @@ void wait_for_msc_ready(void) {
     }
 }
 
+// The emulation loop, with apple2_tick inlined, runs from RAM too
+static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        apple2_tick(&state.apple2);
+    }
+}
+
 int main() {
     vreg_set_voltage(VREG_VSEL);
     sleep_ms(10);
@@ -417,9 +430,7 @@ int main() {
         uint32_t start_time_in_micros = time_us_32();
 
         uint32_t num_ticks = 17030;
-        for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
-            apple2_tick(&state.apple2);
-        }
+        run_ticks(num_ticks);
 
         apple2_screen_update(&state.apple2);
         tuh_task();

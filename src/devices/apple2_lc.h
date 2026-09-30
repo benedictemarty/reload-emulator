@@ -57,6 +57,10 @@ void apple2_lc_snapshot_onload(apple2_lc_t* snapshot, apple2_lc_t* dev);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef CHIPS_HOT
+#define CHIPS_HOT
+#endif
 #include <string.h>  // memcpy, memset
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -84,7 +88,7 @@ void apple2_lc_discard(apple2_lc_t* dev) {
 
 void apple2_lc_reset(apple2_lc_t* dev) { CHIPS_ASSERT(dev && dev->valid); }
 
-void apple2_lc_control(apple2_lc_t* dev, uint8_t offset, bool rw) {
+CHIPS_HOT void apple2_lc_control(apple2_lc_t* dev, uint8_t offset, bool rw) {
     CHIPS_ASSERT(dev && dev->valid);
     if ((offset & 1) == 0) {
         dev->prewrite = false;

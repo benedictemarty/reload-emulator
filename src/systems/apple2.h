@@ -201,6 +201,10 @@ void apple2_screen_update(apple2_t *sys);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef APPLE2_HOT
+#define APPLE2_HOT
+#endif
 #include <string.h>
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -344,7 +348,7 @@ void apple2_reset(apple2_t *sys) {
     MOS6502CPU_RESET(&sys->cpu);
 }
 
-static void _apple2_mem_c000_c0ff_rw(apple2_t *sys, uint16_t addr, bool rw) {
+static APPLE2_HOT void _apple2_mem_c000_c0ff_rw(apple2_t *sys, uint16_t addr, bool rw) {
     switch (addr & 0xFF) {
         case 0x00:
             if (rw) {
@@ -499,7 +503,7 @@ static void _apple2_mem_c000_c0ff_rw(apple2_t *sys, uint16_t addr, bool rw) {
     }
 }
 
-static void _apple2_mem_rw(apple2_t *sys, uint16_t addr, bool rw) {
+static APPLE2_HOT void _apple2_mem_rw(apple2_t *sys, uint16_t addr, bool rw) {
     if ((addr >= 0xC000) && (addr <= 0xC0FF)) {
         // Apple II I/O Page
         _apple2_mem_c000_c0ff_rw(sys, addr, rw);
@@ -536,7 +540,7 @@ static void _apple2_mem_rw(apple2_t *sys, uint16_t addr, bool rw) {
     }
 }
 
-void apple2_tick(apple2_t *sys) {
+APPLE2_HOT void apple2_tick(apple2_t *sys) {
     if (sys->paddl0_ticks_left > 0) {
         sys->paddl0_ticks_left--;
     }

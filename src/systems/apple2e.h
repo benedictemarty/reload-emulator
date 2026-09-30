@@ -219,6 +219,10 @@ void apple2e_screen_update(apple2e_t *sys);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+// Placement of the functions run every emulated cycle (e.g. RAM on the RP2040)
+#ifndef APPLE2E_HOT
+#define APPLE2E_HOT
+#endif
 #include <string.h> /* memcpy, memset */
 #ifndef CHIPS_ASSERT
 #include <assert.h>
@@ -367,7 +371,7 @@ static mem_bank_t mem_bank_0800[4];
 static mem_bank_t mem_bank_2000[4];
 static mem_bank_t mem_bank_4000[4];
 
-static void _apple2e_text_bank_update(apple2e_t *sys) {
+static APPLE2E_HOT void _apple2e_text_bank_update(apple2e_t *sys) {
     int ramwr = (sys->ramrd ? 1 : 0) | (sys->ramwrt ? 2 : 0);
     int bank = ramwr;
     if (sys->_80store) {
@@ -376,7 +380,7 @@ static void _apple2e_text_bank_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x0400, 0x400, mem_bank_0400[bank].read_ptr, mem_bank_0400[bank].write_ptr);
 }
 
-static void _apple2e_hires_bank_update(apple2e_t *sys) {
+static APPLE2E_HOT void _apple2e_hires_bank_update(apple2e_t *sys) {
     int ramwr = (sys->ramrd ? 1 : 0) | (sys->ramwrt ? 2 : 0);
     int bank = ramwr;
     if ((sys->_80store) && (sys->hires)) {
@@ -385,7 +389,7 @@ static void _apple2e_hires_bank_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x2000, 0x2000, mem_bank_2000[bank].read_ptr, mem_bank_2000[bank].write_ptr);
 }
 
-static void _apple2e_aux_bank_update(apple2e_t *sys) {
+static APPLE2E_HOT void _apple2e_aux_bank_update(apple2e_t *sys) {
     int ramwr = (sys->ramrd ? 1 : 0) | (sys->ramwrt ? 2 : 0);
 
     mem_map_rw(&sys->mem, 0, 0x0200, 0x200, mem_bank_0200[ramwr].read_ptr, mem_bank_0200[ramwr].write_ptr);
@@ -403,7 +407,7 @@ static void _apple2e_aux_bank_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x4000, 0x8000, mem_bank_4000[ramwr].read_ptr, mem_bank_4000[ramwr].write_ptr);
 }
 
-static void _apple2e_lc_bank_update(apple2e_t *sys) {
+static APPLE2E_HOT void _apple2e_lc_bank_update(apple2e_t *sys) {
     uint8_t *ram_ptr = sys->altzp ? sys->aux_ram : sys->ram;
     uint16_t bank_offset = 0xC000 + (sys->lcbnk2 ? 0x1000 : 0x0000);
 
@@ -425,12 +429,12 @@ static void _apple2e_lc_bank_update(apple2e_t *sys) {
     }
 }
 
-static void _apple2e_altzp_update(apple2e_t *sys) {
+static APPLE2E_HOT void _apple2e_altzp_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x0000, 0x200, mem_bank_0000[sys->altzp].read_ptr, mem_bank_0000[sys->altzp].write_ptr);
     _apple2e_lc_bank_update(sys);
 }
 
-static void _apple2e_lc_control(apple2e_t *sys, uint8_t offset, bool rw) {
+static APPLE2E_HOT void _apple2e_lc_control(apple2e_t *sys, uint8_t offset, bool rw) {
     if ((offset & 1) == 0) {
         sys->prewrite = false;
         sys->write_enabled = false;
@@ -465,7 +469,7 @@ static void _apple2e_lc_control(apple2e_t *sys, uint8_t offset, bool rw) {
     _apple2e_lc_bank_update(sys);
 }
 
-static void _apple2e_mem_c000_c00f_w(apple2e_t *sys, uint16_t addr) {
+static APPLE2E_HOT void _apple2e_mem_c000_c00f_w(apple2e_t *sys, uint16_t addr) {
     switch (addr & 0xF) {
         case 0x00:  // 80STOREOFF
             if (sys->_80store) {
@@ -562,7 +566,7 @@ static void _apple2e_mem_c000_c00f_w(apple2e_t *sys, uint16_t addr) {
     }
 }
 
-static void _apple2e_mem_c010_c01f_r(apple2e_t *sys, uint16_t addr) {
+static APPLE2E_HOT void _apple2e_mem_c010_c01f_r(apple2e_t *sys, uint16_t addr) {
     uint8_t data = 0;
     switch (addr & 0x1F) {
         case 0x11:  // read LCBNK2
@@ -631,7 +635,7 @@ static void _apple2e_mem_c010_c01f_r(apple2e_t *sys, uint16_t addr) {
     MOS6502CPU_SET_DATA(&sys->cpu, data);
 }
 
-static void _apple2e_mem_c000_c0ff_rw(apple2e_t *sys, uint16_t addr, bool rw) {
+static APPLE2E_HOT void _apple2e_mem_c000_c0ff_rw(apple2e_t *sys, uint16_t addr, bool rw) {
     switch (addr & 0xFF) {
         case 0x10:
             sys->kbd_last_key &= 0x7F;
@@ -834,7 +838,7 @@ static void _apple2e_mem_c000_c0ff_rw(apple2e_t *sys, uint16_t addr, bool rw) {
     }
 }
 
-static void _apple2e_mem_rw(apple2e_t *sys, uint16_t addr, bool rw) {
+static APPLE2E_HOT void _apple2e_mem_rw(apple2e_t *sys, uint16_t addr, bool rw) {
     if ((addr >= 0xC000) && (addr <= 0xCFFF)) {
         if ((addr >= 0xC000) && (addr <= 0xC0FF)) {
             // Apple //e I/O Page
@@ -883,7 +887,7 @@ static void _apple2e_mem_rw(apple2e_t *sys, uint16_t addr, bool rw) {
     }
 }
 
-void apple2e_tick(apple2e_t *sys) {
+APPLE2E_HOT void apple2e_tick(apple2e_t *sys) {
     if (sys->vbl_ticks == 12480) {
         sys->vbl = true;
     }
