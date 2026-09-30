@@ -131,6 +131,24 @@ Les périphériques passent de ≈ 0,85 à ≈ 0,60 µs par cycle ; l'Oric tient
   pas de 4, VIA) ;
 - broche IRQ écrite seulement quand elle change.
 
+### Sous charge de jeu, et horloge à 345 MHz (2026-09-30)
+
+La boucle BASIC ne suffit pas : l'écran-titre de *3D Fongus* (Microdisc, VIA et son
+actifs) prend **105,1 %** du budget à 295,2 MHz (bus PIO). Intégrer le corps de
+`oric_tick` dans la boucle de trame (`_oric_tick`) n'y change presque rien (105,1 %).
+Le timing 800×480 à **345 MHz** du BBC (même image, effacement horizontal allongé,
+accepté par l'écran de bmarty pour le BBC ; `platforms/rp2040/src/neo_dvi_timings.h`)
+donne 17 % de temps processeur en plus :
+
+| Charge | 295,2 MHz | 345 MHz |
+|---|---|---|
+| BASIC `10 A=A+1:GOTO 10` | 82,5 % | **70,2 %** |
+| *3D Fongus*, écran-titre | 105,1 % | **89,6 %** |
+
+`oric` passe donc à 345 MHz (1,25 V) par défaut ; `-DORIC_VIDEO_295` garde l'ancien
+mode (`oric_diag_295`). **Image de l'Oric à 345 MHz non encore regardée** ;
+échauffement à 1,25 V non mesuré (comme pour le BBC).
+
 Méthode d'échantillonnage (sans laisser un cœur arrêté) : OpenOCD avec
 `-c "set USE_CORE 0"` avant `target/rp2040.cfg`, boucle Tcl `halt` / `get_reg pc` /
 `resume` ; sans `USE_CORE 0`, les deux cœurs sont arrêtés ensemble et la reprise

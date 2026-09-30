@@ -477,19 +477,7 @@ void app_init(void) {
 #elif defined(BBC_VIDEO_480_372)
 // 800x480 (same line and frame rates as the Neo6502 builds) clocked at 372 MHz
 // by stretching the horizontal blanking: refused by bmarty's screen (or link)
-static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_372) = {   // In RAM, as PicoDVI's timings
-    .h_sync_polarity = false,
-    .h_front_porch = 238,
-    .h_sync_width = 92,
-    .h_back_porch = 120,
-    .h_active_pixels = 800,
-    .v_sync_polarity = true,
-    .v_front_porch = 3,
-    .v_sync_width = 10,
-    .v_back_porch = 7,
-    .v_active_lines = 480,
-    .bit_clk_khz = 372000,
-};
+#include "neo_dvi_timings.h"
 #define FRAME_WIDTH  800
 #define FRAME_HEIGHT 480
 #define VREG_VSEL    VREG_VOLTAGE_1_30
@@ -501,19 +489,7 @@ static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_372)
 // horizontal blanking stretched to 1160 pixels per line: 172 cycles per 2 MHz
 // cycle (~165 needed), TMDS bit rate 17 % higher (bmarty's screen accepts 330
 // and 345 MHz, not 372). DVDD 1.25V.
-static const struct dvi_timing __not_in_flash_func(dvi_timing_800x480p_60hz_345) = {   // In RAM, as PicoDVI's timings
-    .h_sync_polarity = false,
-    .h_front_porch = 164,
-    .h_sync_width = 84,
-    .h_back_porch = 112,
-    .h_active_pixels = 800,
-    .v_sync_polarity = true,
-    .v_front_porch = 3,
-    .v_sync_width = 10,
-    .v_back_porch = 7,
-    .v_active_lines = 480,
-    .bit_clk_khz = 345000,
-};
+#include "neo_dvi_timings.h"
 #define FRAME_WIDTH  800
 #define FRAME_HEIGHT 480
 #define VREG_VSEL    VREG_VOLTAGE_1_25

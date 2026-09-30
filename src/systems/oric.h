@@ -649,7 +649,8 @@ static uint8_t _last_motor_state = 0;
 // One cycle. The work done every 4 cycles (system_ticks multiple of 4) is grouped
 // in the `quad` blocks: the PSG, Disk II and VIA periods are multiples of 4, and
 // the sample clock advances by 4 cycles at a time (same count per second).
-ORIC_HOT void oric_tick(oric_t* sys) {
+// _oric_tick can be inlined in a platform's frame loop (no call per cycle).
+static inline __attribute__((always_inline)) void _oric_tick(oric_t* sys) {
     MOS6502CPU_TICK(&sys->cpu);
 
     _oric_mem_rw(sys, sys->cpu.addr, sys->cpu.rw);
@@ -786,6 +787,8 @@ ORIC_HOT void oric_tick(oric_t* sys) {
 
     sys->system_ticks++;
 }
+
+ORIC_HOT void oric_tick(oric_t* sys) { _oric_tick(sys); }
 
 // PSG OUT callback (nothing to do here)
 static void _oric_psg_out(int port_id, uint8_t data, void* user_data) {

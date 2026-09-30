@@ -199,7 +199,17 @@ void app_init(void) {
     profiles_list();
 }
 
-#ifdef OLIMEX_NEO6502
+#if defined(OLIMEX_NEO6502) && !defined(ORIC_VIDEO_295)
+// Default: the 800x480 picture at a 345 MHz system clock (blanking stretched, as the
+// BBC build; neo_dvi_timings.h), 17 % more CPU time per emulated cycle: 3D Fongus
+// takes 89.6 % of the frame instead of 105.1 % at 295.2 MHz (measured 2026-09-30).
+// -DORIC_VIDEO_295: the standard 800x480 timing at 295.2 MHz. DVDD 1.25V
+#include "neo_dvi_timings.h"
+#define FRAME_WIDTH  800
+#define FRAME_HEIGHT 480
+#define VREG_VSEL    VREG_VOLTAGE_1_25
+#define DVI_TIMING   dvi_timing_800x480p_60hz_345
+#elif defined(OLIMEX_NEO6502)
 // TMDS bit clock 295.2 MHz
 // DVDD 1.2V
 #define FRAME_WIDTH  800
@@ -931,8 +941,9 @@ static void __attribute__((noinline)) run_ticks(uint32_t n) {
 #else
 static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
 #endif
+    oric_t *sys = &state.oric;
     for (uint32_t i = 0; i < n; i++) {
-        oric_tick(&state.oric);
+        _oric_tick(sys);   // Body inlined: no function call per emulated cycle
     }
 }
 

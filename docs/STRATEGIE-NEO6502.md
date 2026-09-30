@@ -136,7 +136,9 @@ le dit dans un ADR.
 
 ## 7. À décider (bmarty)
 
-- **Horloge vidéo standard** : 800×480 à 345 MHz (seul mode accepté par l'écran pour
+- **Horloge vidéo standard** (le BBC et l'Oric sont à 800×480 / 345 MHz depuis le
+  2026-09-30, timing commun `neo_dvi_timings.h` ; l'Oric en a besoin pour tenir
+  1 MHz en jeu) : 800×480 à 345 MHz (seul mode accepté par l'écran pour
   le BBC, d'après son ADR-04) ou 960×544 à 372 MHz (affiché d'après le Telestrat et
   le NES) : contradiction à trancher ce soir sur la carte, avec le même firmware.
 - **Telestrat** : système de reload (fusion) ou projet séparé qui consomme le socle.
