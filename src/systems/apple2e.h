@@ -371,7 +371,7 @@ static mem_bank_t mem_bank_0800[4];
 static mem_bank_t mem_bank_2000[4];
 static mem_bank_t mem_bank_4000[4];
 
-static APPLE2E_HOT void _apple2e_text_bank_update(apple2e_t *sys) {
+static void _apple2e_text_bank_update(apple2e_t *sys) {
     int ramwr = (sys->ramrd ? 1 : 0) | (sys->ramwrt ? 2 : 0);
     int bank = ramwr;
     if (sys->_80store) {
@@ -380,7 +380,7 @@ static APPLE2E_HOT void _apple2e_text_bank_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x0400, 0x400, mem_bank_0400[bank].read_ptr, mem_bank_0400[bank].write_ptr);
 }
 
-static APPLE2E_HOT void _apple2e_hires_bank_update(apple2e_t *sys) {
+static void _apple2e_hires_bank_update(apple2e_t *sys) {
     int ramwr = (sys->ramrd ? 1 : 0) | (sys->ramwrt ? 2 : 0);
     int bank = ramwr;
     if ((sys->_80store) && (sys->hires)) {
@@ -389,7 +389,7 @@ static APPLE2E_HOT void _apple2e_hires_bank_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x2000, 0x2000, mem_bank_2000[bank].read_ptr, mem_bank_2000[bank].write_ptr);
 }
 
-static APPLE2E_HOT void _apple2e_aux_bank_update(apple2e_t *sys) {
+static void _apple2e_aux_bank_update(apple2e_t *sys) {
     int ramwr = (sys->ramrd ? 1 : 0) | (sys->ramwrt ? 2 : 0);
 
     mem_map_rw(&sys->mem, 0, 0x0200, 0x200, mem_bank_0200[ramwr].read_ptr, mem_bank_0200[ramwr].write_ptr);
@@ -407,7 +407,7 @@ static APPLE2E_HOT void _apple2e_aux_bank_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x4000, 0x8000, mem_bank_4000[ramwr].read_ptr, mem_bank_4000[ramwr].write_ptr);
 }
 
-static APPLE2E_HOT void _apple2e_lc_bank_update(apple2e_t *sys) {
+static void _apple2e_lc_bank_update(apple2e_t *sys) {
     uint8_t *ram_ptr = sys->altzp ? sys->aux_ram : sys->ram;
     uint16_t bank_offset = 0xC000 + (sys->lcbnk2 ? 0x1000 : 0x0000);
 
@@ -429,12 +429,12 @@ static APPLE2E_HOT void _apple2e_lc_bank_update(apple2e_t *sys) {
     }
 }
 
-static APPLE2E_HOT void _apple2e_altzp_update(apple2e_t *sys) {
+static void _apple2e_altzp_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x0000, 0x200, mem_bank_0000[sys->altzp].read_ptr, mem_bank_0000[sys->altzp].write_ptr);
     _apple2e_lc_bank_update(sys);
 }
 
-static APPLE2E_HOT void _apple2e_lc_control(apple2e_t *sys, uint8_t offset, bool rw) {
+static void _apple2e_lc_control(apple2e_t *sys, uint8_t offset, bool rw) {
     if ((offset & 1) == 0) {
         sys->prewrite = false;
         sys->write_enabled = false;

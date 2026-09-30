@@ -13,7 +13,7 @@ fichier RP2040 de chaque système la définit avant les `#include` :
 | Macro | En-têtes | Définie par |
 |---|---|---|
 | `WDC65C02_HOT` | `platforms/rp2040/src/chips/wdc65C02cpu.h` | `bbc.c`, `oric.c`, `apple2.c`, `apple2e.c` |
-| `CHIPS_HOT` | `mos6522via.h`, `ay38910psg.h`, `beeper.h`, `wd1793.h`, `wd1770.h`, `oric_td.h`, `disk2_fdc.h`, `disk2_fdd.h`, `apple2_lc.h` | idem |
+| `CHIPS_HOT` | `mos6522via.h`, `ay38910psg.h`, `beeper.h`, `wd1793.h`, `wd1770.h`, `oric_td.h`, `disk2_fdc.h`, `disk2_fdd.h` | idem |
 | `BBC_HOT` | `src/systems/bbc.h` | `bbc.c` |
 | `ORIC_HOT` | `src/systems/oric.h` | `oric.c` |
 | `APPLE2_HOT`, `APPLE2E_HOT` | `src/systems/apple2.h`, `apple2e.h` | `apple2.c`, `apple2e.c` |
@@ -21,16 +21,23 @@ fichier RP2040 de chaque système la définit avant les `#include` :
 La boucle d'une trame (`run_ticks`, fonction `__no_inline_not_in_flash_func`) est
 elle aussi en RAM, avec la fonction `*_tick` du système intégrée.
 
-RAM consommée (compilation Release, 2026-09-30) :
+RAM consommée (compilation Release, 2026-09-30, avec les ROM réelles) :
 
-| Firmware | Code déplacé en RAM | RAM restante (fin du tas → pile) |
+| Firmware | Code déplacé en RAM | Tas disponible (`__end__` → fin de la RAM) |
 |---|---|---|
-| `oric` | 9,8 Ko | ≈ 35 Ko |
-| `apple2` | 4,2 Ko | ≈ 100 Ko |
-| `apple2e` | 13,7 Ko | ≈ 27 Ko |
+| `oric` | 9,8 Ko | ≈ 37 Ko |
+| `apple2` | 3,6 Ko | ≈ 85 Ko |
+| `apple2e` | 4,0 Ko | ≈ 18,5 Ko |
 
-(Apple : compilé avec les ROM d'exemple vides, faute de ROM ; non essayé sur la
-carte.)
+**Tas et PicoDVI** : `dvi_init` alloue `DVI_N_TMDS_BUFFERS` (3) tampons TMDS de
+`3 × largeur / 2 × 4` octets, soit 14,4 Ko en 800 pixels de large. Sur le IIe, dont
+les ROM (20 Ko) sont copiées en RAM, les fonctions appelées seulement lors d'un accès
+aux commutateurs mémoire (`_apple2e_*_bank_update`, `_apple2e_lc_control`,
+`apple2_lc_control`, ≈ 9,6 Ko) restent en flash : en RAM, elles laissaient moins de
+10 Ko au tas et l'allocation des tampons aurait échoué. Tout ajout en RAM sur le IIe
+doit garder au moins 14,4 Ko de tas.
+
+(Apple : non essayé sur la carte.)
 
 ## Mesure avant / après (Oric)
 
