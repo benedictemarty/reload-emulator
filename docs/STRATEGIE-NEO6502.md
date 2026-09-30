@@ -86,9 +86,12 @@ carte, trouvées par Trinity (T-53 à T-58), Tangerine (v0.9.4) et reload (Oric)
 relues et corrigées par Trinity le 2026-10-01. Le symptôme est le
 même, les remèdes non : **mesurer avant de corriger**, dans cet ordre.
 
-**Première mesure : la ligne est-elle en retard ?** Compteur `dvi0.late_scanline_ctr` de
-PicoDVI (lu par la sonde, comme `diag_late` du BBC) ou temps de rendu d'une ligne sur le
-cœur 1 (SysTick, `carte.py video` de Tangerine). Budget : ≈ 31 µs par ligne en 800 × 480.
+**Première mesure : la ligne est-elle en retard ?** Attention : `dvi0.late_scanline_ctr` de
+PicoDVI est une **dette**, pas un total : il monte à chaque ligne manquée et redescend quand
+PicoDVI rattrape (`dvi.c`), donc un relevé ponctuel lit presque toujours 0 (constaté par la
+NES le 2026-10-01). Il faut **cumuler ses hausses** dans le firmware (`diag_late_total` de
+la NES) ou compter au cœur 1 (SysTick, `carte.py video` de Tangerine ; `irqGapLong` de
+Trinity). Budget : ≈ 31 µs par ligne en 800 × 480.
 
 | Ligne en retard ? | Cause (projet qui l'a mesurée) | Remède |
 |---|---|---|
@@ -105,7 +108,7 @@ mode 1, deux canaux DMA de données repartent avec la configuration d'une autre 
 cause retenue par Trinity : les verrous partagés, corrigée par des verrous dédiés (0.16.35).
 
 **Reproducteurs** : une rafale FatFs (Tab dans NeoDOS, `DIR` répétés, chargement d'une
-disquette) ; la frappe au clavier ; un jeu en régime établi. **Critère** : 0 ligne en retard
+disquette) ; la frappe au clavier ; un jeu en régime établi. **Critère** : 0 ligne en retard (total cumulé)
 et 0 trait pendant la rafale, photo à l'appui.
 
 **État par projet (2026-10-01)** : Tangerine : réglé et mesuré (0 trait en régime établi, plus aucun à la frappe constaté par bmarty ; `PROC1` en place depuis v0.5.0, les traits venaient du `memset` en flash et de l'avance d'une ligne).

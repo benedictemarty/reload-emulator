@@ -131,7 +131,7 @@ Par la sonde SWD (`tools/oric_carte.py`) et à l'écran et à l'oreille par l'ut
 | `CSAVE"RLCARTE"` vers la clé | `RLCARTE.TAP` créé (1 Ko), listé par le menu |
 | Menu → cassette `RLCARTE.TAP`, `NEW`, `CLOAD""`, `LIST`, `RUN` | programme relu à l'identique, `4242` affiché |
 | Microdisc, `RLSED.DSK` en flux depuis la clé, redémarrage | menu de Sedoric 4.0 |
-| 8 `DIR` enchaînés (rafale FatFs) | catalogue complet ; **0 ligne en retard** (`dvi0.late_scanline_ctr`, lu par la sonde) et aucun trait vu |
+| 8 `DIR` enchaînés (rafale FatFs) | catalogue complet ; aucun trait vu par l'utilisateur. (`dvi0.late_scanline_ctr` relu à 0 par la sonde, mais ce compteur redescend quand PicoDVI rattrape : **ce relevé ne prouve rien**, il faut un total cumulé dans le firmware) |
 | Note continue (`SOUND` + `PLAY`) plus d'une minute | **son propre** (avant le correctif `audio_pwm_rate_q8` : craquements au bout d'≈ 40 s) |
 
 Constaté aussi : la première touche après un RETURN est encore parfois perdue (défaut
