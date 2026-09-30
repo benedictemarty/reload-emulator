@@ -166,6 +166,13 @@ suivent Oricutron (`disk.c`) et Phosphoric (`src/storage/disk.c`) [C] :
   le côté si le drapeau C est mis ;
 - écriture de piste (formatage) avec les octets de contrôle F5 / F6 / F7 ;
 - non émulés : vérification des CRC de l'image, temps de rotation et de déplacement.
+- image lue en flux (clé USB) : la piste modifiée est réécrite dans le fichier **à la
+  fin de chaque commande d'écriture** (`WD1793_FLUSH_AT_END`, comme le Telestrat) ;
+- `wd1793_tick_n(us)` avance de plusieurs µs d'un coup (identique à autant de
+  `wd1793_tick`) et `wd1793_next_event_us` dit combien de µs passent sans rien changer :
+  pour sauter les pas au repos (Telestrat, fusion : docs/FUSION-ORIC-TELESTRAT.md) ;
+  délais réglables (`WD1793_FIRST_DRQ_US`…) ; `wd1793_insert_streamed_file` lit
+  l'en-tête par le rappel.
 
 ### Images MFM_DISK (`src/devices/oric_dsk.h`)
 

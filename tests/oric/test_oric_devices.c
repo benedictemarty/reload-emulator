@@ -462,14 +462,15 @@ static void test_streamed(void) {
     int count;
     CHECK(read_sector(0, 0, 5, buf, &count) == 0 && count == 256 && buf[7] == expected(0, 0, 5, 7));
     CHECK(read_sector(0, 0, 6, buf, &count) == 0 && stream_reads == 1);   // Same track: cached
-    // Write a sector: written back when another track is loaded
+    // Write a sector: written back at the end of the command (WD1793_FLUSH_AT_END),
+    // not again when another track is loaded
     wd1793_write(&fdc, 2, 2);
     wd1793_write(&fdc, 0, 0xA0);
     while (wait_drq_or_idle() && fdc.state != WD1793_IDLE) {
         if (fdc.drq) wd1793_write(&fdc, 3, 0x3C); else wd1793_tick(&fdc);
     }
     wd1793_read(&fdc, 0);
-    CHECK(stream_writes == 0);
+    CHECK(stream_writes == 1);
     seek(1);
     CHECK(read_sector(1, 0, 1, buf, &count) == 0);
     CHECK(stream_writes == 1);
@@ -494,7 +495,58 @@ static void test_streamed(void) {
     wd1793_select(&fdc, 0, 1);
     seek(2);
     CHECK(read_sector(2, 1, 1, buf, &count) & WD1793_ST_SEEK_RNF);
+    // Header read through the callback
+    wd1793_init(&fdc);
+    CHECK(wd1793_insert_streamed_file(&fdc, 0, IMG_SIZE, s_read, s_write, 0) && !fdc.disk[0].write_protected);
+    CHECK(!wd1793_insert_streamed_file(&fdc, 1, 100, s_read, s_write, 0));   // Too short
     free(stream_img);
+}
+
+// wd1793_tick_n / wd1793_next_event_us: skipping the quiet microseconds gives the same
+// bytes, status and elapsed time as ticking every microsecond (multiple sector read)
+static uint32_t run_read_multiple(wd1793_t* w, bool skip, uint8_t* out, int* n) {
+    uint32_t elapsed = 0;
+    *n = 0;
+    wd1793_select(w, 0, 0);
+    wd1793_write(w, 2, 1);
+    wd1793_write(w, 0, 0x90);   // Read multiple sectors from sector 1
+    while (w->state != WD1793_IDLE && elapsed < 2000000) {
+        if (w->drq) {
+            out[(*n)++ % 8192] = wd1793_read(w, 3);
+            continue;
+        }
+        uint32_t k = 1;
+        if (skip) {
+            const uint32_t e = wd1793_next_event_us(w);
+            k = e == 0 ? 1 : (e > 1000 ? 1000 : e);
+            wd1793_tick_n(w, k);
+        } else {
+            wd1793_tick(w);
+        }
+        elapsed += k;
+    }
+    return elapsed;
+}
+
+static void test_tick_n(void) {
+    static wd1793_t a, b;
+    static uint8_t out_a[8192], out_b[8192];
+    wd1793_init(&a);
+    wd1793_init(&b);
+    CHECK(wd1793_insert_mem(&a, 0, image, IMG_SIZE, true) && wd1793_insert_mem(&b, 0, image, IMG_SIZE, true));
+    int na, nb;
+    const uint32_t ta = run_read_multiple(&a, false, out_a, &na);
+    const uint32_t tb = run_read_multiple(&b, true, out_b, &nb);
+    CHECK(na == SECTORS * 256 && nb == na && ta == tb && !memcmp(out_a, out_b, sizeof(out_a)));
+    CHECK(a.status == b.status && a.intrq && b.intrq && a.sector == b.sector);
+    CHECK(wd1793_next_event_us(&b) == WD1793_NO_EVENT);
+    // A wait of 20 us: 19 quiet microseconds, the 20th ends it (as 20 wd1793_tick)
+    wd1793_write(&b, 0, 0x00);   // Restore (type I, 20 us)
+    CHECK(wd1793_next_event_us(&b) == WD1793_TYPE1_US - 1);
+    wd1793_tick_n(&b, WD1793_TYPE1_US - 1);
+    CHECK(b.state == WD1793_WAIT && (b.status & WD1793_ST_BUSY));
+    wd1793_tick_n(&b, 2);
+    CHECK(b.state == WD1793_IDLE && !(b.status & WD1793_ST_BUSY) && b.intrq);
 }
 
 /*-- Tape ---------------------------------------------------------------------*/
@@ -872,6 +924,7 @@ int main(void) {
     test_write_sector();
     test_no_disk();
     test_streamed();
+    test_tick_n();
     test_tape();
     test_tape_padding();
     test_tape_streamed();

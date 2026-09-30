@@ -65,11 +65,26 @@ extern "C" {
 #define WD1793_ST_WPROT      (1 << 6)
 #define WD1793_ST_NOT_READY  (1 << 7)
 
-// Delays in microseconds (see the notes above)
+// Delays in microseconds (see the notes above); a system may override them
+#ifndef WD1793_TYPE1_US
 #define WD1793_TYPE1_US      20
+#endif
+#ifndef WD1793_FIRST_DRQ_US
 #define WD1793_FIRST_DRQ_US  60
+#endif
+#ifndef WD1793_BYTE_US
 #define WD1793_BYTE_US       32
+#endif
+#ifndef WD1793_NEXT_SECTOR_US
 #define WD1793_NEXT_SECTOR_US 180
+#endif
+// Streamed images: write the cached track back at the end of every write command
+// (a card pulled out loses nothing); 0: only on track change, eject or flush
+#ifndef WD1793_FLUSH_AT_END
+#define WD1793_FLUSH_AT_END  1
+#endif
+// wd1793_next_event_us: nothing will happen until the CPU accesses a register
+#define WD1793_NO_EVENT      UINT32_MAX
 
 typedef enum {
     WD1793_IDLE,
@@ -132,6 +147,9 @@ bool wd1793_insert_mem(wd1793_t* fdc, int drive, uint8_t* data, uint32_t size, b
 // Insert a streamed image; `header` = first 256 bytes of the file
 bool wd1793_insert_streamed(wd1793_t* fdc, int drive, const uint8_t* header, uint32_t size, oric_dsk_read_t read,
                             oric_dsk_write_t write, void* ctx);
+// Same, the header read through `read`
+bool wd1793_insert_streamed_file(wd1793_t* fdc, int drive, uint32_t size, oric_dsk_read_t read, oric_dsk_write_t write,
+                                 void* ctx);
 void wd1793_eject(wd1793_t* fdc, int drive);
 bool wd1793_disk_present(const wd1793_t* fdc, int drive);
 // Write back the cached track of a streamed image
@@ -143,6 +161,11 @@ uint8_t wd1793_read(wd1793_t* fdc, uint8_t reg);
 void wd1793_write(wd1793_t* fdc, uint8_t reg, uint8_t value);
 // Advance one microsecond
 void wd1793_tick(wd1793_t* fdc);
+// Advance `us` microseconds: the same as `us` calls of wd1793_tick (waits skipped at once)
+void wd1793_tick_n(wd1793_t* fdc, uint32_t us);
+// Microseconds that can pass with no change of DRQ, INTRQ or status (the ticks may be
+// skipped, then applied with wd1793_tick_n); WD1793_NO_EVENT when idle or waiting for the CPU
+uint32_t wd1793_next_event_us(const wd1793_t* fdc);
 
 #ifdef __cplusplus
 }
@@ -187,6 +210,13 @@ bool wd1793_insert_streamed(wd1793_t* fdc, int drive, const uint8_t* header, uin
     wd1793_eject(fdc, drive);
     fdc->present[drive] = oric_dsk_open_streamed(&fdc->disk[drive], header, size, read, write, ctx);
     return fdc->present[drive];
+}
+
+bool wd1793_insert_streamed_file(wd1793_t* fdc, int drive, uint32_t size, oric_dsk_read_t read, oric_dsk_write_t write,
+                                 void* ctx) {
+    uint8_t header[ORIC_DSK_HEADER_SIZE];
+    if (size < sizeof(header) || !read(ctx, 0, header, sizeof(header))) return false;
+    return wd1793_insert_streamed(fdc, drive, header, size, read, write, ctx);
 }
 
 void wd1793_eject(wd1793_t* fdc, int drive) {
@@ -433,6 +463,11 @@ static void _wd1793_end(wd1793_t* fdc) {
     if (fdc->op == WD1793_OP_WRITE_TRACK) {
         oric_dsk_scan_track(&fdc->cache);
     }
+#if WD1793_FLUSH_AT_END
+    if (fdc->op == WD1793_OP_WRITE_SECTOR || fdc->op == WD1793_OP_WRITE_TRACK) {
+        oric_dsk_flush(&fdc->cache);
+    }
+#endif
     fdc->status = fdc->end_status;
     _wd1793_set_drq(fdc, false);
     fdc->intrq = true;
@@ -488,6 +523,32 @@ CHIPS_HOT void wd1793_tick(wd1793_t* fdc) {
         default:
             fdc->state = WD1793_IDLE;
             return;
+    }
+}
+
+void wd1793_tick_n(wd1793_t* fdc, uint32_t us) {
+    while (us) {
+        if (fdc->state == WD1793_IDLE || fdc->state == WD1793_CPU) return;
+        if (fdc->state == WD1793_WAIT && fdc->wait_us > 1) {
+            const uint32_t k = us < fdc->wait_us - 1 ? us : fdc->wait_us - 1;
+            fdc->wait_us -= k;
+            us -= k;
+            continue;
+        }
+        wd1793_tick(fdc);
+        us--;
+    }
+}
+
+uint32_t wd1793_next_event_us(const wd1793_t* fdc) {
+    switch (fdc->state) {
+        case WD1793_IDLE:
+        case WD1793_CPU:
+            return WD1793_NO_EVENT;
+        case WD1793_WAIT:
+            return fdc->wait_us > 1 ? fdc->wait_us - 1 : 0;
+        default:
+            return 0;
     }
 }
 
