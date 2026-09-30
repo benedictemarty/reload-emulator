@@ -2,16 +2,23 @@
 
 // osd.h — surface du menu (OSD) : grille de cellules de 8 x 8 pixels
 //
-// Reprise de la surface du Telestrat (projet Neo6502TeleStrat, même auteur),
-// avec une grille dimensionnée d'après la sortie vidéo (OSD_COLS x OSD_ROWS,
-// 100 x 30 par défaut : 800 x 240 lignes de tampon affichées deux fois, soit
-// le 800 x 480 du Neo6502) et un rendu en indices de palette (1 octet par
-// pixel, couleurs 0-7 : bit 0 rouge, bit 1 vert, bit 2 bleu, comme l'Oric).
+// Commun à l'Oric de reload et au Telestrat (projet Neo6502TeleStrat, même
+// auteur). La grille se règle d'après la sortie vidéo : OSD_COLS x OSD_ROWS,
+// 100 x 30 par défaut (800 x 240 lignes de tampon affichées deux fois, soit le
+// 800 x 480 du Neo6502) ; le Telestrat et l'Oric en 960 x 544 définissent
+// 120 x 34 avant d'inclure ce fichier.
 //
 // Chaque cellule : un caractère (osd_font.h), une couleur d'encre, une
 // couleur de fond, et un fond « tramé » (la couleur un pixel sur deux,
-// décalée d'une ligne à l'autre) qui donne des demi-teintes. Grandes lettres :
-// un caractère sur deux cellules, pixels doublés en largeur.
+// décalée d'une ligne à l'autre) qui donne des demi-teintes (bleu nuit…) avec
+// les 8 couleurs pures. Grandes lettres : un caractère sur deux cellules,
+// pixels doublés en largeur.
+//
+// Un seul rendu : osd_render_line() écrit une ligne de tampon dans trois plans
+// de 1 bit (rouge, vert, bleu ; bit 0 d'un mot = pixel de gauche, comme
+// tmds_encode_1bpp de PicoDVI). Sans table en RAM ; sur Cortex-M0+ simulé
+// (tools/osd_cost.py du Telestrat), 3 à 5 % plus rapide que l'ancien rendu à
+// tables du Telestrat. OSD_NO_DITHER : fonds tramés rendus pleins.
 //
 // ## Licence zlib/libpng
 //
@@ -46,12 +53,14 @@
 #define OSD_WIDTH (OSD_COLS * 8)
 #define OSD_LINES (OSD_ROWS * 8)
 
-// Placement des fonctions et tables de rendu (appelées par le cœur 1 sur le RP2040)
+// Placement des fonctions de rendu (appelées par le cœur 1 sur le RP2040) ;
+// OSD_RAM, nom du Telestrat, est accepté
 #ifndef OSD_HOT
+#ifdef OSD_RAM
+#define OSD_HOT OSD_RAM
+#else
 #define OSD_HOT
 #endif
-#ifndef OSD_HOT_DATA
-#define OSD_HOT_DATA
 #endif
 
 // Couleurs (bit 0 rouge, 1 vert, 2 bleu), comme l'Oric
@@ -160,8 +169,9 @@ static inline int osd_puts_big(osd_surface_t* s, int row, int col, const char* s
     return n;
 }
 
-// Cadre à coins arrondis
-static inline void osd_frame(osd_surface_t* s, int row, int col, int rows, int cols, uint8_t attr) {
+// Cadre à coins arrondis ; titre facultatif (NULL : aucun) dans le filet du haut
+static inline void osd_frame(osd_surface_t* s, int row, int col, int rows, int cols, uint8_t attr, const char* title,
+                             uint8_t title_attr) {
     for (int c = col + 1; c < col + cols - 1; c++) {
         osd_putc(s, row, c, OSD_HLINE, attr);
         osd_putc(s, row + rows - 1, c, OSD_HLINE, attr);
@@ -174,6 +184,11 @@ static inline void osd_frame(osd_surface_t* s, int row, int col, int rows, int c
     osd_putc(s, row, col + cols - 1, OSD_TR, attr);
     osd_putc(s, row + rows - 1, col, OSD_BL, attr);
     osd_putc(s, row + rows - 1, col + cols - 1, OSD_BR, attr);
+    if (title) {
+        osd_putc(s, row, col + 2, ' ', attr);
+        int n = osd_puts(s, row, col + 3, title, title_attr, cols - 6);
+        osd_putc(s, row, col + 3 + n, ' ', attr);
+    }
 }
 
 // Octet de glyphe -> 16 pixels (grandes lettres)
@@ -185,92 +200,11 @@ static inline uint16_t _osd_widen(uint8_t b) {
     return w;
 }
 
-// Masques d'un octet de glyphe : 8 octets à 0xFF (pixel allumé) ou 0x00, en deux
-// mots (pixel de gauche = octet de poids faible du premier mot)
-static uint32_t OSD_HOT_DATA osd_mask_lut[256][2];
-static bool osd_mask_ready;
-
-static inline void osd_init_lut(void) {
-    for (int b = 0; b < 256; b++) {
-        uint32_t m[2] = {0, 0};
-        for (int i = 0; i < 8; i++) {
-            if (b & (1 << i)) m[i >> 2] |= 0xFFu << (8 * (i & 3));
-        }
-        osd_mask_lut[b][0] = m[0];
-        osd_mask_lut[b][1] = m[1];
-    }
-    osd_mask_ready = true;
-}
-
-// Rangée préparée pour le rendu : les octets de glyphe de chaque ligne (élargis
-// pour les grandes lettres), le fond de chaque cellule en mot de 32 bits (fond
-// tramé : un mot par parité de ligne) et encre XOR fond. Préparée une fois pour
-// les 8 lignes d'une rangée.
-typedef struct {
-    uint8_t glyph[8][OSD_COLS];
-    uint32_t paper[2][OSD_COLS];
-    uint32_t diff[2][OSD_COLS];   // Encre XOR fond
-} osd_row_cache_t;
-
-static inline void OSD_HOT osd_prepare_row(const osd_surface_t* s, int row, osd_row_cache_t* rc) {
-    if (!osd_mask_ready) osd_init_lut();
-    for (int c = 0; c < OSD_COLS; c++) {
-        const uint8_t* g = osd_font[s->ch[row][c]];
-        const uint8_t big = s->big[row][c];
-        for (int y = 0; y < 8; y++) {
-            uint8_t v = g[y];
-            if (big) {
-                const uint16_t w = _osd_widen(v);
-                v = (uint8_t)(big == OSD_BIG_LEFT ? (w & 0xFF) : (w >> 8));
-            }
-            rc->glyph[y][c] = v;
-        }
-        const uint32_t a = s->attr[row][c];
-        const uint32_t ink = (a & 7) * 0x01010101u;
-        const uint32_t paper = ((a >> 4) & 7) * 0x01010101u;
-        // Trame : fond sur les pixels pairs (lignes paires) ou impairs (lignes impaires)
-#ifdef OSD_NO_DITHER
-        rc->paper[0][c] = rc->paper[1][c] = paper;   // Plain backgrounds (fewer transitions on the video link)
-#else
-        rc->paper[0][c] = (a & 0x80) ? paper & 0x00FF00FFu : paper;
-        rc->paper[1][c] = (a & 0x80) ? paper & 0xFF00FF00u : paper;
-#endif
-        rc->diff[0][c] = rc->paper[0][c] ^ ink;
-        rc->diff[1][c] = rc->paper[1][c] ^ ink;
-    }
-}
-
-// Ligne y (0-7) d'une rangée préparée ; parity : parité de la ligne de tampon ;
-// out : OSD_WIDTH octets alignés sur 4 octets
-static inline void OSD_HOT osd_render_row_line(const osd_row_cache_t* rc, int y, int parity, uint8_t* out) {
-    const uint8_t* g = rc->glyph[y];
-    const uint32_t* paper = rc->paper[parity & 1];
-    const uint32_t* diff = rc->diff[parity & 1];
-    uint32_t* o = (uint32_t*)out;
-    for (int c = 0; c < OSD_COLS; c++) {
-        const uint32_t* m = osd_mask_lut[g[c]];
-        const uint32_t p = paper[c], d = diff[c];
-        o[0] = p ^ (d & m[0]);
-        o[1] = p ^ (d & m[1]);
-        o += 2;
-    }
-}
-
-// Une ligne de tampon (0 à OSD_LINES - 1) en indices de palette, 8 pixels par
-// cellule (bit 0 du glyphe = pixel de gauche) ; out : OSD_WIDTH octets alignés
-// sur 4 octets. Pour tout un écran, préparer chaque rangée une fois
-// (osd_prepare_row) puis appeler osd_render_row_line pour ses 8 lignes.
-static inline void osd_render_line(const osd_surface_t* s, int line, uint8_t* out) {
-    static osd_row_cache_t rc;
-    osd_prepare_row(s, line >> 3, &rc);
-    osd_render_row_line(&rc, line & 7, line & 1, out);
-}
-
 // Ligne y (0-7) d'une rangée de cellules dans trois plans de 1 bit (rouge,
 // vert, bleu ; bit 0 d'un mot = pixel de gauche, comme tmds_encode_1bpp de
 // PicoDVI) : OSD_COLS / 4 mots par plan ; parity : parité de la ligne (trame)
-static inline void OSD_HOT osd_render_cells_planes(const uint8_t* chs, const uint8_t* attrs, const uint8_t* bigs, int y,
-                                                   int parity, uint32_t* red, uint32_t* green, uint32_t* blue) {
+static inline void OSD_HOT osd_render_cells(const uint8_t* chs, const uint8_t* attrs, const uint8_t* bigs, int y,
+                                            int parity, uint32_t* red, uint32_t* green, uint32_t* blue) {
     const uint32_t dither = (parity & 1) ? 0xAAu : 0x55u;   // Fond sur les pixels pairs (lignes paires) ou impairs
     for (int w = 0; w < OSD_COLS / 4; w++) {
         uint32_t r = 0, g = 0, b = 0;
@@ -299,12 +233,11 @@ static inline void OSD_HOT osd_render_cells_planes(const uint8_t* chs, const uin
     }
 }
 
-// Une ligne de tampon (0 à OSD_LINES - 1) de la surface dans les trois plans.
-// Même image que osd_render_line.
-static inline void OSD_HOT osd_render_line_planes(const osd_surface_t* s, int line, uint32_t* red, uint32_t* green,
-                                                  uint32_t* blue) {
+// Une ligne de tampon (0 à OSD_LINES - 1) de la surface dans les trois plans
+static inline void OSD_HOT osd_render_line(const osd_surface_t* s, int line, uint32_t* red, uint32_t* green,
+                                           uint32_t* blue) {
     const int row = line >> 3;
-    osd_render_cells_planes(s->ch[row], s->attr[row], s->big[row], line & 7, line & 1, red, green, blue);
+    osd_render_cells(s->ch[row], s->attr[row], s->big[row], line & 7, line & 1, red, green, blue);
 }
 
 // Une rangée seule (bandeau incrusté hors du menu)

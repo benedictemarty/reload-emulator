@@ -350,7 +350,7 @@ static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
 // Panneau : fond tramé, cadre arrondi, icône et titre dans le filet du haut
 static inline void _oric_panel(osd_surface_t* s, int row, int col, int rows, int cols, uint8_t icon, const char* title) {
     osd_fill(s, row, col, rows, cols, ORIC_OSD_PANEL);
-    osd_frame(s, row, col, rows, cols, ORIC_OSD_EDGE);
+    osd_frame(s, row, col, rows, cols, ORIC_OSD_EDGE, NULL, 0);
     int c = col + 2;
     osd_putc(s, row, c++, ' ', ORIC_OSD_EDGE);
     if (icon) {
@@ -541,7 +541,7 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
     const int top = R + 5, left = C + 12, width = 76, height = ORIC_BROWSE_VISIBLE + 4;
     osd_fill(s, top + 1, left + 2, height, width, ORIC_OSD_PANEL);   // Ombre
     osd_fill(s, top, left, height, width, OSD_ATTR(OSD_WHITE, OSD_BLACK));
-    osd_frame(s, top, left, height, width, OSD_ATTR(OSD_YELLOW, OSD_BLACK));
+    osd_frame(s, top, left, height, width, OSD_ATTR(OSD_YELLOW, OSD_BLACK), NULL, 0);
     osd_putc(s, top, left + 2, ' ', OSD_ATTR(OSD_YELLOW, OSD_BLACK));
     const uint8_t icon = tape ? OSD_TAPE_L : prof ? OSD_CART_L : OSD_FLOP_L;
     osd_putc(s, top, left + 3, icon, OSD_ATTR(OSD_YELLOW, OSD_BLACK));

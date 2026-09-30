@@ -84,6 +84,16 @@ static void setup(void) {
     add_file("SIEVE.TAP", 723, ORIC_FILE_TAP);
 }
 
+// A buffer line as palette indices (bit 0 red, 1 green, 2 blue), from the three planes
+static void render_index(int y, uint8_t* line) {
+    static uint32_t r[OSD_COLS / 4], g[OSD_COLS / 4], b[OSD_COLS / 4];
+    osd_render_line(&surf, y, r, g, b);
+    for (int x = 0; x < OSD_WIDTH; x++) {
+        line[x] = (uint8_t)(((r[x >> 5] >> (x & 31)) & 1) | (((g[x >> 5] >> (x & 31)) & 1) << 1) |
+                            (((b[x >> 5] >> (x & 31)) & 1) << 2));
+    }
+}
+
 static void write_ppm(const char* dir, const char* name) {
     if (!dir) return;
     char path[512];
@@ -93,10 +103,9 @@ static void write_ppm(const char* dir, const char* name) {
     static const uint8_t rgb[8][3] = {{0, 0, 0}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0},
                                       {0, 0, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255}};
     fprintf(f, "P6\n%d %d\n255\n", OSD_WIDTH, OSD_LINES * 2);
-    static uint32_t line32[OSD_WIDTH / 4];
-    uint8_t* line = (uint8_t*)line32;
+    static uint8_t line[OSD_WIDTH];
     for (int y = 0; y < OSD_LINES; y++) {
-        osd_render_line(&surf, y, line);
+        render_index(y, line);
         for (int rep = 0; rep < 2; rep++) {   // Each buffer line shown twice, as on the Neo6502
             for (int x = 0; x < OSD_WIDTH; x++) fwrite(rgb[line[x] & 7], 1, 3, f);
         }
@@ -108,11 +117,10 @@ static void test_render(void) {
     osd_clear(&surf, OSD_ATTR(OSD_WHITE, OSD_BLUE));
     osd_putc(&surf, 0, 0, 'A', OSD_ATTR(OSD_YELLOW, OSD_BLUE));
     osd_putc(&surf, 0, 1, ' ', OSD_ATTR(OSD_WHITE, OSD_RED | OSD_DITHER));
-    static uint32_t line32[OSD_WIDTH / 4];
-    uint8_t* line = (uint8_t*)line32;
+    static uint8_t line[OSD_WIDTH];
     int ink = 0, paper = 0;
     for (int y = 0; y < 8; y++) {
-        osd_render_line(&surf, y, line);
+        render_index(y, line);
         for (int x = 0; x < 8; x++) {
             bool on = (osd_font['A'][y] >> x) & 1;
             if (on && line[x] == OSD_YELLOW) ink++;
@@ -278,19 +286,29 @@ static void test_config(void) {
     CHECK(n == 15 && strlen(out) == 15);
 }
 
-// The 1-bit planes of the RP2040 (tmds_encode_1bpp) give the same picture as the index rendering
+// Reference pixel, computed cell by cell from the definition of the surface:
+// glyph bit (doubled in width for big letters), ink, background dithered one
+// pixel out of two (even pixels on even lines)
+static int ref_pixel(int line, int x) {
+    const int row = line >> 3, c = x >> 3, i = x & 7;
+    const uint8_t glyph = osd_font[surf.ch[row][c]][line & 7];
+    int bit = i;
+    if (surf.big[row][c] == OSD_BIG_LEFT) bit = i / 2;
+    if (surf.big[row][c] == OSD_BIG_RIGHT) bit = 4 + i / 2;
+    const uint8_t a = surf.attr[row][c];
+    if ((glyph >> bit) & 1) return a & 7;
+    if ((a & 0x80) && ((i ^ line) & 1)) return OSD_BLACK;
+    return (a >> 4) & 7;
+}
+
+// The 1-bit planes of the RP2040 (tmds_encode_1bpp) give the reference picture
 static int planes_mismatches(void) {
-    static uint32_t line32[OSD_WIDTH / 4];
-    static uint32_t r[OSD_COLS / 4], g[OSD_COLS / 4], b[OSD_COLS / 4];
-    const uint8_t* line = (const uint8_t*)line32;
+    static uint8_t line[OSD_WIDTH];
     int bad = 0;
     for (int y = 0; y < OSD_LINES; y++) {
-        osd_render_line(&surf, y, (uint8_t*)line32);
-        osd_render_line_planes(&surf, y, r, g, b);
+        render_index(y, line);
         for (int x = 0; x < OSD_WIDTH; x++) {
-            int c = (int)((r[x >> 5] >> (x & 31)) & 1) | (int)(((g[x >> 5] >> (x & 31)) & 1) << 1) |
-                    (int)(((b[x >> 5] >> (x & 31)) & 1) << 2);
-            if (c != line[x]) bad++;
+            if (line[x] != ref_pixel(y, x)) bad++;
         }
     }
     return bad;
@@ -397,7 +415,7 @@ static void test_banner(const char* dir) {
     static uint32_t r[OSD_COLS / 4], g[OSD_COLS / 4], b[OSD_COLS / 4];
     int lit = 0;
     for (int y = 0; y < 8; y++) {
-        osd_render_cells_planes(row.ch, row.attr, row.big, y, y, r, g, b);
+        osd_render_cells(row.ch, row.attr, row.big, y, y, r, g, b);
         for (int w = 0; w < OSD_COLS / 4; w++) lit += __builtin_popcount(b[w]);   // Blue background
     }
     CHECK(lit > OSD_WIDTH * 8 / 2);
@@ -468,12 +486,28 @@ static void test_volume(const char* dir) {
     CHECK(strstr(text, "Son coup\xE9") && !strstr(text, "5/8"));
 }
 
+// Frame with a title in its top rule (common with the Telestrat), and without
+static void test_frame_title(void) {
+    osd_clear(&surf, OSD_ATTR(OSD_WHITE, OSD_BLACK));
+    osd_frame(&surf, 2, 10, 5, 20, OSD_ATTR(OSD_CYAN, OSD_BLACK), "Disques", OSD_ATTR(OSD_YELLOW, OSD_BLACK));
+    CHECK(surf.ch[2][10] == OSD_TL && surf.ch[2][11] == OSD_HLINE && surf.ch[2][12] == ' ');
+    CHECK(!memcmp(&surf.ch[2][13], "Disques", 7) && surf.ch[2][20] == ' ' && surf.ch[2][21] == OSD_HLINE);
+    CHECK(surf.attr[2][13] == OSD_ATTR(OSD_YELLOW, OSD_BLACK) && surf.attr[2][12] == OSD_ATTR(OSD_CYAN, OSD_BLACK));
+    CHECK(surf.ch[2][29] == OSD_TR && surf.ch[6][10] == OSD_BL && surf.ch[4][29] == OSD_VLINE);
+    // Title cut to the frame width
+    osd_frame(&surf, 10, 0, 3, 10, OSD_ATTR(OSD_CYAN, OSD_BLACK), "Très long titre", OSD_ATTR(OSD_YELLOW, OSD_BLACK));
+    CHECK(surf.ch[10][3] == 'T' && surf.ch[10][7] == ' ' && surf.ch[10][9] == OSD_TR);
+    osd_frame(&surf, 20, 0, 3, 10, OSD_ATTR(OSD_CYAN, OSD_BLACK), NULL, 0);
+    CHECK(surf.ch[20][2] == OSD_HLINE && surf.ch[20][3] == OSD_HLINE);
+}
+
 int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : NULL;
     test_render();
     test_navigation(dir);
     test_config();
     test_planes();
+    test_frame_title();
     test_profiles(dir);
     test_banner(dir);
     test_volume(dir);

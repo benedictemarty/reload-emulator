@@ -115,7 +115,7 @@ profil « Atmos + Jasmin », profil affiché. Les profils de la clé et `rom=` s
 couverts par les tests (`tests/oric/test_oric_menu.c`), pas encore essayés sur la
 carte.
 
-Code : `src/osd/osd.h` (surface, rendu en indices de palette et en plans de 1 bit,
+Code : `src/osd/osd.h` (surface commune avec le Telestrat, rendu en plans de 1 bit,
 grille 100 × 30 sur le Neo6502 en 800 × 480, 120 × 34 en 960 × 544),
 `src/osd/osd_font.h` (police du Telestrat : unscii-8 de Viznut, domaine public, et
 icônes du projet), `src/osd/oric_menu.h` (menu, indépendant de la plate-forme),

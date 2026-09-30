@@ -919,11 +919,11 @@ static inline void __not_in_flash_func(render_frame)() {
         uint32_t tl = time_us_32();
 #endif
         if (panel) {
-            osd_render_line_planes(osd, y, planes[0], planes[1], planes[2]);
+            osd_render_line(osd, y, planes[0], planes[1], planes[2]);
             encode_planes(tmdsbuf);
         } else if (banner && y >= ORIC_TOP + ORIC_SCREEN_HEIGHT && y < ORIC_TOP + ORIC_SCREEN_HEIGHT + 8) {
             const int by = y - ORIC_TOP - ORIC_SCREEN_HEIGHT;
-            osd_render_cells_planes(banner->ch, banner->attr, banner->big, by, by, planes[0], planes[1], planes[2]);
+            osd_render_cells(banner->ch, banner->attr, banner->big, by, by, planes[0], planes[1], planes[2]);
             encode_planes(tmdsbuf);
         } else if (y < ORIC_TOP || y >= ORIC_TOP + ORIC_SCREEN_HEIGHT) {
             copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
