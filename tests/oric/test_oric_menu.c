@@ -32,6 +32,7 @@
 
 #include "osd/oric_menu.h"
 #include "osd/oric_config.h"
+#include "systems/oric_planes.h"
 
 static int tests_run, tests_failed;
 
@@ -92,7 +93,8 @@ static void write_ppm(const char* dir, const char* name) {
     static const uint8_t rgb[8][3] = {{0, 0, 0}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0},
                                       {0, 0, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255}};
     fprintf(f, "P6\n%d %d\n255\n", OSD_WIDTH, OSD_LINES * 2);
-    static uint8_t line[OSD_WIDTH];
+    static uint32_t line32[OSD_WIDTH / 4];
+    uint8_t* line = (uint8_t*)line32;
     for (int y = 0; y < OSD_LINES; y++) {
         osd_render_line(&surf, y, line);
         for (int rep = 0; rep < 2; rep++) {   // Each buffer line shown twice, as on the Neo6502
@@ -106,7 +108,8 @@ static void test_render(void) {
     osd_clear(&surf, OSD_ATTR(OSD_WHITE, OSD_BLUE));
     osd_putc(&surf, 0, 0, 'A', OSD_ATTR(OSD_YELLOW, OSD_BLUE));
     osd_putc(&surf, 0, 1, ' ', OSD_ATTR(OSD_WHITE, OSD_RED | OSD_DITHER));
-    static uint8_t line[OSD_WIDTH];
+    static uint32_t line32[OSD_WIDTH / 4];
+    uint8_t* line = (uint8_t*)line32;
     int ink = 0, paper = 0;
     for (int y = 0; y < 8; y++) {
         osd_render_line(&surf, y, line);
@@ -138,6 +141,9 @@ static void test_render(void) {
 static void test_navigation(const char* dir) {
     setup();
     oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("panneau de contr"));
+    CHECK(surf.ch[1][3] == 'O' && surf.big[1][3] == OSD_BIG_LEFT);   // "ORIC / PRAVETZ / NOVA" in big letters
+    CHECK(screen_contains("PPRRAAVVEETTZZ") && screen_contains("NNOOVVAA"));
     CHECK(screen_contains("Interface disque"));
     CHECK(screen_contains("Microdisc"));
     CHECK(screen_contains("Disquettes"));
@@ -272,11 +278,69 @@ static void test_config(void) {
     CHECK(n == 15 && strlen(out) == 15);
 }
 
+// The 1-bit planes of the RP2040 (tmds_encode_1bpp) give the same picture as the index rendering
+static int planes_mismatches(void) {
+    static uint32_t line32[OSD_WIDTH / 4];
+    static uint32_t r[OSD_COLS / 4], g[OSD_COLS / 4], b[OSD_COLS / 4];
+    const uint8_t* line = (const uint8_t*)line32;
+    int bad = 0;
+    for (int y = 0; y < OSD_LINES; y++) {
+        osd_render_line(&surf, y, (uint8_t*)line32);
+        osd_render_line_planes(&surf, y, r, g, b);
+        for (int x = 0; x < OSD_WIDTH; x++) {
+            int c = (int)((r[x >> 5] >> (x & 31)) & 1) | (int)(((g[x >> 5] >> (x & 31)) & 1) << 1) |
+                    (int)(((b[x >> 5] >> (x & 31)) & 1) << 2);
+            if (c != line[x]) bad++;
+        }
+    }
+    return bad;
+}
+
+static void test_planes(void) {
+    setup();
+    oric_menu_draw(&menu, &surf);
+    CHECK(planes_mismatches() == 0);
+    menu.cursor = ORIC_ITEM_FDC;
+    oric_menu_key(&menu, OSD_KEY_ENTER);
+    oric_menu_draw(&menu, &surf);
+    CHECK(planes_mismatches() == 0);
+    // Dithered backgrounds too
+    osd_clear(&surf, OSD_ATTR(OSD_YELLOW, OSD_BLUE | OSD_DITHER));
+    osd_puts_big(&surf, 3, 2, "Test é", OSD_ATTR(OSD_WHITE, OSD_MAGENTA | OSD_DITHER));
+    CHECK(planes_mismatches() == 0);
+
+    // Oric picture: 240 pixels of 4 bits -> tripled in the planes from x0, borders cleared
+    static uint8_t src[ORIC_PLANES_BYTES_PER_LINE];
+    for (int i = 0; i < ORIC_PLANES_BYTES_PER_LINE; i++) src[i] = (uint8_t)(i * 37 + 11);
+    oric_planes_init();
+    static uint32_t pr[OSD_WIDTH / 32], pg[OSD_WIDTH / 32], pb[OSD_WIDTH / 32];
+    const unsigned x0 = (OSD_WIDTH - ORIC_PLANES_PIXELS) / 2;
+    memset(pr, 0, sizeof(pr));
+    memset(pg, 0, sizeof(pg));
+    memset(pb, 0, sizeof(pb));
+    oric_planes_line(src, pr, pg, pb, x0);
+    int bad = 0;
+    for (int x = 0; x < OSD_WIDTH; x++) {
+        int want = 0;
+        if (x >= (int)x0 && x < (int)x0 + ORIC_PLANES_PIXELS) {
+            int px = (x - (int)x0) / 3;
+            uint8_t byte = src[px / 2];
+            want = (px & 1) ? (byte & 15) : (byte >> 4);
+            want &= 7;
+        }
+        int c = (int)((pr[x >> 5] >> (x & 31)) & 1) | (int)(((pg[x >> 5] >> (x & 31)) & 1) << 1) |
+                (int)(((pb[x >> 5] >> (x & 31)) & 1) << 2);
+        if (c != want) bad++;
+    }
+    CHECK(bad == 0);
+}
+
 int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : NULL;
     test_render();
     test_navigation(dir);
     test_config();
+    test_planes();
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
 }

@@ -46,9 +46,12 @@
 #define OSD_WIDTH (OSD_COLS * 8)
 #define OSD_LINES (OSD_ROWS * 8)
 
-// Placement des fonctions de rendu (appelées par le cœur 1 sur le RP2040)
+// Placement des fonctions et tables de rendu (appelées par le cœur 1 sur le RP2040)
 #ifndef OSD_HOT
 #define OSD_HOT
+#endif
+#ifndef OSD_HOT_DATA
+#define OSD_HOT_DATA
 #endif
 
 // Couleurs (bit 0 rouge, 1 vert, 2 bleu), comme l'Oric
@@ -182,29 +185,120 @@ static inline uint16_t _osd_widen(uint8_t b) {
     return w;
 }
 
+// Masques d'un octet de glyphe : 8 octets à 0xFF (pixel allumé) ou 0x00, en deux
+// mots (pixel de gauche = octet de poids faible du premier mot)
+static uint32_t OSD_HOT_DATA osd_mask_lut[256][2];
+static bool osd_mask_ready;
+
+static inline void osd_init_lut(void) {
+    for (int b = 0; b < 256; b++) {
+        uint32_t m[2] = {0, 0};
+        for (int i = 0; i < 8; i++) {
+            if (b & (1 << i)) m[i >> 2] |= 0xFFu << (8 * (i & 3));
+        }
+        osd_mask_lut[b][0] = m[0];
+        osd_mask_lut[b][1] = m[1];
+    }
+    osd_mask_ready = true;
+}
+
+// Rangée préparée pour le rendu : les octets de glyphe de chaque ligne (élargis
+// pour les grandes lettres), le fond de chaque cellule en mot de 32 bits (fond
+// tramé : un mot par parité de ligne) et encre XOR fond. Préparée une fois pour
+// les 8 lignes d'une rangée.
+typedef struct {
+    uint8_t glyph[8][OSD_COLS];
+    uint32_t paper[2][OSD_COLS];
+    uint32_t diff[2][OSD_COLS];   // Encre XOR fond
+} osd_row_cache_t;
+
+static inline void OSD_HOT osd_prepare_row(const osd_surface_t* s, int row, osd_row_cache_t* rc) {
+    if (!osd_mask_ready) osd_init_lut();
+    for (int c = 0; c < OSD_COLS; c++) {
+        const uint8_t* g = osd_font[s->ch[row][c]];
+        const uint8_t big = s->big[row][c];
+        for (int y = 0; y < 8; y++) {
+            uint8_t v = g[y];
+            if (big) {
+                const uint16_t w = _osd_widen(v);
+                v = (uint8_t)(big == OSD_BIG_LEFT ? (w & 0xFF) : (w >> 8));
+            }
+            rc->glyph[y][c] = v;
+        }
+        const uint32_t a = s->attr[row][c];
+        const uint32_t ink = (a & 7) * 0x01010101u;
+        const uint32_t paper = ((a >> 4) & 7) * 0x01010101u;
+        // Trame : fond sur les pixels pairs (lignes paires) ou impairs (lignes impaires)
+#ifdef OSD_NO_DITHER
+        rc->paper[0][c] = rc->paper[1][c] = paper;   // Plain backgrounds (fewer transitions on the video link)
+#else
+        rc->paper[0][c] = (a & 0x80) ? paper & 0x00FF00FFu : paper;
+        rc->paper[1][c] = (a & 0x80) ? paper & 0xFF00FF00u : paper;
+#endif
+        rc->diff[0][c] = rc->paper[0][c] ^ ink;
+        rc->diff[1][c] = rc->paper[1][c] ^ ink;
+    }
+}
+
+// Ligne y (0-7) d'une rangée préparée ; parity : parité de la ligne de tampon ;
+// out : OSD_WIDTH octets alignés sur 4 octets
+static inline void OSD_HOT osd_render_row_line(const osd_row_cache_t* rc, int y, int parity, uint8_t* out) {
+    const uint8_t* g = rc->glyph[y];
+    const uint32_t* paper = rc->paper[parity & 1];
+    const uint32_t* diff = rc->diff[parity & 1];
+    uint32_t* o = (uint32_t*)out;
+    for (int c = 0; c < OSD_COLS; c++) {
+        const uint32_t* m = osd_mask_lut[g[c]];
+        const uint32_t p = paper[c], d = diff[c];
+        o[0] = p ^ (d & m[0]);
+        o[1] = p ^ (d & m[1]);
+        o += 2;
+    }
+}
+
 // Une ligne de tampon (0 à OSD_LINES - 1) en indices de palette, 8 pixels par
-// cellule (bit 0 du glyphe = pixel de gauche) ; out : OSD_WIDTH octets
-static inline void OSD_HOT osd_render_line(const osd_surface_t* s, int line, uint8_t* out) {
-    const int row = line >> 3, y = line & 7, parity = line & 1;
+// cellule (bit 0 du glyphe = pixel de gauche) ; out : OSD_WIDTH octets alignés
+// sur 4 octets. Pour tout un écran, préparer chaque rangée une fois
+// (osd_prepare_row) puis appeler osd_render_row_line pour ses 8 lignes.
+static inline void osd_render_line(const osd_surface_t* s, int line, uint8_t* out) {
+    static osd_row_cache_t rc;
+    osd_prepare_row(s, line >> 3, &rc);
+    osd_render_row_line(&rc, line & 7, line & 1, out);
+}
+
+// Une ligne de tampon (0 à OSD_LINES - 1) dans trois plans de 1 bit (rouge,
+// vert, bleu ; bit 0 d'un mot = pixel de gauche, comme tmds_encode_1bpp de
+// PicoDVI) : OSD_COLS / 4 mots par plan. Même image que osd_render_line.
+static inline void OSD_HOT osd_render_line_planes(const osd_surface_t* s, int line, uint32_t* red, uint32_t* green,
+                                                  uint32_t* blue) {
+    const int row = line >> 3, y = line & 7;
+    const uint32_t dither = (line & 1) ? 0xAAu : 0x55u;   // Fond sur les pixels pairs (lignes paires) ou impairs
     const uint8_t* chs = s->ch[row];
     const uint8_t* attrs = s->attr[row];
     const uint8_t* bigs = s->big[row];
-    for (int c = 0; c < OSD_COLS; c++) {
-        uint32_t px = osd_font[chs[c]][y];
-        if (bigs[c]) {
-            const uint16_t wide = _osd_widen((uint8_t)px);
-            px = bigs[c] == OSD_BIG_LEFT ? (wide & 0xFFu) : (uint32_t)(wide >> 8);
-        }
-        const uint8_t a = attrs[c];
-        const uint8_t ink = a & 7, paper = (a >> 4) & 7;
-        const bool dither = a & 0x80;
-        uint8_t* o = out + c * 8;
-        for (int i = 0; i < 8; i++) {
-            if (px & (1u << i)) {
-                o[i] = ink;
-            } else {
-                o[i] = (dither && ((i ^ parity) & 1)) ? OSD_BLACK : paper;
+    for (int w = 0; w < OSD_COLS / 4; w++) {
+        uint32_t r = 0, g = 0, b = 0;
+        for (int k = 0; k < 4; k++) {
+            const int c = w * 4 + k;
+            uint32_t px = osd_font[chs[c]][y];
+            if (bigs[c]) {
+                const uint16_t wide = _osd_widen((uint8_t)px);
+                px = bigs[c] == OSD_BIG_LEFT ? (wide & 0xFFu) : (uint32_t)(wide >> 8);
             }
+            const uint32_t a = attrs[c];
+            uint32_t paper = ~px & 0xFFu;
+#ifndef OSD_NO_DITHER
+            if (a & 0x80) paper &= dither;
+#else
+            (void)dither;
+#endif
+            const unsigned sh = 8u * (unsigned)k;
+            r |= (((a & 1) ? px : 0) | ((a & 0x10) ? paper : 0)) << sh;
+            g |= (((a & 2) ? px : 0) | ((a & 0x20) ? paper : 0)) << sh;
+            b |= (((a & 4) ? px : 0) | ((a & 0x40) ? paper : 0)) << sh;
         }
+        red[w] = r;
+        green[w] = g;
+        blue[w] = b;
     }
 }

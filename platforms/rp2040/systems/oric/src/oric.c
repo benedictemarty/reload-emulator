@@ -60,6 +60,8 @@
 #include "devices/oric_dsk.h"
 #include "devices/wd1793.h"
 #include "systems/oric.h"
+#define ORIC_PLANES_RAM __attribute__((section(".time_critical.oric_planes")))
+#include "systems/oric_planes.h"
 
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
@@ -90,6 +92,9 @@
 #define OSD_COLS 120   // 960 x 544
 #define OSD_ROWS 34
 #endif
+// Plain panel backgrounds: the dithered ones (one pixel out of two) gave red
+// streaks on the Neo6502 HDMI link (bmarty's screen, 2026-09-30)
+#define OSD_NO_DITHER 1
 #define OSD_HOT          __attribute__((section(".time_critical.osd")))
 #define OSD_FONT_SECTION __attribute__((section(".time_critical.osd_font")))
 #include "osd/oric_menu.h"
@@ -111,7 +116,11 @@ state_t __not_in_flash() state;
 
 // Control panel (F1): menu state, surface drawn by core 1, open flag
 static oric_menu_t __not_in_flash() menu;
-static osd_surface_t __not_in_flash() osd;
+// Double-buffered surface: core 0 draws the hidden one, then shows it; core 1
+// takes the shown one at the start of each frame (no half-drawn panel on screen)
+static osd_surface_t __not_in_flash() osd_surfaces[2];
+static volatile uint8_t osd_front;            // Surface shown by core 1
+static volatile uint32_t core1_frames;        // Frames started by core 1
 static volatile bool panel_open;
 
 // Layout for host tools (SWD capture, co-simulation), in every build: offset of
@@ -181,14 +190,12 @@ void app_init(void) {
 #define DVI_TIMING   dvi_timing_960x544p_60hz
 #endif  // OLIMEX_NEO6502
 
-uint32_t __not_in_flash() tmds_palette[PALETTE_SIZE * 6];
 uint32_t __not_in_flash() empty_tmdsbuf[3 * FRAME_WIDTH / DVI_SYMBOLS_PER_WORD];
 
-uint8_t __not_in_flash() scanbuf[FRAME_WIDTH];
 
 struct dvi_inst dvi0;
 
-void tmds_palette_init() { tmds_setup_palette24_symbols(oric_palette, tmds_palette, PALETTE_SIZE); }
+extern void copy_tmdsbuf(uint32_t *dest, const uint32_t *src);
 
 static void panel_toggle(void);
 // Keys of the open panel, queued by the USB HID callback and handled by the main
@@ -504,7 +511,15 @@ static void panel_refresh(void) {
     oric_td_t *td = &state.oric.td;
     menu.tape_motor = td->valid && oric_td_is_motor_on(td);
     menu.tape_percent = (td->valid && td->tap_size) ? (int)((uint64_t)td->tap_pos * 100 / td->tap_size) : 0;
-    oric_menu_draw(&menu, &osd);
+    // Wait until core 1 no longer shows the hidden surface (it takes the front one per frame)
+    static uint32_t swapped_at;
+    uint32_t t0 = time_us_32();
+    while (panel_open && core1_frames == swapped_at && time_us_32() - t0 < 40000) tight_loop_contents();
+    const uint8_t back = (uint8_t)(osd_front ^ 1);
+    oric_menu_draw(&menu, &osd_surfaces[back]);
+    __dmb();
+    osd_front = back;
+    swapped_at = core1_frames;
 }
 
 static void panel_toggle(void) {
@@ -599,74 +614,62 @@ static bool panel_key(int code) {
     return true;
 }
 
-// extern void oric_render_scanline_2x(const uint32_t *pixbuf, uint32_t *scanbuf, size_t n_pix);
-extern void oric_render_scanline_3x(const uint32_t *pixbuf, uint32_t *scanbuf, size_t n_pix);
-extern void copy_tmdsbuf(uint32_t *dest, const uint32_t *src);
+// Core 1: each line converted to three 1-bit planes (red, green, blue) and
+// encoded with tmds_encode_1bpp, as the Telestrat and the BBC do (the 8 Oric
+// colours are 0x00 or 0xFF per channel). PicoDVI shows every TMDS buffer twice
+// (DVI_VERTICAL_REPEAT = 2): FRAME_HEIGHT / 2 buffers per frame.
+#define DISPLAY_LINES (FRAME_HEIGHT / 2)
+#define ORIC_TOP      ((DISPLAY_LINES - ORIC_SCREEN_HEIGHT) / 2)
+#define ORIC_LEFT     ((FRAME_WIDTH - ORIC_PLANES_PIXELS) / 2)
 
-static inline void __not_in_flash_func(render_scanline)(const uint32_t *pixbuf, uint32_t *scanbuf, size_t n_pix) {
-    interp_config c;
+static uint32_t __not_in_flash() planes[3][FRAME_WIDTH / 32];
 
-    c = interp_default_config();
-    interp_config_set_cross_result(&c, true);
-    interp_config_set_shift(&c, 0);
-    interp_config_set_mask(&c, 0, 3);
-    interp_config_set_signed(&c, false);
-    interp_set_config(interp0, 0, &c);
-
-    c = interp_default_config();
-    interp_config_set_cross_result(&c, false);
-    interp_config_set_shift(&c, 4);
-    interp_config_set_mask(&c, 0, 31);
-    interp_config_set_signed(&c, false);
-    interp_set_config(interp0, 1, &c);
-
-    oric_render_scanline_3x(pixbuf, scanbuf, n_pix);
+static inline void __not_in_flash_func(encode_planes)(uint32_t *tmdsbuf) {
+    // TMDS lanes: 0 blue, 1 green, 2 red
+    tmds_encode_1bpp(planes[2], tmdsbuf, FRAME_WIDTH);
+    tmds_encode_1bpp(planes[1], tmdsbuf + FRAME_WIDTH / DVI_SYMBOLS_PER_WORD, FRAME_WIDTH);
+    tmds_encode_1bpp(planes[0], tmdsbuf + 2 * FRAME_WIDTH / DVI_SYMBOLS_PER_WORD, FRAME_WIDTH);
 }
 
-#define ORIC_EMPTY_LINES   ((FRAME_HEIGHT - ORIC_SCREEN_HEIGHT * 2) / 4)
-#define ORIC_EMPTY_COLUMNS ((FRAME_WIDTH - ORIC_SCREEN_WIDTH * 3) / 2)
-
-static inline void __not_in_flash_func(render_empty_scanlines)() {
-    for (int y = 0; y < ORIC_EMPTY_LINES; y += 2) {
-        uint32_t *tmdsbuf;
-        queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
-        copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
-        queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
-
-        queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
-        copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
-        queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
-    }
-}
+#ifdef ORIC_DIAG
+volatile uint32_t diag_frame_us;       // Core 1: last frame (us), Oric picture or control panel
+volatile uint32_t diag_line_us_max;    // Core 1: slowest line of the last frame (us)
+#endif
 
 static inline void __not_in_flash_func(render_frame)() {
-    for (int y = 0; y < ORIC_SCREEN_HEIGHT; y += 2) {
+#ifdef ORIC_DIAG
+    uint32_t t0 = time_us_32(), worst = 0;
+#endif
+    const bool panel = panel_open;
+    const osd_surface_t *osd = &osd_surfaces[osd_front];
+    core1_frames++;
+    for (int y = 0; y < DISPLAY_LINES; y++) {
         uint32_t *tmdsbuf;
         queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
-        render_scanline((const uint32_t *)(&state.oric.fb[y * 120]), (uint32_t *)(&scanbuf[ORIC_EMPTY_COLUMNS]), 120);
-        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
-        queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
-
-        queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
-        render_scanline((const uint32_t *)(&state.oric.fb[(y + 1) * 120]), (uint32_t *)(&scanbuf[ORIC_EMPTY_COLUMNS]),
-                        120);
-        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
+#ifdef ORIC_DIAG
+        uint32_t tl = time_us_32();
+#endif
+        if (panel) {
+            osd_render_line_planes(osd, y, planes[0], planes[1], planes[2]);
+            encode_planes(tmdsbuf);
+        } else if (y < ORIC_TOP || y >= ORIC_TOP + ORIC_SCREEN_HEIGHT) {
+            copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
+        } else {
+            memset(planes, 0, sizeof(planes));
+            oric_planes_line(&state.oric.fb[(y - ORIC_TOP) * ORIC_PLANES_BYTES_PER_LINE], planes[0], planes[1], planes[2],
+                             ORIC_LEFT);
+            encode_planes(tmdsbuf);
+        }
+#ifdef ORIC_DIAG
+        uint32_t dt = time_us_32() - tl;
+        if (dt > worst) worst = dt;
+#endif
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
     }
-}
-
-// Control panel: each OSD line shown twice (OSD_LINES = FRAME_HEIGHT / 2)
-static inline void __not_in_flash_func(render_panel)() {
-    for (int y = 0; y < OSD_LINES; y++) {
-        uint32_t *tmdsbuf, *second;
-        queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
-        osd_render_line(&osd, y, scanbuf);
-        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
-        queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
-        queue_remove_blocking_u32(&dvi0.q_tmds_free, &second);
-        copy_tmdsbuf(second, tmdsbuf);
-        queue_add_blocking_u32(&dvi0.q_tmds_valid, &second);
-    }
+#ifdef ORIC_DIAG
+    diag_frame_us = time_us_32() - t0;
+    diag_line_us_max = worst;
+#endif
 }
 
 void __not_in_flash_func(core1_main()) {
@@ -676,13 +679,7 @@ void __not_in_flash_func(core1_main()) {
     dvi_start(&dvi0);
 
     while (1) {
-        if (panel_open) {
-            render_panel();
-            continue;
-        }
-        render_empty_scanlines();
         render_frame();
-        render_empty_scanlines();
     }
 
     __builtin_unreachable();
@@ -705,8 +702,9 @@ int main() {
     // interrupts masked (a late scanline; found by the Neo6502Trinity project)
     dvi_init(&dvi0, spin_lock_claim_unused(true), spin_lock_claim_unused(true));
 
-    tmds_palette_init();
-    tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, empty_tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
+    oric_planes_init();                     // Before core 1 converts the first lines
+    memset(planes, 0, sizeof(planes));
+    encode_planes(empty_tmdsbuf);           // Black line (borders)
 
     printf("Core 1 start\n");
     hw_set_bits(&bus_ctrl_hw->priority, BUSCTRL_BUS_PRIORITY_PROC1_BITS);

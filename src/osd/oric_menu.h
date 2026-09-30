@@ -1,6 +1,6 @@
 #pragma once
 
-// oric_menu.h — panneau de contrôle (OSD) de l'Oric, sur le modèle du menu du
+// oric_menu.h — panneau de contrôle (OSD) de l'Oric, du Pravetz et du Nova, sur le modèle du menu du
 // Telestrat (projet Neo6502TeleStrat)
 //
 // Page principale : interface disque (aucune, Pravetz 8D, Microdisc, Jasmin),
@@ -348,8 +348,8 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
 
     // Bandeau
     osd_fill(s, R, 0, 3, OSD_COLS, OSD_ATTR(OSD_WHITE, OSD_BLUE));
-    osd_puts_big(s, R + 1, C + 3, "ORIC ATMOS", OSD_ATTR(OSD_WHITE, OSD_BLUE));
-    osd_puts(s, R + 1, C + 26, "panneau de contrôle", OSD_ATTR(OSD_YELLOW, OSD_BLUE), -1);
+    osd_puts_big(s, R + 1, C + 3, "ORIC / PRAVETZ / NOVA", OSD_ATTR(OSD_WHITE, OSD_BLUE));
+    osd_puts(s, R + 1, C + 48, "panneau de contrôle", OSD_ATTR(OSD_YELLOW, OSD_BLUE), -1);
     snprintf(buf, sizeof(buf), "Neo6502  %s", m->version ? m->version : "");
     osd_puts(s, R + 1, C + 97 - osd_strlen(buf), buf, OSD_ATTR(OSD_CYAN, OSD_BLUE), -1);
     for (int c = 0; c < OSD_COLS; c++) osd_putc(s, R + 3, c, OSD_HLINE, OSD_ATTR(OSD_CYAN, OSD_BLACK));

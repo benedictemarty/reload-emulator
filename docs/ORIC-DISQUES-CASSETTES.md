@@ -61,12 +61,38 @@ alors sur la disquette du lecteur A) ; le menu réécrit ces lignes et garde les
 
 ![Sélecteur de disquette](images/oric_menu_disque.png)
 
-Code : `src/osd/osd.h` (surface, rendu en indices de palette, grille 100 × 30
-sur le Neo6502 en 800 × 480, 120 × 34 en 960 × 544), `src/osd/osd_font.h`
-(police du Telestrat : unscii-8 de Viznut, domaine public, et icônes du projet),
-`src/osd/oric_menu.h` (menu, indépendant de la plate-forme), `src/osd/oric_config.h`
-(`ORIC.CFG`), `platforms/rp2040/systems/oric/src/oric.c` (clé USB, flux, cœur 1).
-**Pas encore essayé sur la carte.**
+Code : `src/osd/osd.h` (surface, rendu en indices de palette et en plans de 1 bit,
+grille 100 × 30 sur le Neo6502 en 800 × 480, 120 × 34 en 960 × 544),
+`src/osd/osd_font.h` (police du Telestrat : unscii-8 de Viznut, domaine public, et
+icônes du projet), `src/osd/oric_menu.h` (menu, indépendant de la plate-forme),
+`src/osd/oric_config.h` (`ORIC.CFG`), `platforms/rp2040/systems/oric/src/oric.c`
+(clé USB, flux, rendu par le cœur 1).
+
+### Essai sur la carte (Neo6502, 2026-09-30)
+
+Validé par l'utilisateur à l'écran et par la sonde SWD (`tools/oric_carte.py`) :
+panneau net et stable, messages visibles, choix de l'interface (Microdisc et Jasmin
+disponibles), disquette de la clé insérée en flux et lue par l'EPROM Microdisc
+(`STRATSED.DSK` : « No operating system on disc », réponse attendue pour une
+disquette Telestrat), cassette `AIGLE.TAP` insérée et `CLOAD""` lancé (l'Oric est
+passé en HIRES ; résultat du jeu non vérifié). Mesures du cœur 1 : 16,8 ms par
+image (60 Hz), 44 µs par ligne au plus pour l'image Oric, 55 µs pour le panneau
+(budget ≈ 69 µs).
+
+Trois corrections sont venues de cet essai :
+
+- **Lignes du panneau** : PicoDVI répète chaque tampon deux fois
+  (`DVI_VERTICAL_REPEAT = 2`) ; le panneau en envoyait deux par ligne, soit deux
+  trames par image (image déformée).
+- **Encodage vidéo en plans** : l'encodeur à palette pleine résolution de PicoDVI
+  (sans équilibrage DC par défaut) donnait des traits rouges sur les grandes zones
+  bleues, panneau comme `PAPER 4` du BASIC, avec l'écran de l'utilisateur. L'Oric
+  encode désormais trois plans de 1 bit avec `tmds_encode_1bpp`, comme le Telestrat
+  et le BBC (`src/systems/oric_planes.h`, reprise de `telestrat_video.h`) ; les
+  fonds du panneau sont pleins sur le RP2040 (`OSD_NO_DITHER`).
+- **Double tampon** : le cœur 0 dessine le panneau dans une surface cachée puis
+  l'échange ; sans lui, le cœur 1 affichait des surfaces à moitié redessinées
+  (à-coups, message invisible).
 
 ## Matériel émulé
 
@@ -188,8 +214,9 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
 - Les images WAVE produites par `tools/tap2wave` ne se chargent pas avec la ROM 1.1,
   déjà avant ces changements (vérifié sur la dernière version de l'auteur d'origine,
   `8e2fcff`) : leur bit 0 dure 208 + 416 µs. La lecture directe des `.tap` les remplace.
-- RP2040 : panneau de contrôle et clé USB compilés, **pas encore essayés sur la
-  carte** ; la version PC n'a pas le panneau (options de ligne de commande et
+- La version PC n'a pas le panneau (options de ligne de commande et
   glisser-déposer à la place).
+- Démarrage d'une disquette Sedoric ou FT-DOS depuis la clé : pas encore essayé sur
+  la carte (la clé d'essai ne contenait qu'une disquette Telestrat).
 - Formats non pris en charge : MFM_DISK de géométrie 2, ancien format `ORICDISK`,
   images Sedoric brutes (`SED*`), contrôleur BD-500, Telestrat.
