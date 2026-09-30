@@ -32,6 +32,13 @@ F2-F9 insert the images embedded in the firmware.
 
 See [docs/ORIC-DISQUES-CASSETTES.md](docs/ORIC-DISQUES-CASSETTES.md) (French) for the disk and tape support, its sources and its tests.
 
+### BBC Micro
+  - Model B (OS 1.20, BASIC 2, DFS 2.26, 16 KB sideways RAM) and Master 128 (MOS 3.20)
+  - 6845 / Video ULA / SAA5050, SN76489, WD1770 (`.ssd` / `.dsd`), joystick; Tube (PC)
+  - On the Neo6502: real W65C02 at 2 MHz on a PIO bus, USB drive, F11 disc menu
+
+See [docs/BBC.md](docs/BBC.md) (French) for the BBC support and its tests.
+
 ## Requirements (RP2040)
 ### Tools
 - cmake

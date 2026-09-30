@@ -33,3 +33,10 @@ target_compile_definitions(bbc_headless_lut PRIVATE BBC_LUT_PROGRESSIVE=16 BBC_L
 if (NOT MSVC)
     target_compile_options(bbc_headless_lut PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
+
+#=== Integration tests (tests/bbc/test_bbc_pc.py, Python 3 + Pillow): boot, BASIC,
+# screens compared to references, sound, joystick, disc write, Master 128, Tube,
+# bbc_tick4 = bbc_tick, progressive tables = PC rendering (docs/BBC.md)
+add_test(NAME bbc_integration COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/bbc/test_bbc_pc.py)
+set_tests_properties(bbc_integration PROPERTIES SKIP_RETURN_CODE 77
+    ENVIRONMENT "BBC_HEADLESS=$<TARGET_FILE:bbc_headless>;BBC_HEADLESS_LUT=$<TARGET_FILE:bbc_headless_lut>")

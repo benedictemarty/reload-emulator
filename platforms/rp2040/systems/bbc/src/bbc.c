@@ -3,11 +3,12 @@
 // BBC Micro Model B on the Olimex Neo6502: the real 65C02 executes the MOS,
 // the RP2040 emulates memory, 6845/ULA video, VIAs, keyboard and SN76489.
 //
-// Core 0: CPU bus (bit-banged, 2 MHz target), USB host (keyboard, gamepad = joystick 1).
+// Core 0: CPU bus (PIO state machine, chips/wdc65C02bus.h; -DBBC_BUS_SIO: bit-banged),
+// 2 MHz, USB host (keyboard, gamepad = joystick 1).
 // Discs: .ssd/.dsd files in the root of a USB drive (FAT, sectors read on
 // demand through FatFs, writes go back to the file) or images compiled in
 // flash (src/images/bbc_images.h, read-only);
-// F11 = next image (USB files first, then flash images).
+// F11 = disc menu (USB files first, then flash images); Pause = Neo6502 firmware.
 // Core 1: DVI 800x480 (or 960x544) @ 60 Hz, BBC 640x256 centred, lines
 //         doubled by PicoDVI: 800x480 at 345 MHz (default, stretched blanking)
 //         or 295.2 MHz (-DBBC_VIDEO_480) crops 8 lines top and bottom;
