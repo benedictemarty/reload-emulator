@@ -8,7 +8,9 @@ uint8_t __not_in_flash() apple2e_rom[] = {
     // MD5 (342-0303-a.e8) = 6ac9338f6972eea01604f90d9a581f18
 };
 
-uint8_t __not_in_flash() apple2e_character_rom[] = {
+// Read once per frame by the screen update only: in flash (RAM is short on the //e,
+// the heap must keep PICO_HEAP_SIZE for the PicoDVI TMDS buffers)
+uint8_t __in_flash("apple2e_chr") apple2e_character_rom[] = {
 	// Put the content of your character ROM here
 	//
     // MD5 (342-0265-a.chr) = 9123fff3442c0e688cc6816be88dd4ab

@@ -13,6 +13,7 @@ add_executable(oric
 target_compile_options(oric PRIVATE -Wall)
 
 target_compile_definitions(oric PRIVATE
+    PICO_HEAP_SIZE=0x5800   # dvi_init: 3 TMDS buffers + newlib malloc rounding (~21.8 KB measured); link fails if RAM runs short
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_sock_cfg
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 	# DVI_DEFAULT_SERIAL_CONFIG=olimex_rp2040pc_cfg
@@ -44,7 +45,7 @@ add_executable(oric_diag
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 )
 target_compile_options(oric_diag PRIVATE -Wall)
-target_compile_definitions(oric_diag PRIVATE DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1)
+target_compile_definitions(oric_diag PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1)
 target_link_libraries(oric_diag pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
 pico_add_extra_outputs(oric_diag)
 pico_enable_stdio_usb(oric_diag 0)
@@ -60,7 +61,7 @@ add_executable(oric_diag_cold
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 )
 target_compile_options(oric_diag_cold PRIVATE -Wall)
-target_compile_definitions(oric_diag_cold PRIVATE DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1 ORIC_COLD=1)
+target_compile_definitions(oric_diag_cold PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1 ORIC_COLD=1)
 target_link_libraries(oric_diag_cold pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
 pico_add_extra_outputs(oric_diag_cold)
 pico_enable_stdio_usb(oric_diag_cold 0)

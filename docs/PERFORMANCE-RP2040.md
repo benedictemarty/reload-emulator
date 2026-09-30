@@ -23,19 +23,25 @@ elle aussi en RAM, avec la fonction `*_tick` du système intégrée.
 
 RAM consommée (compilation Release, 2026-09-30, avec les ROM réelles) :
 
-| Firmware | Code déplacé en RAM | Tas disponible (`__end__` → fin de la RAM) |
+| Firmware | Code déplacé en RAM | Tas |
 |---|---|---|
-| `oric` | 9,8 Ko | ≈ 37 Ko |
-| `apple2` | 3,6 Ko | ≈ 85 Ko |
-| `apple2e` | 4,0 Ko | ≈ 18,5 Ko |
+| `oric` | 9,8 Ko | 22 Ko réservés (`PICO_HEAP_SIZE`) |
+| `apple2` | 3,6 Ko | 22 Ko réservés |
+| `apple2e` | 4,0 Ko | 22 Ko réservés, 0,5 Ko de marge au-delà |
 
-**Tas et PicoDVI** : `dvi_init` alloue `DVI_N_TMDS_BUFFERS` (3) tampons TMDS de
-`3 × largeur / 2 × 4` octets, soit 14,4 Ko en 800 pixels de large. Sur le IIe, dont
-les ROM (20 Ko) sont copiées en RAM, les fonctions appelées seulement lors d'un accès
-aux commutateurs mémoire (`_apple2e_*_bank_update`, `_apple2e_lc_control`,
-`apple2_lc_control`, ≈ 9,6 Ko) restent en flash : en RAM, elles laissaient moins de
-10 Ko au tas et l'allocation des tampons aurait échoué. Tout ajout en RAM sur le IIe
-doit garder au moins 14,4 Ko de tas.
+**Tas et PicoDVI** : `dvi_init` alloue par `malloc` 3 tampons TMDS de
+`3 × largeur / 2 × 4` octets (14,4 Ko en 800 pixels de large) ; newlib arrondit, et
+il faut davantage de tas (≈ 21,8 Ko mesurés sur le Telestrat en 960 de large, voir
+`~/Neo6502TeleStrat/docs/SONDE_SWD.md`). Comme le BBC, l'Oric et les Apple réservent
+`PICO_HEAP_SIZE=0x5800` à l'édition des liens : un manque de RAM fait échouer la
+compilation (« region RAM overflowed ») au lieu de planter la carte au démarrage.
+
+Sur le IIe (ROM de 16 Ko en RAM, lue à chaque cycle) :
+- les fonctions de changement de banque (`_apple2e_*_bank_update`,
+  `_apple2e_lc_control`, `apple2_lc_control`, ≈ 9,6 Ko), appelées seulement sur les
+  commutateurs mémoire, restent en flash ;
+- la ROM de caractères (4 Ko), lue seulement par la mise à jour de l'écran, est en
+  flash (`__in_flash`, voir `src/roms/apple2ee_roms.h.example`).
 
 (Apple : non essayé sur la carte.)
 

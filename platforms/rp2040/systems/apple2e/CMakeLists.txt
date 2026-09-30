@@ -13,6 +13,7 @@ add_executable(apple2e
 target_compile_options(apple2e PRIVATE -Wall)
 
 target_compile_definitions(apple2e PRIVATE
+    PICO_HEAP_SIZE=0x5800   # dvi_init: 3 TMDS buffers + newlib malloc rounding (~21.8 KB measured); link fails if RAM runs short
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_sock_cfg
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 	# DVI_DEFAULT_SERIAL_CONFIG=olimex_rp2040pc_cfg
