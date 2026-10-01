@@ -46,6 +46,8 @@ ENTETE = re.compile(r"^([0-9a-f]+) <(.+)>:$")
 APPEL = re.compile(r"\t(bl|blx|b|b\.n|b\.w)\s+([0-9a-f]+) <([^>+]+)(?:\+0x[0-9a-f]+)?>")
 INDIRECT = re.compile(r"\t(blx|bx)\s+(r\d+|ip|r1[0-2])\s*$")
 LITTERAL = re.compile(r"\t\.word\t0x([0-9a-f]+)")
+CHARGE = re.compile(r"\tldr\s+(r\d+),\s*\[pc.*@ \(([0-9a-f]+)")   # ldr rN, [pc, #k] @ (adresse du littéral)
+ADRESSE = re.compile(r"^\s*([0-9a-f]+):")
 
 
 def lire(elf):
@@ -117,7 +119,7 @@ def main():
 
     parent = {r: None for r in racines}
     file = collections.deque(racines)
-    flash_code, flash_donnees, indirects = [], [], []
+    flash_code, flash_donnees, indirects, panics = [], [], [], []
     while file:
         f = file.popleft()
         adr, lignes = fonctions[f]
@@ -132,6 +134,18 @@ def main():
                 if c not in par_adresse:
                     fonctions.setdefault(suivantes[-1], (c, []))
         else:
+            # Littéraux chargés juste avant un appel à panic (message d'erreur) : lus
+            # seulement si le firmware s'arrête, sans effet sur l'image
+            valeurs = {}
+            for l in lignes:
+                ma, ml = ADRESSE.match(l), LITTERAL.search(l)
+                if ma and ml:
+                    valeurs[int(ma.group(1), 16)] = int(ml.group(1), 16)
+            de_panic = set()
+            for i, l in enumerate(lignes):
+                m = CHARGE.search(l)
+                if m and any("panic" in s and "\tbl" in s for s in lignes[i + 1:i + 5]):
+                    de_panic.add(int(m.group(2), 16))
             for l in lignes:
                 m = APPEL.search(l)
                 if m and m.group(3) != f:
@@ -140,7 +154,11 @@ def main():
                     indirects.append((f, l.split("\t")[0].strip().rstrip(":")))
                 m = LITTERAL.search(l)
                 if m and en_flash(int(m.group(1), 16)):
-                    flash_donnees.append((f, nommer(table, adresses, int(m.group(1), 16) & ~1)))
+                    ma = ADRESSE.match(l)
+                    if ma and int(ma.group(1), 16) in de_panic:
+                        panics.append((f, nommer(table, adresses, int(m.group(1), 16))))
+                    else:
+                        flash_donnees.append((f, nommer(table, adresses, int(m.group(1), 16) & ~1)))
         for s in suivantes:
             if s in a.ignorer or s in parent or s not in fonctions:
                 continue
@@ -170,6 +188,9 @@ def main():
     print(f"\nLittéraux pointant en flash (tables lues ou pointeurs de fonction) : {len(donnees)}")
     for f, d in donnees:
         print(f"  {d}   dans {f}")
+    if panics:
+        print("\nMessages de panic en flash (lus seulement à l'arrêt du firmware, non comptés) : " +
+              ", ".join(f"{d} dans {f}" for f, d in sorted(set(panics))))
     print(f"\nAppels indirects non suivis (vérifier leurs cibles) : {len(indirects)}")
     for f, adr in indirects:
         print(f"  {f} @ {adr}")
