@@ -143,6 +143,11 @@ l'écran texte de TANBUG non (d'où le 0 mesuré en v0.9.4 sur l'écran texte). 
 calculé sans table. Tangerine passe l'outil dans son `make test` (`--court`) ; il échoue sur
 la v0.10.0 et passe sur la v0.10.1. Mesure sur la carte à venir.
 
+**Trinity 0.16.66 (T-102)**, trouvé par l'outil : la ligne noire des bordures du mode 1,
+`static const` donc en flash, lue par `tmds_encode_1bpp` pour chaque ligne de bordure (130 par
+image) ; corrigé sans RAM (un tampon de ligne inutilisé en mode 1 sert de ligne noire). À
+vérifier dans tout port qui passe une ligne noire `const` à l'encodeur.
+
 **Leçon générale** : une table `const` lue par le cœur 1 est aussi dangereuse qu'une
 fonction en flash ; une mesure faite sur un seul écran (texte) ne couvre pas les autres
 chemins de rendu (graphique).

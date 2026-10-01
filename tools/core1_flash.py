@@ -18,8 +18,9 @@ relais résolus par leur littéral) et liste :
     vérifier leurs cibles à la main (ou les donner avec --racine).
 
 Usage :
-  core1_flash.py FIRMWARE.elf [--racine NOM]... [--ignorer NOM]...
-  Racines par défaut : celles de la liste RACINES présentes dans l'ELF.
+  core1_flash.py FIRMWARE.elf [--racine NOM]... [--seules] [--ignorer NOM]...
+  Racines : celles de la liste RACINES présentes dans l'ELF, plus les --racine
+  (rappel de ligne, IRQ propres au port) ; --seules : uniquement les --racine.
   --ignorer : fonction à ne pas suivre (appelée seulement au démarrage, par
   exemple dvi_start) ; elle n'est pas signalée.
 Code de sortie : 0 si rien en flash n'est atteint, 1 sinon, 2 en cas d'erreur.
@@ -91,7 +92,8 @@ def en_flash(adr):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("elf")
-    ap.add_argument("--racine", action="append", default=[])
+    ap.add_argument("--racine", action="append", default=[], help="point d'entrée ajouté aux racines par défaut")
+    ap.add_argument("--seules", action="store_true", help="ne parcourir que les --racine")
     ap.add_argument("--ignorer", action="append", default=[])
     ap.add_argument("--strict", action="store_true", help="compter aussi les fonctions de démarrage")
     ap.add_argument("--court", action="store_true", help="une ligne de résumé (pour les scripts)")
@@ -101,7 +103,8 @@ def main():
     par_adresse = {adr: nom for nom, (adr, _) in fonctions.items()}
     table = symboles(a.elf)
     adresses = [t[0] for t in table]
-    racines = a.racine or [r for r in RACINES if r in fonctions]
+    defaut = [r for r in RACINES if r in fonctions]
+    racines = list(a.racine) if a.seules else defaut + [r for r in a.racine if r not in defaut]
     absentes = [r for r in racines if r not in fonctions]
     if absentes:
         print("racine absente de l'ELF :", ", ".join(absentes), file=sys.stderr)
