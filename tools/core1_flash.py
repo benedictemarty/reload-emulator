@@ -23,6 +23,11 @@ Usage :
   (rappel de ligne, IRQ propres au port) ; --seules : uniquement les --racine.
   --ignorer : fonction à ne pas suivre (appelée seulement au démarrage, par
   exemple dvi_start) ; elle n'est pas signalée.
+  Les racines se donnent aussi par leur nom C++ démanglé (core1_main trouve
+  _ZL10core1_mainv) ; sans boucle principale du cœur 1 trouvée, l'outil échoue
+  (code 2) au lieu de répondre « rien en flash » sur les seules IRQ.
+  --litteraux : un littéral en flash compte comme une faute ;
+  --indirects N : il faut exactement N appels indirects (sinon : faute).
 Code de sortie : 0 si rien en flash n'est atteint, 1 sinon, 2 en cas d'erreur.
 """
 import argparse
@@ -97,14 +102,33 @@ def main():
     ap.add_argument("--ignorer", action="append", default=[])
     ap.add_argument("--strict", action="store_true", help="compter aussi les fonctions de démarrage")
     ap.add_argument("--court", action="store_true", help="une ligne de résumé (pour les scripts)")
+    ap.add_argument("--litteraux", action="store_true", help="un littéral en flash compte comme une faute")
+    ap.add_argument("--indirects", type=int, default=None, help="nombre exact d'appels indirects attendu")
     a = ap.parse_args()
 
     fonctions = lire(a.elf)
     par_adresse = {adr: nom for nom, (adr, _) in fonctions.items()}
     table = symboles(a.elf)
     adresses = [t[0] for t in table]
-    defaut = [r for r in RACINES if r in fonctions]
-    racines = list(a.racine) if a.seules else defaut + [r for r in a.racine if r not in defaut]
+    # Names as given, or demangled (C++: _ZL10core1_mainv is core1_main())
+    mangled = [n for n in fonctions if n.startswith("_Z")]
+    demangle = {}
+    if mangled:
+        out = subprocess.run(["arm-none-eabi-c++filt"], input="\n".join(mangled), capture_output=True, text=True).stdout
+        for m, d in zip(mangled, out.splitlines()):
+            base = d.split("(")[0].replace("(anonymous namespace)::", "")
+            demangle.setdefault(base, m)
+
+    def resolve(r):
+        return r if r in fonctions else demangle.get(r, r)
+
+    defaut = [resolve(r) for r in RACINES if resolve(r) in fonctions]
+    donnees_racines = [resolve(r) for r in a.racine]
+    racines = donnees_racines if a.seules else defaut + [r for r in donnees_racines if r not in defaut]
+    if not a.seules and not any(resolve(r) in fonctions for r in ("core1_main", "core1_entry")) and not a.racine:
+        print("aucune boucle principale du cœur 1 (core1_main, core1_entry) : donner --racine "
+              "(les IRQ seules ne suffisent pas à conclure)", file=sys.stderr)
+        return 2
     absentes = [r for r in racines if r not in fonctions]
     if absentes:
         print("racine absente de l'ELF :", ", ".join(absentes), file=sys.stderr)
@@ -178,10 +202,11 @@ def main():
     fautes = sorted(f for f in flash_code if a.strict or f not in DEMARRAGE)
     demarrage = sorted(f for f in flash_code if f not in fautes)
     donnees = sorted(set(flash_donnees))
+    echec = bool(fautes) or (a.litteraux and bool(donnees)) or (a.indirects is not None and len(indirects) != a.indirects)
     if a.court:
         print(f"{len(fautes)} fonction(s) en flash" + (f" ({', '.join(fautes)})" if fautes else "") +
               f", {len(donnees)} littéral(aux) en flash, {len(indirects)} appel(s) indirect(s)")
-        return 1 if fautes else 0
+        return 1 if echec else 0
     print(f"racines : {', '.join(racines)} ; fonctions atteintes : {len(parent)}")
     print(f"\nFonctions en FLASH atteintes depuis le cœur 1 : {len(fautes)}")
     for f in fautes:
@@ -197,7 +222,9 @@ def main():
     print(f"\nAppels indirects non suivis (vérifier leurs cibles) : {len(indirects)}")
     for f, adr in indirects:
         print(f"  {f} @ {adr}")
-    return 1 if fautes else 0
+    if a.indirects is not None and len(indirects) != a.indirects:
+        print(f"\n{len(indirects)} appel(s) indirect(s) au lieu de {a.indirects} attendu(s)")
+    return 1 if echec else 0
 
 
 if __name__ == "__main__":
