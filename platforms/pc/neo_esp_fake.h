@@ -33,6 +33,7 @@ typedef struct {
     int send_expected, send_len;   // AT+CIPSEND en cours
     uint8_t send_buf[2048];
     uint32_t commands, sent, received;
+    int no_ip_polls;   // AT+CIPSTATUS answers STATUS:5 (no IP) this many times first
 } neo_esp_fake_t;
 
 static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
@@ -42,6 +43,7 @@ static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
     m->send_expected = 0;
     m->ssid[0] = 0;
     m->commands = m->sent = m->received = 0;
+    m->no_ip_polls = 0;
 }
 
 static inline void _fake_out(neo_esp_fake_t* m, const char* s) { m->out(m->ctx, (const uint8_t*)s, (int)strlen(s)); }
@@ -74,6 +76,13 @@ static inline void _fake_command(neo_esp_fake_t* m, const char* cmd) {
         }
         snprintf(m->ssid, sizeof(m->ssid), "%s", ssid);
         _fake_out(m, "WIFI CONNECTED\r\nWIFI GOT IP\r\n\r\nOK\r\n");
+    } else if (!strcmp(cmd, "AT+CIPSTATUS")) {
+        // 2: got IP, 3: link open, 5: no IP yet (the modem is joining in the background)
+        const int st = m->no_ip_polls > 0 ? 5 : m->linked ? 3 : 2;
+        if (m->no_ip_polls > 0) m->no_ip_polls--;
+        char s[48];
+        snprintf(s, sizeof(s), "STATUS:%d\r\n\r\nOK\r\n", st);
+        _fake_out(m, s);
     } else if (!strcmp(cmd, "AT+CIPCLOSE")) {
         if (!m->linked) {
             _fake_out(m, "\r\nERROR\r\n");

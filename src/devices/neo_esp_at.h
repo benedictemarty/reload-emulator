@@ -6,8 +6,10 @@
 // ESP8266 convenu le 2026-10-01) ou un vrai module ESP8266 (MOD-WIFI-ESP8266
 // sur l'UEXT), branché sur un port série USB ou une UART. Dialogue utilisé :
 //
-//   AT, ATE0, AT+CIPCLOSE (ERROR toléré), [AT+CWJAP_DEF="réseau","mot de passe"],
-//   AT+CIPSTART="UDP","hôte",port            → CONNECT, OK
+//   AT, ATE0, AT+CIPCLOSE (ERROR toléré), [AT+CWJAP_DEF="réseau","mot de passe"] (35 s),
+//   AT+CIPSTATUS jusqu'à STATUS:2/3/4 (adresse IP obtenue ; le modem rejoint son
+//   réseau enregistré en tâche de fond après son branchement, jusqu'à 30 s),
+//   AT+CIPSTART="UDP","hôte",port            → CONNECT, OK (12 s : DNS jusqu'à 10 s)
 //   AT+CIPSEND=n                             → OK, « > » ; puis n octets
 //                                            → Recv n bytes, SEND OK | SEND FAIL
 //   réception : \r\n+IPD,n: suivi de n octets, un par datagramme
@@ -56,6 +58,7 @@ typedef struct {
     uint32_t ipd_len, ipd_got;   // Received straight into the free queue slot
     bool prompt;             // « > » reçu
     int result;              // NEO_ESP_*
+    int status;              // Dernier STATUS:n de AT+CIPSTATUS (-1 : aucun)
     // Datagrammes reçus en attente
     uint8_t queue[2][NEO_ESP_DGRAM_MAX];
     int queue_len[2];
@@ -88,6 +91,7 @@ void neo_esp_init(neo_esp_t* e, bool (*write)(void*, const uint8_t*, int), int (
 
 static void _neo_esp_line(neo_esp_t* e) {
     const char* l = e->line;
+    if (!strncmp(l, "STATUS:", 7) && l[7] >= '0' && l[7] <= '9') e->status = l[7] - '0';
     if (!strcmp(l, "OK")) e->result = NEO_ESP_OK;
     else if (!strcmp(l, "SEND OK")) e->result = NEO_ESP_SEND_OK;
     else if (!strcmp(l, "SEND FAIL")) e->result = NEO_ESP_SEND_FAIL;
@@ -182,11 +186,23 @@ bool neo_esp_open_udp(neo_esp_t* e, const char* host, uint16_t port, const char*
         if (snprintf(cmd, sizeof(cmd), "AT+CWJAP_DEF=\"%s\",\"%s\"", ssid, password ? password : "") >= (int)sizeof(cmd)) {
             return false;
         }
-        if (!neo_esp_command(e, cmd, 20000)) return false;   // Joining can take seconds
+        if (!neo_esp_command(e, cmd, 35000)) return false;   // The modem retries up to 30 s (Neo6502picowifi)
     }
+    // Wait for an IP address (STATUS:2 got IP, 3 connected, 4 disconnected link): up to 30 s
+    bool ip = false;
+    for (int i = 0; i < 60 && !ip; i++) {
+        e->status = -1;
+        neo_esp_command(e, "AT+CIPSTATUS", 1000);
+        ip = e->status >= 2 && e->status <= 4;
+        if (!ip) {
+            // About 500 ms between polls: read (and drop) what comes meanwhile
+            for (int k = 0; k < 50; k++) e->read_byte(e->ctx, 10000);
+        }
+    }
+    if (!ip) return false;
     neo_esp_command(e, "AT+CIPCLOSE", 1000);   // ERROR when no link is open: fine
     if (snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"UDP\",\"%s\",%u", host, (unsigned)port) >= (int)sizeof(cmd)) return false;
-    e->open = neo_esp_command(e, cmd, 10000);
+    e->open = neo_esp_command(e, cmd, 12000);   // A host name: DNS up to 10 s in the modem
     e->queued = 0;
     return e->open;
 }

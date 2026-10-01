@@ -25,8 +25,11 @@ jour au profit de picowifi.
   Le client suit les commandes obligatoires, plus UNLINK. TNFS par TCP n'est pas utilisable
   avec `tnfsd` à travers un modem : le serveur prend chaque `read()` pour un message entier.
 - **Dialogue AT** (convenu avec la session Neo6502picowifi, chaînes de son `at_modem.c`) :
-  `AT`, `ATE0`, `AT+CIPCLOSE` (ERROR toléré), `AT+CWJAP_DEF` si un réseau est donné,
-  `AT+CIPSTART="UDP","hôte",port` → `CONNECT`, `OK` ; `AT+CIPSEND=n` → `\r\nOK\r\n> `, n octets →
+  `AT`, `ATE0` (nécessaire : l'écho peut être gardé en flash), `AT+CWJAP_DEF` si un réseau est
+  donné (35 s : le modem relance jusqu'à 30 s), `AT+CIPSTATUS` jusqu'à `STATUS:2/3/4` (adresse
+  IP obtenue : après son branchement, le modem rejoint son réseau en tâche de fond),
+  `AT+CIPCLOSE` (ERROR toléré), `AT+CIPSTART="UDP","hôte",port` → `CONNECT`, `OK` (12 s : DNS
+  jusqu'à 10 s dans le modem ; une adresse IP évite l'attente) ; `AT+CIPSEND=n` → `\r\nOK\r\n> `, n octets →
   `Recv n bytes`, `SEND OK` | `SEND FAIL` ; réception `\r\n+IPD,n:` + n octets, **un par
   datagramme** ; port local éphémère ; CIPMUX=0 ; pas de mode transparent en UDP.
 

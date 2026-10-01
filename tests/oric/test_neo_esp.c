@@ -122,6 +122,12 @@ int main(void) {
     CHECK(!neo_tnfs_stat(&t, "/A.DSK", &size, 0) && e.send_fail == (uint32_t)t.tries);
     fail_send = false;
     CHECK(neo_tnfs_stat(&t, "/A.DSK", &size, 0));
+    // Modem just plugged in: no IP for the first polls of AT+CIPSTATUS, then a link
+    static neo_esp_t e3;
+    neo_esp_fake_init(&modem);
+    modem.no_ip_polls = 3;
+    neo_esp_init(&e3, host_write, host_read, 0);
+    CHECK(neo_esp_open_udp(&e3, "192.168.1.10", 16384, 0, 0) && modem.no_ip_polls == 0 && e3.status == 2);
     // Unknown host: CIPSTART fails
     static neo_esp_t e2;
     neo_esp_fake_init(&modem);
