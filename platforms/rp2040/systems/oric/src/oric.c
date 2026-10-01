@@ -261,6 +261,7 @@ static void panel_refresh(void);
 // loop (the actions open files on the USB drive: not from inside a USB callback)
 static volatile uint16_t panel_keys[16];
 static volatile uint8_t panel_keys_head, panel_keys_tail;
+static volatile int16_t sys_key_pending = -1;   // F2-F9, F11, F12 waiting for sys_key_service
 
 void kbd_raw_key_down(int code) {
     if (code == (NEO_MULTIBOOT_RETURN_KEY | 0x100)) neo_multiboot_return();  // Pause (code HID | 0x100 : pas d'ASCII) : retour au firmware Neo6502
@@ -283,6 +284,22 @@ void kbd_raw_key_down(int code) {
         }
     }
 
+    if ((code >= 0x13B && code <= 0x142) || code == 0x144 || code == 0x145) {
+        // F2-F9, F11, F12: run by the main loop (sys_key_service). This callback can come
+        // from a tuh_task run while a streamed disk or tape sector is read (msc_app.c,
+        // neo_cdc_serial.c), i.e. in the middle of an emulated cycle: a reset there would
+        // cut the 6502 and the WD1793 halfway
+        sys_key_pending = (int16_t)code;
+        return;
+    }
+    kbd_key_down(&state.oric.kbd, code);
+}
+
+// F2-F9, F11, F12 noted by kbd_raw_key_down: run between two frames
+static void sys_key_service(void) {
+    const int code = sys_key_pending;
+    if (code < 0) return;
+    sys_key_pending = -1;
     oric_t *sys = &state.oric;
 
     switch (code) {
@@ -316,10 +333,6 @@ void kbd_raw_key_down(int code) {
 
         case 0x145:  // F12
             oric_reset(sys);
-            break;
-
-        default:
-            kbd_key_down(&sys->kbd, code);
             break;
     }
 }
@@ -1125,6 +1138,7 @@ int main() {
         }
 #endif
         usb_poll();
+        sys_key_service();
         net_poll();
         banner_update();
 #ifdef ORIC_DIAG
