@@ -145,6 +145,16 @@ Conséquences :
   compteurs, ce qui va dans le sens de MAME pour B et contre `via_reset` du socle. Les valeurs à la
   mise sous tension sont notées « ? », non mesurées. « disables the timers » ne dit pas si
   les compteurs continuent de décompter (A) : je ne sais pas.
+- **Décision (2026-10-01, validée par le Vic20)** :
+  - B : `via_reset` garde latches, compteurs et SR (fiche Rockwell) ; valeurs d'allumage posées
+    par `via_init` (FFFF / FF).
+  - A : option par machine `via_set_free_counters` (compteurs en marche dès maintenant et après
+    chaque reset, sans IRQ), désactivée par défaut. Le Vic20 ne l'active pas (pas de mesure).
+  - D : on garde le matériel (rechargement depuis le latch).
+  - Golden de Tangerine avec l'option et les latches B5F3 posés par l'hôte : 14/15. Seul le
+    son de berzerk échoue (D ; écart de MAME, à documenter chez Tangerine si bmarty valide).
+  - Vic20 : tous ses tests passent, comportement identique à l'octet, charge 83 % contre 82 %
+    (arrondi).
 - IER (exigence 2 du Telestrat) : son cas STRATSED est repris dans `test_via6522.c`
   (`test_ier_release`) et via6522 le passe déjà. Le défaut venait de l'ancienne mos6522via.
 - Le banc se trouve dans le dossier temporaire de la session (`tgr/src/via6522.c`, variables

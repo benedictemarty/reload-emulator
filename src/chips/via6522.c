@@ -196,6 +196,12 @@ void VIA6522_HOT via_sync(via6522_t* via) {
 
 void via_init(via6522_t* via) {
     memset(via, 0, sizeof(via6522_t));
+    /* Mise sous tension : valeurs non mesurées (testprogs via_defaults : « ? ») ; le reset
+     * les garde (fiche Rockwell), elles sont donc posées ici et non dans via_reset */
+    via->t1_counter = 0xFFFF;
+    via->t1_latch = 0xFFFF;
+    via->t2_counter = 0xFFFF;
+    via->t2_latch = 0xFF;
     via->cb1_pin = true;   /* CB1 idle high (not driven on Oric) */
     via->ca1_pin = true;   /* CA1 idle high (printer ACK line, pulled up) */
     via->irq_line = false;  /* /IRQ not asserted */
@@ -206,15 +212,19 @@ void via_reset(via6522_t* via) {
     via->ora = via->orb = 0;
     via->ira = via->irb = 0xFF;
     via->ddra = via->ddrb = 0;
-    via->t1_counter = 0xFFFF;
-    via->t1_latch = 0xFFFF;
-    via->t2_counter = 0xFFFF;
-    via->t2_latch = 0xFF;
+    /* reload (socle) : fiche Rockwell (citée par les testprogs via_defaults) : « A low reset
+     * input clears all internal registers to logic 0 (except T1 and T2 latches and counters
+     * and the Shift Register) ». Latches, compteurs et SR sont gardés ; plus d'IRQ des timers.
+     * Les compteurs ne décomptent après le reset qu'avec via_set_free_counters (choix de la
+     * machine : comportement du vrai circuit non mesuré) */
     via->t1_running = false;
     via->t2_running = false;
-    via->t1_active = false;
-    via->t2_active = false;
-    via->sr = 0;
+    via->t1_active = via->free_counters;
+    via->t2_active = via->free_counters;
+    if (!via->free_counters) {
+        via->t1_reload = false;
+        via->t2_reload = false;
+    }
     via->sr_count = 0;
     via->acr = 0;
     via->t2_phi2 = true;   /* Neo6502Vic20 : ACR à 0, T2 compte φ2 */
@@ -766,4 +776,13 @@ uint8_t via_peek(const via6522_t* via, uint8_t reg) {
     via6522_t copy = *via;
     copy.irq_callback = 0;   /* The copy's IRQ changes are not reported */
     return via_read(&copy, reg);
+}
+
+void via_set_free_counters(via6522_t* via, bool on) {
+    via_sync(via);
+    via->free_counters = on;
+    if (on) {
+        via->t1_active = true;   /* Décompte sans IRQ (t1_running / t2_running inchangés) */
+        via->t2_active = true;
+    }
 }

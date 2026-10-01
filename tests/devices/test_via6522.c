@@ -60,10 +60,16 @@ static void op(via6522_t* v, uint32_t kind, uint32_t arg) {
     }
 }
 
-static void test_advance(void) {
+static void test_advance(bool free_counters) {
     static via6522_t a, b;
     via_init(&a);
     via_init(&b);
+    via_reset(&a);
+    via_reset(&b);
+    if (free_counters) {
+        via_set_free_counters(&a, true);
+        via_set_free_counters(&b, true);
+    }
     via_set_port_callbacks(&a, port_in, 0, port_in, 0, 0);
     via_set_port_callbacks(&b, port_in, 0, port_in, 0, 0);
     via_write(&a, VIA_DDRB, 0x80);
@@ -75,6 +81,10 @@ static void test_advance(void) {
             op(&a, k, g);
             op(&b, k, g);
         }
+        if ((rnd() & 4095) == 0) {   // Reset now and then: latches and counters kept
+            via_reset(&a);
+            via_reset(&b);
+        }
         // Step: 4 cycles mostly (as the Oric and the Telestrat), sometimes 1 to 40
         const int len = (rnd() & 3) ? 4 : 1 + (int)(rnd() % 40);
         for (int i = 0; i < len; i++) via_tick(&a);
@@ -85,7 +95,7 @@ static void test_advance(void) {
     }
     CHECK(bad == 0);
     CHECK(irqs > 1000);   // The random sequence really raised interrupts
-    printf("  %d pas, %d avec IRQ, %d écarts\n", steps, irqs, bad);
+    printf("  compteurs libres %d : %d pas, %d avec IRQ, %d écarts\n", free_counters, steps, irqs, bad);
 }
 
 static void test_peek(void) {
@@ -122,9 +132,38 @@ static void test_ier_release(void) {
     CHECK(via_peek(&v, VIA_IFR) & VIA_INT_T1);
 }
 
+// Rockwell datasheet: reset keeps T1/T2 latches and counters (and SR); counters stop
+// unless via_set_free_counters
+static void test_reset_keeps(void) {
+    static via6522_t v;
+    via_init(&v);
+    via_reset(&v);
+    CHECK(via_peek(&v, VIA_T1CL) == 0xFF && via_peek(&v, VIA_T1CH) == 0xFF);
+    via_write(&v, VIA_T1LL, 0x34);
+    via_write(&v, VIA_T1LH, 0x12);
+    via_write(&v, VIA_T2CL, 0x78);
+    via_write(&v, VIA_T2CH, 0x56);
+    via_write(&v, VIA_SR, 0x9A);
+    for (int i = 0; i < 10; i++) via_tick(&v);
+    const uint8_t t2l = via_peek(&v, VIA_T2CL);
+    via_reset(&v);
+    CHECK(via_peek(&v, VIA_T1LL) == 0x34 && via_peek(&v, VIA_T1LH) == 0x12);
+    CHECK(via_peek(&v, VIA_T2CL) == t2l && via_peek(&v, VIA_T2CH) == 0x56);
+    CHECK(via_peek(&v, VIA_SR) == 0x9A);
+    for (int i = 0; i < 10; i++) via_tick(&v);
+    CHECK(via_peek(&v, VIA_T2CL) == t2l);      // Stopped by default
+    via_set_free_counters(&v, true);
+    via_reset(&v);
+    for (int i = 0; i < 10; i++) via_tick(&v);
+    CHECK(via_peek(&v, VIA_T2CL) == (uint8_t)(t2l - 10));   // Counting, no IRQ
+    CHECK(!v.irq_line && !(v.ifr & (VIA_INT_T1 | VIA_INT_T2)));
+}
+
 int main(void) {
     test_ier_release();
-    test_advance();
+    test_reset_keeps();
+    test_advance(false);
+    test_advance(true);
     test_peek();
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

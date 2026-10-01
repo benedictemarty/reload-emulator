@@ -151,6 +151,9 @@ typedef struct via6522_s {
     /* IRQ callback */
     void (*irq_callback)(bool state, void* userdata);
     void* irq_userdata;
+
+    bool free_counters;   /**< reload (socle) : T1/T2 décomptent dès la mise sous tension
+                               et après un reset (via_set_free_counters) */
 } via6522_t;
 
 /**
@@ -382,6 +385,10 @@ void via_pb6_pulse(via6522_t* via);
 static inline uint16_t via_quiet_cycles(const via6522_t* via) { return via->quiet; }
 void via_advance(via6522_t* via, int cycles);
 uint8_t via_peek(const via6522_t* via, uint8_t reg);
+/* reload (socle) : compteurs T1/T2 en marche dès maintenant et après chaque reset, sans IRQ
+ * (MAME ; nécessaire au golden de Tangerine : mooncresta lit T1/T2 jamais écrits). Le vrai
+ * circuit : non mesuré. Par défaut : arrêtés jusqu'à l'écriture de T1C-H / T2C-H */
+void via_set_free_counters(via6522_t* via, bool on);
 
 /* reload (socle) : accesseurs en ligne, appelés tous les 4 cycles par l'Oric (pilotage de
  * l'AY par CA2/CB2) ; dans via6522.c, chaque appel coûtait ~2,7 % de l'émulation. */
