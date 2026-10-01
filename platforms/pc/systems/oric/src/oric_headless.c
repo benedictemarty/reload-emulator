@@ -373,18 +373,27 @@ int main(int argc, char** argv) {
         else keys[nkeys++] = *p;
     }
 
+    // A shifted character: SHIFT alone one frame before the key, released with it
+    const uint32_t shift_bit = 1u << (KBD_MAX_COLUMNS + KBD_MAX_LINES);
     int k = 0, held = 0, timer = 0;
+    bool shift_held = false;
     for (int f = 0; f < frames; f++) {
         if (timer > 0) {
             timer--;
         } else if (held) {
             kbd_key_up(&oric.kbd, held);
+            if (shift_held) kbd_key_up(&oric.kbd, ORIC_KEY_SHIFT);
             held = 0;
+            shift_held = false;
             timer = hold_frames;
         } else if (f >= wait_frames && k < nkeys) {
             if (keys[k] == '~') {
                 k++;
                 timer = 50;   // Pause
+            } else if ((oric.kbd.key_masks[(uint8_t)keys[k]] & shift_bit) && !shift_held) {
+                kbd_key_down(&oric.kbd, ORIC_KEY_SHIFT);
+                shift_held = true;
+                timer = 1;
             } else {
                 held = (uint8_t)keys[k++];
                 kbd_key_down(&oric.kbd, held);

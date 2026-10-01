@@ -84,6 +84,7 @@ extern "C" {
 #endif
 
 // Bump snapshot version when oric_t memory layout changes
+#define ORIC_KEY_SHIFT 0x1E1   // SHIFT alone (benches), see _oric_init_key_map
 #define ORIC_SNAPSHOT_VERSION (4)   // 2: sample_rate, sample_acc (audio clock); 3: sample_rate_q8; 4: tape_rec.length_unknown
 
 #define ORIC_FREQUENCY     (1000000)  // 1 MHz
@@ -1043,6 +1044,11 @@ static void _oric_init_key_map(oric_t* sys) {
             }
         }
     }
+
+    // SHIFT alone (for the typing benches: press it one frame before a shifted
+    // character; with both in the same frame, the ROM may scan the key's line
+    // before SHIFT's and see it unshifted — found by the Telestrat)
+    kbd_register_key(&sys->kbd, ORIC_KEY_SHIFT, 4, 4, 0);
 
     // Special keys
     kbd_register_key(&sys->kbd, 0x20, 0, 4, 0);   // Space
