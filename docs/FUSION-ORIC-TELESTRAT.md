@@ -29,7 +29,7 @@ changeant d'étiquette de socle quand il le décide, et retire alors sa copie.
 | 6 | **Cassette** — côté reload **fait** (socle-2026-09-30-3 : l'Oric utilise `oric_tape*.h` ; remplissage et `oric_tape_insert_mem` ajoutés ; le retour au démarrage du moteur n'a pas été nécessaire, `CLOAD` passe ; WAVE retiré) | **Telestrat** (`oric_tape.h`, `oric_tape_rec.h` CSAVE, `oric_tape_turbo.h`) : exacte au cycle, sans état global | ajouter de reload : retour au démarrage du moteur si arrêt en cours de fichier, remplissage d'un dernier fichier tronqué, entrée mémoire, lectures courtes, WAVE (tap2wave réécrit) ; l'Oric remplace `oric_td.h` ; registres du turbo non décodés quand Jasmin ou Pravetz occupent `$03FE-$03FF` | moyen |
 | 7 | **Menu à l'écran** — `osd.h` **fait** (socle-2026-09-30-4 : un seul rendu en plans, celui de reload, sans table en RAM ; coût : un peu moins cher dans un banc isolé, 6 % de plus en moyenne dans le firmware du Telestrat ; option `OSD_NOINLINE` ; noms du Telestrat `osd_render_line` / `osd_render_cells` ; `osd_frame` à titre facultatif ; `OSD_RAM` accepté ; grille par défaut 100 × 30, le Telestrat définit 120 × 34 ; aperçus de l'Oric identiques au bit près ; suite du Telestrat 458/458 avec ce fichier) | `osd.h` unifié ; reste le moteur commun `osd_ui.h` (styles, panneaux, bandeaux paramétrés), `osd_browser.h` (sélecteur), `osd_cfgfile.h` (fichier de configuration, profils) | chaque machine garde son `<machine>_menu.h` et sa configuration ; `rom_pool.h`, `rom_builtin.h` restent au Telestrat ; côté Telestrat : définir `OSD_COLS=120`, `OSD_ROWS=34`, retirer l'appel à `osd_init_luts` (banc) | moyen |
 | 8 | Clé USB — `MSC_VOLUMES` **fait** (essai sur carte à faire) | `msc_app.c` de reload | option « un seul volume » (RAM), diagnostics SWD en option ; essai sur carte | moyen |
-| 9 | VIA 6522 — **adoptée par le Vic20 et Tangerine** (2026-10-01, socle-2026-10-01-20) ; Oric en option, Telestrat à venir | candidate : `src/chips/via6522.c/.h` du Vic20 (61/61 tests VICE, mode paresseux prouvé, EUPL-1.2 ou zlib), copiée dans le socle avec deux ajouts à remonter au Vic20 : accesseurs `via_get_ca2/cb2/pb7` en ligne, placement `VIA6522_HOT`, avance par lots `via_quiet_cycles` / `via_advance`, lecture sans effet `via_peek` | Oric : couche `_oric_via_*` dans `oric.h`, option `ORIC_VIA6522` (défaut inchangé : tests identiques) ; avec via6522 : intégration Oric 22/22, écran de 3D Fongus identique, −0,8 % d'instructions, puis −3,8 % avec `via_advance` dans le tick de 4 cycles (callgrind, 400 trames de 3D Fongus : 1 505 contre 1 564 millions) ; clavier lu par le rappel du port B ; ACK imprimante en impulsion basse. Firmware `oric_diag_via6522` compilé (VIA en RAM, 5 424 o de marge). **Carte (2026-10-01)** : boucle BASIC `10 A=A+1:GOTO 10`, 10 s, émulation 12 959 µs par trame (64,9 % du budget) contre 14 328 µs (71,8 %) avec mos6522via, soit −9,6 % ; F12 différée vérifiée. **Reste** : rejeu du Telestrat | élevé |
+| 9 | VIA 6522 — **adoptée par le Vic20 et Tangerine** (2026-10-01, socle-2026-10-01-20) ; Oric en option, Telestrat porté dans une copie (rejeu 3/3, à décider par lui) | candidate : `src/chips/via6522.c/.h` du Vic20 (61/61 tests VICE, mode paresseux prouvé, EUPL-1.2 ou zlib), copiée dans le socle avec deux ajouts à remonter au Vic20 : accesseurs `via_get_ca2/cb2/pb7` en ligne, placement `VIA6522_HOT`, avance par lots `via_quiet_cycles` / `via_advance`, lecture sans effet `via_peek` | Oric : couche `_oric_via_*` dans `oric.h`, option `ORIC_VIA6522` (défaut inchangé : tests identiques) ; avec via6522 : intégration Oric 22/22, écran de 3D Fongus identique, −0,8 % d'instructions, puis −3,8 % avec `via_advance` dans le tick de 4 cycles (callgrind, 400 trames de 3D Fongus : 1 505 contre 1 564 millions) ; clavier lu par le rappel du port B ; ACK imprimante en impulsion basse. Firmware `oric_diag_via6522` compilé (VIA en RAM, 5 424 o de marge). **Carte (2026-10-01)** : boucle BASIC `10 A=A+1:GOTO 10`, 10 s, émulation 12 959 µs par trame (64,9 % du budget) contre 14 328 µs (71,8 %) avec mos6522via, soit −9,6 % ; F12 différée vérifiée. **Reste** : rejeu du Telestrat | élevé |
 | 10 | Pilote de bus | `wdc65C02bus.h` (SIO puis PIO) | étape 5 ; carte (TELEMON, banques, disquettes) | élevé |
 
 ## Le Vic20 (Neo6502Vic20) dans la fusion
@@ -164,6 +164,39 @@ Conséquences :
   (`test_ier_release`) et via6522 le passe déjà. Le défaut venait de l'ancienne mos6522via.
 - Le banc se trouve dans le dossier temporaire de la session (`tgr/src/via6522.c`, variables
   `SV_DRIVE`, `SV_FREE`, `SV_LATCH`, `VIA_DIFF`, `VIA_T1`) ; il n'est pas versionné.
+
+## VIA unique : rejeu du Telestrat (2026-10-02)
+
+Portage dans une copie de Neo6502TeleStrat (3ce3d59), sans écrire dans son dépôt :
+- option `TELESTRAT_VIA6522`, couche `_tv_*` dans `telestrat.h` et `telestrat_ref.h` ;
+- clavier et manettes lus par les rappels du port B ;
+- ACK de l'imprimante inversé (CA1 au repos haut), CB1 et CA1 donnés seulement quand ils
+  changent (mode paresseux gardé) ;
+- saut des cycles calmes par `via_quiet_cycles` / `via_advance`.
+
+Diff proposé au Telestrat (723 lignes, 8 fichiers) : dossier temporaire de la session,
+`telestrat_via6522.diff`.
+
+| Vérification | Résultat |
+|---|---|
+| Rejeu, tout sur mos6522via (réorganisation seule) | 3/3 identiques |
+| Rejeu, système optimisé sur via6522, référence sur mos6522via | 0/3 : écarts attendus (voir ci-dessous) |
+| Rejeu, tout sur via6522 | **3/3 identiques** (bus, IRQ, audio, série, image ; démarrage à froid) |
+| Écran final du scénario A (STRATSED, HYPER-BASIC, DIR), mos6522via contre via6522 | identique |
+| test_telestrat | 510/510 avec les deux VIA |
+| callgrind, 400 trames du scénario A | 1 109 contre 1 130 millions d'instructions (−1,8 %) |
+| Firmware standard, via6522 en RAM | marge 4 276 → 836 o (−3 440 o) |
+| Firmware RAM 64 Ko, via6522 en RAM | **dépasse la RAM** |
+| Firmware RAM 64 Ko, via6522 en flash | marge 476 → 1 020 o ; charge à mesurer sur la carte |
+
+**Défaut de mos6522via trouvé en route.** Avec `mos6522via_tick(v, 4)`, le pas des systèmes
+Oric et Telestrat, T1 en roue libre a une période de N+8 au lieu de N+2 (N+2 en pas de 1,
+comme via6522 et le matériel). Mesuré sur la copie du Telestrat et sur celle du socle :
+N=10 → 16 au lieu de 12, N=100 → 108 au lieu de 102, N=10 000 → 10 008 au lieu de 10 002.
+Effets : sons produits par T1 trop graves (6 % pour N=100), IRQ BASIC de l'Oric toutes les
+10 008 cycles. Le rejeu du Telestrat ne pouvait pas le voir : sa référence a le même défaut.
+Premier écart de la trace A : T1CL lue $6C par la référence, $B9 par via6522. $6C se retrouve
+exactement avec une période de N+8 ; $B9 avec N+2.
 
 ## La NES (Neo6502nes) dans la fusion
 
