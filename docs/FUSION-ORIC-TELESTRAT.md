@@ -56,6 +56,9 @@ compilation par `tools/socle_consommateurs.sh` depuis le 2026-10-01.
   relue ; image en flash au retrait de la clé ; démarrage sans clé ; son
   « très bien » selon bmarty). Les relevés « 0 ligne en retard » de ces deux essais ne
   prouvent rien (compteur de PicoDVI qui redescend, voir STRATEGIE section 3 bis).
+- **Telestrat v0.16.21** (socle-2026-10-01-8) : `msc_app.c` du socle (sa copie `usb_msc.c`
+  retirée) et `neo_storage` pour tous ses fichiers (plus aucun appel FatFs direct) ; 481 tests,
+  rejeu 3/3 ; RAM 64 Ko : 724 o au-delà du tas ; charge 59 / 67 %. Essai sur carte à venir.
 - **Telestrat v0.16.16** (socle-2026-10-01) : `ay38910psg.h` et `hid_app.c` pris aussi dans le
   socle ; seule copie restante : `mos6522via.h`. AY produit à la cadence réelle du PWM
   (arrondie à l'Hz) ; AY gardé en flash (`AY38910_HOT` vide, socle-2026-10-01-2).
