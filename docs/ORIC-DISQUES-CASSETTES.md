@@ -122,6 +122,16 @@ icônes du projet), `src/osd/oric_menu.h` (menu, indépendant de la plate-forme)
 `src/osd/oric_config.h` (`ORIC.CFG`), `src/devices/neo_storage.h` (fichiers de la clé par volume, pilote FatFs du socle), `platforms/rp2040/systems/oric/src/oric.c`
 (clé USB, flux, rendu par le cœur 1).
 
+### Fichiers par le réseau (TNFS, sur PC, 2026-10-01)
+
+`oric_headless -N HÔTE[:PORT]` monte un serveur TNFS (protocole des 8 bits de Spectranet et
+FujiNet ; serveur de référence `tnfsd`, licence MIT) : `-T` et `-0`..`-3` désignent alors des
+fichiers du serveur, lus et écrits **en flux** comme sur la carte (`src/devices/neo_tnfs.h`,
+volume `neo_storage`). Validé contre `tnfsd` : `CLOAD` (7 requêtes), Sedoric `DIR` (266
+requêtes), `SAVE` puis `LOAD` dans une nouvelle session, aucune répétition en local. Tests
+d'intégration avec `ORIC_TNFSD=…/tnfsd` (sinon sautés). Sur la carte : transport à choisir
+(série USB vers le PC, Wi-Fi, Ethernet).
+
 ### Essai sur la carte (Neo6502, 2026-10-01, `oric_diag` à 8b3a6b0, bus PIO, 345 MHz)
 
 Par la sonde SWD (`tools/oric_carte.py`) et à l'écran et à l'oreille par l'utilisateur :

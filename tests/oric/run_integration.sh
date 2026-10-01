@@ -15,6 +15,9 @@
 #   ORIC_FTDOS_DSK     FT-DOS disk (Jasmin)               ~/oriclib/games/dsk/FTDOS.dsk
 #   ORIC_BASIC_TAP     BASIC program (cc65 stub)          ~/oric-bench/sieve_cc65.tap
 #   ORIC_HIRES_TAP     8000 bytes at $A000, 1 byte short  ~/pichires/spell.tap
+#   ORIC_TNFSD         TNFS server (reference tnfsd: git clone
+#                      https://github.com/FujiNetWIFI/spectranet ; make -C tnfs/tnfsd OS=LINUX)
+#                      ~/spectranet/tnfs/tnfsd/bin/tnfsd ; it listens on UDP port 16384
 
 HEADLESS=${1:?usage: run_integration.sh path/to/oric_headless}
 SEDORIC_DSK=${ORIC_SEDORIC_DSK:-$HOME/legacy/disk/test.dsk}
@@ -23,9 +26,11 @@ NOOS_DSK=${ORIC_NOOS_DSK:-$HOME/Téléchargements/arcade1j.dsk}
 FTDOS_DSK=${ORIC_FTDOS_DSK:-$HOME/oriclib/games/dsk/FTDOS.dsk}
 BASIC_TAP=${ORIC_BASIC_TAP:-$HOME/oric-bench/sieve_cc65.tap}
 HIRES_TAP=${ORIC_HIRES_TAP:-$HOME/pichires/spell.tap}
+TNFSD=${ORIC_TNFSD:-$HOME/spectranet/tnfs/tnfsd/bin/tnfsd}
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+TNFSD_PID=
+trap '[ -n "$TNFSD_PID" ] && kill "$TNFSD_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
 pass=0; fail=0; skip=0
 
 # check NAME EXPECTED_TEXT [needs FILE] -- oric_headless arguments
@@ -65,6 +70,28 @@ check "Microdisc: disk without OS -> BASIC" "No operating system on disc" "$NOOS
 check "Microdisc: 3D Fongus title screen" "fb_hash=535B847E" "$GAME_DSK" -c microdisc -0 "$GAME_DSK" -f 1500 -H
 check "Jasmin: FT-DOS boot (auto-detected)" "fdc=jasmin" "$FTDOS_DSK" -c auto -0 "$FTDOS_DSK" -f 1000 -i
 check "Jasmin: BASIC usable after the boot" " 12" "$FTDOS_DSK" -c auto -0 "$FTDOS_DSK" -f 1000 -w 700 -t 'PRINT 12\n' -s
+
+# Files over the network (TNFS, devices/neo_tnfs.h): a reference tnfsd serving a
+# temporary directory; tape and disk read as streams, then a Sedoric SAVE read back
+if [ ! -x "$TNFSD" ]; then
+    echo "SKIP TNFS tests (missing $TNFSD)"; skip=$((skip + 3))
+elif ss -lun 2>/dev/null | grep -q ':16384 '; then
+    echo "SKIP TNFS tests (UDP port 16384 already in use)"; skip=$((skip + 3))
+else
+    mkdir -p "$TMP/tnfs"
+    [ -f "$BASIC_TAP" ] && cp "$BASIC_TAP" "$TMP/tnfs/SIEVE.TAP"
+    [ -f "$SEDORIC_DSK" ] && cp "$SEDORIC_DSK" "$TMP/tnfs/SED.DSK"
+    "$TNFSD" "$TMP/tnfs" > "$TMP/tnfsd.log" 2>&1 &
+    TNFSD_PID=$!
+    sleep 1
+    check "TNFS: CLOAD over the network" "531 CALL#50D" "$TMP/tnfs/SIEVE.TAP" -N 127.0.0.1 -T /SIEVE.TAP -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
+    check "TNFS: Sedoric streamed, DIR" "1414 free sectors" "$TMP/tnfs/SED.DSK" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1300 -w 900 -t ' DIR\n' -s
+    if [ -f "$TMP/tnfs/SED.DSK" ]; then
+        "$HEADLESS" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1800 -w 900 -t ' 10 PRINT 4242\nSAVE"RLNET"\n' > /dev/null 2>&1
+    fi
+    check "TNFS: Sedoric SAVE, then LOAD in a new session" "10 PRINT 4242" "$TMP/tnfs/SED.DSK" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1600 -w 900 -t ' LOAD"RLNET"\nLIST\n' -s
+    kill "$TNFSD_PID" 2>/dev/null; TNFSD_PID=
+fi
 
 echo "integration: $pass passed, $fail failed, $skip skipped"
 [ $fail -gt 0 ] && exit 1

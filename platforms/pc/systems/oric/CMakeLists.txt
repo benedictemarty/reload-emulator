@@ -71,3 +71,12 @@ if (NOT MSVC)
     target_compile_options(neo_storage_test PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 add_test(NAME neo_storage COMMAND neo_storage_test)
+
+#=== EXECUTABLE: neo_tnfs_test (TNFS client against a fake server)
+
+add_executable(neo_tnfs_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/test_neo_tnfs.c)
+target_include_directories(neo_tnfs_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+if (NOT MSVC)
+    target_compile_options(neo_tnfs_test PUBLIC -Wall -Wextra -Wsign-compare)
+endif()
+add_test(NAME neo_tnfs COMMAND neo_tnfs_test)

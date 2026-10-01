@@ -11,6 +11,9 @@
 //   -T FILE   insert FILE (.tap) in the tape drive
 //   -F        fast tape loading (BASIC 1.1 patched, devices/oric_tape_turbo.h)
 //   -R DIR    CSAVE: write the recorded files as DIR/NAME.TAP (devices/oric_tape_rec.h)
+//   -N HOST[:PORT]  files over the network: -0..-3 and -T are paths on the TNFS
+//             server HOST (devices/neo_tnfs.h), disks read and written as streams
+//             (as on the board), not loaded in memory
 //   -t TEXT   type TEXT after -w frames (default 60; \n = RETURN, ~ = pause of 50 frames)
 //   -w N      frames before typing
 //   -h N      hold each key N frames, then release it N frames (default 3)
@@ -86,6 +89,9 @@ static uint8_t* oric_nib_images[1];
 #define NEO_STORAGE_IMPL
 #include "devices/neo_storage.h"
 #include "../../../neo_storage_posix.h"
+#define NEO_TNFS_IMPL
+#include "devices/neo_tnfs.h"
+#include "../../../neo_tnfs_udp.h"
 
 // Files through neo_storage, as on the board: volume 0 = paths as given (-T),
 // volume 1 = the CSAVE directory (-R)
@@ -174,6 +180,7 @@ int main(int argc, char** argv) {
     const char* disk_file[4] = {0};
     const char* tape_file = 0;
     const char* rec_dir = 0;
+    const char* tnfs_host = 0;
     bool fast = false;
     const char* text = 0;
     const char* ppm_file = 0;
@@ -190,6 +197,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "-W") && v) { write_file = v; i++; }
         else if (!strcmp(a, "-T") && v) { tape_file = v; i++; }
         else if (!strcmp(a, "-R") && v) { rec_dir = v; i++; }
+        else if (!strcmp(a, "-N") && v) { tnfs_host = v; i++; }
         else if (!strcmp(a, "-F")) fast = true;
         else if (!strcmp(a, "-t") && v) { text = v; i++; }
         else if (!strcmp(a, "-w") && v) { wait_frames = atoi(v); i++; }
@@ -222,10 +230,51 @@ int main(int argc, char** argv) {
     };
     oric_init(&oric, &desc);
 
+    // Volume of the files: the local file system, or a TNFS server (-N)
+    static neo_tnfs_t tnfs;
+    static neo_tnfs_udp_t udp;
+    if (tnfs_host) {
+        char host[256];
+        snprintf(host, sizeof(host), "%s", tnfs_host);
+        char* colon = strchr(host, ':');
+        const uint16_t port = colon ? (uint16_t)atoi(colon + 1) : NEO_TNFS_PORT;
+        if (colon) *colon = 0;
+        if (!neo_tnfs_udp_open(&udp, host, port)) {
+            fprintf(stderr, "oric_headless: TNFS server %s unknown\n", tnfs_host);
+            return 2;
+        }
+        neo_tnfs_init(&tnfs, neo_tnfs_udp_xfer, &udp);
+        tnfs.sleep = neo_tnfs_udp_sleep;
+        if (!neo_tnfs_mount(&tnfs, "/", 0, 0)) {
+            fprintf(stderr, "oric_headless: TNFS mount on %s failed (error %02X)\n", tnfs_host, tnfs.error);
+            return 2;
+        }
+        printf("tnfs: mounted %s (server version %d.%d)\n", tnfs_host, tnfs.version >> 8, tnfs.version & 0xFF);
+        neo_storage_set(VOL_FILES, "Réseau", &neo_storage_tnfs_ops, &tnfs);
+    } else {
+        neo_storage_set(VOL_FILES, "Fichiers", &neo_storage_posix_ops, "");
+    }
+
     uint8_t* disk_data[4] = {0};
     uint32_t disk_size[4] = {0};
+    static neo_file_t disk_stream[4];
     for (int d = 0; d < 4; d++) {
         if (!disk_file[d]) continue;
+        if (tnfs_host) {
+            // Streamed, as on the board: tracks read and written through the volume
+            neo_file_t* f = &disk_stream[d];
+            bool ro = false;
+            if (!neo_file_open(f, VOL_FILES, disk_file[d], NEO_READ | NEO_WRITE)) {
+                ro = neo_file_open(f, VOL_FILES, disk_file[d], NEO_READ);
+            }
+            uint8_t header[ORIC_DSK_HEADER_SIZE];
+            if (!neo_file_is_open(f) || !neo_file_read(f, 0, header, sizeof(header)) ||
+                !wd1793_insert_streamed(&oric.wd, d, header, f->size, neo_file_read_cb, ro ? 0 : neo_file_write_cb, f)) {
+                fprintf(stderr, "oric_headless: %s: cannot read a MFM_DISK image over TNFS\n", disk_file[d]);
+                return 2;
+            }
+            continue;
+        }
         disk_data[d] = load_file(disk_file[d], &disk_size[d]);
         if (!oric_insert_dsk(&oric, d, disk_data[d], disk_size[d], false)) {
             fprintf(stderr, "oric_headless: %s is not a MFM_DISK image\n", disk_file[d]);
@@ -236,7 +285,7 @@ int main(int argc, char** argv) {
     if (!strcmp(fdc_name, "pravetz")) fdc = ORIC_FDC_PRAVETZ;
     else if (!strcmp(fdc_name, "microdisc")) fdc = ORIC_FDC_MICRODISC;
     else if (!strcmp(fdc_name, "jasmin")) fdc = ORIC_FDC_JASMIN;
-    else if (!strcmp(fdc_name, "auto") && disk_data[0]) fdc = oric_dsk_interface(&oric, &oric.wd.disk[0]);
+    else if (!strcmp(fdc_name, "auto") && disk_file[0]) fdc = oric_dsk_interface(&oric, &oric.wd.disk[0]);
     if (fdc != ORIC_FDC_NONE && !oric_set_fdc(&oric, fdc)) {
         fprintf(stderr, "oric_headless: interface %s unavailable (ROM missing)\n", fdc_name);
         return 3;
@@ -244,7 +293,6 @@ int main(int argc, char** argv) {
     oric_reset(&oric);
 
     // Tape read as a stream, as on the board (neo_file_read_cb)
-    neo_storage_set(VOL_FILES, "Fichiers", &neo_storage_posix_ops, "");
     static neo_file_t tap_file;
     if (tape_file) {
         if (!neo_file_open(&tap_file, VOL_FILES, tape_file, NEO_READ) ||
@@ -330,6 +378,18 @@ int main(int argc, char** argv) {
             return 2;
         }
         fclose(f);
+    }
+    if (tnfs_host) {
+        for (int d = 0; d < 4; d++) {
+            if (neo_file_is_open(&disk_stream[d])) {
+                wd1793_eject(&oric.wd, d);   // Cached track written back first
+                neo_file_close(&disk_stream[d]);
+            }
+        }
+        neo_file_close(&tap_file);
+        printf("tnfs: %u request(s), %u resent\n", (unsigned)tnfs.sent, (unsigned)tnfs.resent);
+        neo_tnfs_umount(&tnfs);
+        neo_tnfs_udp_close(&udp);
     }
     return 0;
 }
