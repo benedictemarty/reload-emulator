@@ -163,7 +163,11 @@ def envoyer(fichiers):
     s = symboles()
     if "diag_file_cmd" not in s:
         raise SystemExit("ELF sans boîte aux lettres : compiler et flasher oric_diag")
-    CHUNK = 8192
+    # Taille du tampon du firmware (diag_file_buf), lue dans l'ELF : elle a changé (8 Ko,
+    # puis 2 Ko le 2026-10-01 pour la RAM d'oric_diag)
+    taille = subprocess.run(["arm-none-eabi-nm", "-S", ELF], capture_output=True, text=True).stdout
+    m = re.search(r"^[0-9a-f]+ ([0-9a-f]+) [bBdD] diag_file_buf$", taille, re.M)
+    CHUNK = int(m.group(1), 16) if m else 2048
     cmd, status, length = s["diag_file_cmd"], s["diag_file_status"], s["diag_file_len"]
     with tempfile.TemporaryDirectory() as d:
         # Chaque commande est traitée à la trame suivante (20 ms) : au-delà de 10 s, le

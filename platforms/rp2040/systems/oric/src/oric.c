@@ -745,7 +745,7 @@ static void usb_poll(void) {
 /*-- Bench: files written to the USB drive over SWD (tools/oric_carte.py envoyer) -*/
 // The host writes the name / a chunk, then the command; core 0 runs it in the
 // main loop and clears diag_file_cmd (result in diag_file_status: FatFs code)
-#define DIAG_FILE_CHUNK 8192
+#define DIAG_FILE_CHUNK 2048   // tools/oric_carte.py reads the size from the ELF (was 8192: RAM of oric_diag)
 enum { DIAG_FILE_CREATE = 1, DIAG_FILE_WRITE = 2, DIAG_FILE_CLOSE = 3, DIAG_FILE_RESCAN = 4 };
 volatile uint32_t diag_file_cmd, diag_file_status, diag_file_len;
 volatile char diag_file_name[64];
