@@ -67,7 +67,11 @@
 #else
 #include "chips/mos6502cpu.h"
 #endif
+#ifdef ORIC_VIA6522
+#include "chips/via6522.h"   // Trial of the common VIA (Neo6502Vic20)
+#else
 #include "chips/mos6522via.h"
+#endif
 #include "chips/ay38910psg.h"
 #include "chips/kbd.h"
 #include "chips/mem.h"

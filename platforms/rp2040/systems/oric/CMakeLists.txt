@@ -71,3 +71,6 @@ oric_diag_variant(oric_diag_calls)                     # Bus by wdc65C02cpu.h ca
 oric_diag_variant(oric_diag_cold ORIC_COLD=1)          # Calls, per-cycle code left in flash (before sprint 1)
 oric_diag_variant(oric_diag_inline ORIC_BUS_INLINE=1)  # SIO bus inlined in oric_tick (wdc65C02bus.h)
 oric_diag_variant(oric_diag_295 ORIC_BUS_PIO=1 ORIC_VIDEO_295=1)  # As oric_diag, standard 800x480 at 295.2 MHz
+# Trial of the common VIA (Neo6502Vic20's via6522, functions in RAM): docs/FUSION-ORIC-TELESTRAT.md step 9
+oric_diag_variant(oric_diag_via6522 ORIC_BUS_PIO=1 ORIC_VIA6522=1 "VIA6522_HOT=__attribute__((section(\".time_critical.via\")))")
+target_sources(oric_diag_via6522 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/chips/via6522.c)

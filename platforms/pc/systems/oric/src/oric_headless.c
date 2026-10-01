@@ -79,7 +79,11 @@ static uint8_t* oric_nib_images[1];
 #else
 #include "chips/w65c02cpu.h"    // W65C02, as on the Neo6502 board (default)
 #endif
+#ifdef ORIC_VIA6522
+#include "chips/via6522.h"   // Trial of the common VIA (Neo6502Vic20)
+#else
 #include "chips/mos6522via.h"
+#endif
 #include "chips/ay38910psg.h"
 #include "chips/kbd.h"
 #include "chips/mem.h"
@@ -410,8 +414,12 @@ int main(int argc, char** argv) {
         static const char* names[] = {"none", "pravetz", "microdisc", "jasmin"};
         printf("pc=%04X md_ctrl=%02X irq=%d iflag=%d fdc=%s romdis=%d diskrom=%d olay=%d jasmin_rom=%d track=%d head0=%d status=%02X tape_pos=%u via_ier=%02X via_ifr=%02X acr=%02X t1_latch=%04X\n",
                oric.cpu.PC, oric.md_ctrl, oric.cpu.irq, oric.cpu.iflag, names[oric.fdc_type], oric.romdis, oric.diskrom, oric.jasmin_olay, oric.jasmin_rom_on, oric.wd.track,
-               oric.wd.head[0], oric.wd.status, (unsigned)oric.tape.pos, oric.via.intr.ier, oric.via.intr.ifr, oric.via.acr,
-               oric.via.t1.latch);
+               oric.wd.head[0], oric.wd.status, (unsigned)oric.tape.pos,
+#ifdef ORIC_VIA6522
+               oric.via.ier, oric.via.ifr, oric.via.acr, oric.via.t1_latch);
+#else
+               oric.via.intr.ier, oric.via.intr.ifr, oric.via.acr, oric.via.t1.latch);
+#endif
     }
     if (show_printer) {
         printf("printer: %d byte(s): ", printer_len);

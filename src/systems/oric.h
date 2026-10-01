@@ -22,7 +22,8 @@
 //
 // - chips/chips_common.h
 // - chips/wdc65C02cpu.h | chips/mos6502cpu.h
-// - chips/mos6522via.h
+// - chips/mos6522via.h, or chips/via6522.h with ORIC_VIA6522 (the VIA of Neo6502Vic20,
+//   61/61 VICE tests; trial of the common VIA, docs/FUSION-ORIC-TELESTRAT.md step 9)
 // - chips/ay38910psg.h
 // - chips/kbd.h
 // - chips/mem.h
@@ -145,7 +146,11 @@ typedef struct {
 // Oric emulator state
 typedef struct {
     MOS6502CPU_T cpu;
+#ifdef ORIC_VIA6522
+    via6522_t via;
+#else
     mos6522via_t via;
+#endif
     ay38910psg_t psg;
     kbd_t kbd;
     mem_t mem;
@@ -204,6 +209,63 @@ typedef struct {
     uint8_t printer_ack;
 
 } oric_t;
+
+/*-- VIA access: mos6522via (default) or via6522 (ORIC_VIA6522) ----------------
+ * Every use of the VIA by the Oric goes through these functions: registers, the
+ * port B outputs (keyboard line, printer STROBE, tape motor), PB7 (CSAVE), port A
+ * (PSG bus, printer data), CA2/CB2 (PSG BC1/BDIR), CA1 (printer ACK), CB1 (tape
+ * input), the 4-cycle tick and the IRQ line. */
+#ifdef ORIC_VIA6522
+static inline uint8_t _oric_via_read(oric_t* sys, uint8_t reg) { return via_read(&sys->via, reg); }
+static inline void _oric_via_write(oric_t* sys, uint8_t reg, uint8_t v) { via_write(&sys->via, reg, v); }
+static inline uint8_t _oric_via_pb_out(oric_t* sys) { return sys->via.orb & sys->via.ddrb; }
+static inline uint8_t _oric_via_pa_out(oric_t* sys) { return sys->via.ora & sys->via.ddra; }
+static inline uint8_t _oric_via_pa_pins(oric_t* sys) {
+    return (uint8_t)((sys->via.ora & sys->via.ddra) | (sys->via.ira & ~sys->via.ddra));
+}
+static inline bool _oric_via_pb7(oric_t* sys) { return via_get_pb7(&sys->via); }
+static inline bool _oric_via_ca2(oric_t* sys) { return via_get_ca2(&sys->via); }
+static inline bool _oric_via_cb2(oric_t* sys) { return via_get_cb2(&sys->via); }
+static inline void _oric_via_psg_in(oric_t* sys, uint8_t v) { sys->via.ira = v; }   // PSG on the port A bus (READ)
+// Printer ACK: an active-low pulse on CA1, a pulled-up line (idle high in via6522):
+// « ACK up » of the caller = the line pulled low, « down » = released (high again)
+static inline void _oric_via_ca1(oric_t* sys, bool level) { via_set_ca1(&sys->via, !level); }
+static inline void _oric_via_cb1(oric_t* sys, bool level) {
+    if (level != sys->via.cb1_pin) via_set_cb1(&sys->via, level);   // Only on a change: keeps the lazy mode
+}
+static inline bool _oric_via_tick4(oric_t* sys) {
+    via_tick(&sys->via);
+    via_tick(&sys->via);
+    via_tick(&sys->via);
+    via_tick(&sys->via);
+    return sys->via.irq_line;
+}
+// The keyboard is read through the port B callback when the 6502 reads ORB
+#define ORIC_VIA_KBD_CALLBACK 1
+// Port B input pins when the 6502 reads ORB: PB3 = a key of the selected line
+// (PB0-PB2) is down, among the columns chosen through the PSG's port A
+static uint8_t _oric_via_portb_read(void* user_data) {
+    oric_t* sys = (oric_t*)user_data;
+    const uint8_t line = (uint8_t)(_oric_via_pb_out(sys) & 7);
+    return (kbd_scan_lines(&sys->kbd) & (1 << line)) ? 0xFF : (uint8_t)~(1 << 3);
+}
+#else
+static inline uint8_t _oric_via_read(oric_t* sys, uint8_t reg) { return mos6522via_read(&sys->via, reg); }
+static inline void _oric_via_write(oric_t* sys, uint8_t reg, uint8_t v) { mos6522via_write(&sys->via, reg, v); }
+static inline uint8_t _oric_via_pb_out(oric_t* sys) { return sys->via.pb.outr & sys->via.pb.ddr; }
+static inline uint8_t _oric_via_pa_out(oric_t* sys) { return sys->via.pa.outr & sys->via.pa.ddr; }
+static inline uint8_t _oric_via_pa_pins(oric_t* sys) { return mos6522via_get_pa(&sys->via); }
+static inline bool _oric_via_pb7(oric_t* sys) { return (mos6522via_get_pb(&sys->via) >> 7) & 1; }
+static inline bool _oric_via_ca2(oric_t* sys) { return mos6522via_get_ca2(&sys->via); }
+static inline bool _oric_via_cb2(oric_t* sys) { return mos6522via_get_cb2(&sys->via); }
+static inline void _oric_via_psg_in(oric_t* sys, uint8_t v) { mos6522via_set_pa(&sys->via, v); }
+static inline void _oric_via_ca1(oric_t* sys, bool level) { mos6522via_set_ca1(&sys->via, level); }
+static inline void _oric_via_cb1(oric_t* sys, bool level) {
+    // Only when it changes (or an edge is pending): keeps the VIA's lazy mode
+    if (level != sys->via.pb.c1_in || sys->via.pb.c1_triggered) mos6522via_set_cb1(&sys->via, level);
+}
+static inline bool _oric_via_tick4(oric_t* sys) { return mos6522via_tick(&sys->via, 4); }
+#endif
 
 // Oric interface
 
@@ -314,8 +376,13 @@ void oric_init(oric_t* sys, const oric_desc_t* desc) {
 
     MOS6502CPU_INIT(&sys->cpu, &(MOS6502CPU_DESC_T){0});
 
+#ifdef ORIC_VIA6522
+    via_init(&sys->via);   // T1 idle (t1_running false) until T1C-H is written, as below
+    via_set_port_callbacks(&sys->via, 0, 0, _oric_via_portb_read, 0, sys);
+#else
     mos6522via_init(&sys->via);
     sys->via.t1.t_bit = true;   // One-shot T1 idle until T1C-H is written (see oric_reset)
+#endif
     ay38910psg_init(&sys->psg, &(ay38910psg_desc_t){.type = AY38910PSG_TYPE_8912,
                                                     .in_cb = _oric_psg_in,
                                                     .out_cb = _oric_psg_out,
@@ -517,11 +584,15 @@ void oric_nmi(oric_t* sys) {
 
 void oric_reset(oric_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
-    mos6522via_reset(&sys->via);
     // As in Oricutron, a one-shot T1 raises no interrupt until T1C-H is written: with the
     // Microdisc the EPROM boots before BASIC programs T1, and Sedoric's disk routines lose
     // their end-of-command interrupt if a stray T1 interrupt comes in the middle of a read
+#ifdef ORIC_VIA6522
+    via_reset(&sys->via);   // T1 not running after reset
+#else
+    mos6522via_reset(&sys->via);
     sys->via.t1.t_bit = true;
+#endif
     ay38910psg_reset(&sys->psg);
     if (sys->fdc.valid) {
         disk2_fdc_reset(&sys->fdc);
@@ -560,9 +631,9 @@ static ORIC_HOT void _oric_microdisc_rw(oric_t* sys, uint16_t addr, bool rw) {
         }
     } else {
         if (rw) {
-            MOS6502CPU_SET_DATA(&sys->cpu, mos6522via_read(&sys->via, addr & 0xF));
+            MOS6502CPU_SET_DATA(&sys->cpu, _oric_via_read(sys, addr & 0xF));
         } else {
-            mos6522via_write(&sys->via, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
+            _oric_via_write(sys, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
         }
     }
 }
@@ -594,9 +665,9 @@ static ORIC_HOT void _oric_jasmin_rw(oric_t* sys, uint16_t addr, bool rw) {
         }
     } else {
         if (rw) {
-            MOS6502CPU_SET_DATA(&sys->cpu, mos6522via_read(&sys->via, addr & 0xF));
+            MOS6502CPU_SET_DATA(&sys->cpu, _oric_via_read(sys, addr & 0xF));
         } else {
-            mos6522via_write(&sys->via, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
+            _oric_via_write(sys, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
         }
     }
 }
@@ -607,8 +678,12 @@ static void _oric_jasmin_press_boot(oric_t* sys) {
     sys->romdis = true;
     sys->jasmin_olay = false;
     _oric_update_map(sys);
+#ifdef ORIC_VIA6522
+    via_reset(&sys->via);
+#else
     mos6522via_reset(&sys->via);
     sys->via.t1.t_bit = true;
+#endif
     MOS6502CPU_RESET(&sys->cpu);
 }
 
@@ -634,9 +709,9 @@ static ORIC_HOT void _oric_mem_rw(oric_t* sys, uint16_t addr, bool rw) {
             _oric_jasmin_rw(sys, addr, rw);
         } else if ((addr >= 0x0300) && (addr <= 0x030F)) {
             if (rw) {
-                MOS6502CPU_SET_DATA(&sys->cpu, mos6522via_read(&sys->via, addr & 0xF));
+                MOS6502CPU_SET_DATA(&sys->cpu, _oric_via_read(sys, addr & 0xF));
             } else {
-                mos6522via_write(&sys->via, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
+                _oric_via_write(sys, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
             }
         } else if ((addr >= 0x0310) && (addr <= 0x031F)) {
             if (sys->fdc.valid) {
@@ -725,18 +800,14 @@ static inline void _oric_update_tape(oric_t* sys, uint8_t pb_out) {
         if (!motor) oric_tape_rec_motor_off(&sys->tape_rec);
     }
     if (motor && sys->tape_rec.enabled) {
-        oric_tape_rec_level(&sys->tape_rec, (mos6522via_get_pb(&sys->via) >> 7) & 1, t);
+        oric_tape_rec_level(&sys->tape_rec, _oric_via_pb7(sys), t);
     }
     if (!tp->inserted) return;
     while (oric_tape_running(tp) && (int32_t)(t - sys->tape_due) >= 0) {
         oric_tape_toggle(tp);
         sys->tape_due += (uint32_t)oric_tape_next(tp);
     }
-    // CB1 only when it changes (or an edge is pending): keeps the VIA's lazy mode
-    const bool cb1 = tp->level != 0;
-    if (cb1 != sys->via.pb.c1_in || sys->via.pb.c1_triggered) {
-        mos6522via_set_cb1(&sys->via, cb1);
-    }
+    _oric_via_cb1(sys, tp->level != 0);
 }
 
 // One cycle. The work done every 4 cycles (system_ticks multiple of 4) is grouped
@@ -773,7 +844,7 @@ static inline __attribute__((always_inline)) void _oric_tick(oric_t* sys) {
         }
 
         // Tick VIA (lazy: while no timer can reach zero, only the cycles are counted)
-        sys->via_irq = mos6522via_tick(&sys->via, 4);
+        sys->via_irq = _oric_via_tick4(sys);
     }
 
     // Tick WD1793 (Microdisc, Jasmin)
@@ -808,19 +879,20 @@ static inline __attribute__((always_inline)) void _oric_tick(oric_t* sys) {
     if (quad) {
 
         // Update PSG state
-        if (mos6522via_get_cb2(&sys->via)) {
-            const uint8_t psg_data = mos6522via_get_pa(&sys->via);
-            if (mos6522via_get_ca2(&sys->via)) {
+        if (_oric_via_cb2(sys)) {
+            const uint8_t psg_data = _oric_via_pa_pins(sys);
+            if (_oric_via_ca2(sys)) {
                 ay38910psg_latch_address(&sys->psg, psg_data);
             } else {
                 ay38910psg_write(&sys->psg, psg_data);
             }
         }
 
-        if (!mos6522via_get_cb2(&sys->via)) {
-            mos6522via_set_pa(&sys->via, ay38910psg_read(&sys->psg));
+        if (!_oric_via_cb2(sys)) {
+            _oric_via_psg_in(sys, ay38910psg_read(&sys->psg));
         }
 
+#ifndef ORIC_VIA_KBD_CALLBACK
         // PB0..PB2: select keyboard matrix line
         uint8_t pb = mos6522via_get_pb(&sys->via);
         uint8_t line = pb & 7;
@@ -834,19 +906,20 @@ static inline __attribute__((always_inline)) void _oric_tick(oric_t* sys) {
                 mos6522via_set_pb(&sys->via, data);
             }
         }
+#endif
 
         // Printer port: data on port A, STROBE = PB4 (falling edge), ACK on CA1.
         // As in Oricutron, a printer is always connected: it acknowledges each
         // byte (CA1 up, then down 40 us later)
-        uint8_t pb_out = sys->via.pb.outr & sys->via.pb.ddr;
+        uint8_t pb_out = _oric_via_pb_out(sys);
         if ((sys->printer_strobe & 0x10) && !(pb_out & 0x10)) {
             if (sys->printer_cb) {
-                sys->printer_cb(sys->via.pa.outr & sys->via.pa.ddr, sys->printer_user_data);
+                sys->printer_cb(_oric_via_pa_out(sys), sys->printer_user_data);
             }
-            mos6522via_set_ca1(&sys->via, true);
+            _oric_via_ca1(sys, true);
             sys->printer_ack = 10;
         } else if (sys->printer_ack > 0 && --sys->printer_ack == 0) {
-            mos6522via_set_ca1(&sys->via, false);
+            _oric_via_ca1(sys, false);
         }
         sys->printer_strobe = pb_out;
 
