@@ -72,7 +72,8 @@ typedef struct {
     int header_n;
     char name[17];
     int name_n;
-    uint32_t remaining;  // octets de données restants
+    uint32_t remaining;  // octets de données restants (sans objet si length_unknown)
+    bool length_unknown; // STORE d'un tableau : enregistré jusqu'à l'arrêt du moteur
     bool file_open;
     uint32_t written;    // octets de données écrits
     char file[24];       // nom du fichier en cours ou dernier écrit
@@ -94,7 +95,10 @@ static inline void _oric_tape_rec_close(oric_tape_rec_t* r) {
 }
 
 // Octet reçu
-static inline void _oric_tape_rec_byte(oric_tape_rec_t* r, uint8_t b) {
+// Called once per byte of a recording: kept apart (noinline), in flash, so that it is
+// not pulled into a system's hot tick in RAM (the Telestrat saw +832 bytes of RAM when
+// GCC inlined it into _telestrat_step)
+static __attribute__((noinline, unused)) void _oric_tape_rec_byte(oric_tape_rec_t* r, uint8_t b) {
     switch (r->phase) {
         case ORIC_REC_SYNC:
             if (b == 0x24) r->phase = ORIC_REC_HEADER, r->header_n = 0;
@@ -125,6 +129,11 @@ static inline void _oric_tape_rec_byte(oric_tape_rec_t* r, uint8_t b) {
                 const uint32_t end = (uint32_t)r->header[4] << 8 | r->header[5];
                 const uint32_t start = (uint32_t)r->header[6] << 8 | r->header[7];
                 r->remaining = end >= start ? end - start + 1 : 0;
+                // STORE (tableau, type $40) : la ROM BASIC 1.1 envoie l'en-tête ($E99D) AVANT de
+                // fixer début et fin ($EA9E) : ces champs sont périmés (vu : fin $0000, début
+                // $2400). Longueur inconnue : enregistré jusqu'à l'arrêt du moteur
+                // (oric_tape_rec_motor_off). Trouvé par le Telestrat.
+                r->length_unknown = (r->header[2] & 0x40) != 0;
                 r->written = 0;
                 r->file_open = r->out.open(r->out.ctx, r->file);
                 if (r->file_open) {
@@ -134,13 +143,13 @@ static inline void _oric_tape_rec_byte(oric_tape_rec_t* r, uint8_t b) {
                     r->out.write(r->out.ctx, (const uint8_t*)r->name, (uint32_t)r->name_n + 1);
                 }
                 r->phase = ORIC_REC_DATA;
-                if (!r->remaining) _oric_tape_rec_close(r);
+                if (!r->remaining && !r->length_unknown) _oric_tape_rec_close(r);
             }
             break;
         case ORIC_REC_DATA:
             if (r->file_open) r->out.write(r->out.ctx, &b, 1);
             r->written++;
-            if (--r->remaining == 0) _oric_tape_rec_close(r);
+            if (!r->length_unknown && --r->remaining == 0) _oric_tape_rec_close(r);
             break;
     }
 }
@@ -226,3 +235,6 @@ static inline void oric_tape_rec_motor_off(oric_tape_rec_t* r) {
 }
 
 static inline bool oric_tape_rec_active(const oric_tape_rec_t* r) { return r->file_open; }
+// Longueur de l'enregistrement en cours connue (faux pendant un STORE de tableau : un
+// bandeau affiche alors les octets écrits plutôt qu'un pourcentage)
+static inline bool oric_tape_rec_length_known(const oric_tape_rec_t* r) { return !r->length_unknown; }

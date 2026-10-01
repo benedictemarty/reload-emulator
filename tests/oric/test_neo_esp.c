@@ -137,6 +137,12 @@ int main(void) {
     CHECK(neo_esp_prepare(&e4, 0, 0) && neo_esp_tnfs_usb(&e4) == 1);
     modem.tnfs_usb = -1;
     CHECK(neo_esp_tnfs_usb(&e4) == -1);
+    // Host filter on in the modem: AT+CWJAP_DEF locked (ERROR), the saved network is used
+    neo_esp_fake_init(&modem);
+    modem.filter = true;
+    static neo_esp_t e5;
+    neo_esp_init(&e5, host_write, host_read, 0);
+    CHECK(neo_esp_open_udp(&e5, "192.168.1.10", 16384, "MaBox", "secret") && modem.ssid[0] == 0);
     // Unknown host: CIPSTART fails
     static neo_esp_t e2;
     neo_esp_fake_init(&modem);

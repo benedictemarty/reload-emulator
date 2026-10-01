@@ -202,7 +202,10 @@ bool neo_esp_prepare(neo_esp_t* e, const char* ssid, const char* password) {
         if (snprintf(cmd, sizeof(cmd), "AT+CWJAP_DEF=\"%s\",\"%s\"", ssid, password ? password : "") >= (int)sizeof(cmd)) {
             return false;
         }
-        if (!neo_esp_command(e, cmd, 35000)) return false;   // The modem retries up to 30 s (Neo6502picowifi)
+        // The modem retries up to 30 s (Neo6502picowifi). ERROR is not fatal: with its host
+        // filter on, the network is locked (« locked by host filter… ») and already set,
+        // so the wait for an IP address below decides
+        neo_esp_command(e, cmd, 35000);
     }
     // Wait for an IP address (STATUS:2 got IP, 3 connected, 4 disconnected link): up to 30 s
     bool ip = false;

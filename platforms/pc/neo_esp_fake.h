@@ -43,6 +43,7 @@ typedef struct {
     int tnfs_in_len;
     int tnfs_usb;      // AT$TNFSUSB: 0/1 ; -1 : commande inconnue (ancien firmware)
     uint32_t resets;   // AT+RST reçus
+    bool filter;       // Filtrage d'hôtes actif (picowifi 4e1fe5e) : AT+CWJAP_DEF verrouillé
 } neo_esp_fake_t;
 
 static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
@@ -58,6 +59,7 @@ static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
     m->tnfs_in_len = 0;
     m->tnfs_usb = 0;
     m->resets = 0;
+    m->filter = false;
 }
 
 static inline void _fake_out(neo_esp_fake_t* m, const char* s) { m->out(m->ctx, (const uint8_t*)s, (int)strlen(s)); }
@@ -81,6 +83,8 @@ static inline void _fake_command(neo_esp_fake_t* m, const char* cmd) {
     } else if (!strcmp(cmd, "ATE0")) {
         m->echo = false;
         _fake_out(m, "\r\nOK\r\n");
+    } else if (!strncmp(cmd, "AT+CWJAP_DEF=", 13) && m->filter) {
+        _fake_out(m, "locked by host filter (AT+NHOSTS)\r\n\r\nERROR\r\n");
     } else if (!strncmp(cmd, "AT+CWJAP_DEF=", 13)) {
         const char* p = cmd + 13;
         char ssid[33], pass[65];

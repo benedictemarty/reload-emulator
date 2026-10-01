@@ -84,7 +84,7 @@ extern "C" {
 #endif
 
 // Bump snapshot version when oric_t memory layout changes
-#define ORIC_SNAPSHOT_VERSION (3)   // 2: sample_rate, sample_acc (audio clock); 3: sample_rate_q8
+#define ORIC_SNAPSHOT_VERSION (4)   // 2: sample_rate, sample_acc (audio clock); 3: sample_rate_q8; 4: tape_rec.length_unknown
 
 #define ORIC_FREQUENCY     (1000000)  // 1 MHz
 #define ORIC_MAX_TAPE_SIZE (1 << 16)  // Max size of tape file in bytes

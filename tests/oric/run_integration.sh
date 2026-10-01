@@ -64,6 +64,10 @@ check "tape: CLOAD fast (patched BASIC 1.1)" "531 CALL#50D" "$BASIC_TAP" -T "$BA
 # CSAVE to a .tap file, then CLOAD of that file
 "$HEADLESS" -f 1600 -w 150 -R "$TMP" -t '10 PRINT 4242\nCSAVE"RLTEST"\n' > /dev/null 2>&1
 check "tape: CSAVE then CLOAD" "10 PRINT 4242" "$TMP/RLTEST.TAP" -T "$TMP/RLTEST.TAP" -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
+# STORE of an array: BASIC 1.1 sends the header before setting start / end (stale
+# fields, here end $0000 start $2400, as seen by the Telestrat): recorded to the motor stop
+"$HEADLESS" -f 2600 -w 150 -R "$TMP" -t 'DOKE #2A9,#2400:DOKE #2AB,0\n~~ DIM A(5):A(3)=42:A(5)=7\n~~ STORE A,"TAB"\n' > /dev/null 2>&1
+check "tape: STORE array then RECALL" " 42  7" "$TMP/TAB.TAP" -T "$TMP/TAB.TAP" -f 2600 -w 150 -t ' DIM A(5)\n~~ RECALL A,"TAB"\n~~~~~~~~~~~~ PRINT A(3);A(5)\n' -s
 # 8014 bytes, one short of its header: the padding $00 is sent too (position 8015)
 check "tape: CLOAD 8000 bytes, padded" "tape_pos=8015 " "$HIRES_TAP" -T "$HIRES_TAP" -f 5500 -w 150 -t 'CLOAD""\n' -i
 check "Microdisc: Sedoric 4.0 boot + DIR" "1414 free sectors" "$SEDORIC_DSK" -c microdisc -0 "$SEDORIC_DSK" -f 1300 -w 900 -t ' DIR\n' -s
