@@ -165,6 +165,15 @@ Conséquences :
 - Le banc se trouve dans le dossier temporaire de la session (`tgr/src/via6522.c`, variables
   `SV_DRIVE`, `SV_FREE`, `SV_LATCH`, `VIA_DIFF`, `VIA_T1`) ; il n'est pas versionné.
 
+**Écarts berzerk / defender du golden (explication de Tangerine, 2026-10-02).** Ils ne
+viennent d'aucune des deux VIA mais d'un arrondi de MAME. À 750 kHz, la période vaut
+1 333 333 333 333,33 as ; MAME la tronque, et après 750 000 cycles son 6502 est à
+999 999 999 999 750 000 as, juste avant la seconde 1. Au-delà, `attotime_to_clocks` compte un
+cycle de moins pour les timers libres de la VIA, qui se lisent alors une unité trop haut (defender,
+première lecture de T2 après 1 s : $9D chez MAME, $9C en décompte régulier). Comparés à
+0,9 s, les deux jeux sont identiques à MAME octet pour octet avec la VIA du socle : golden de
+Tangerine 16/16 (v0.21.0). Seul écart restant : le son de berzerk (point D, monostable).
+
 ## VIA unique : rejeu du Telestrat (2026-10-02)
 
 Portage dans une copie de Neo6502TeleStrat (3ce3d59), sans écrire dans son dépôt :
