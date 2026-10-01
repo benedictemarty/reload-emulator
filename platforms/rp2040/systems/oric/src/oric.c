@@ -80,6 +80,8 @@
 #include "devices/oric_fdc_rom.h"
 #include "devices/oric_dsk.h"
 #include "devices/wd1793.h"
+#define NEO_STORAGE_IMPL
+#include "devices/neo_storage.h"
 #include "systems/oric.h"
 #define ORIC_PLANES_RAM __attribute__((section(".time_critical.oric_planes")))
 #include "systems/oric_planes.h"
@@ -104,6 +106,7 @@
 #include "tusb.h"
 #include "neo_multiboot.h"
 #include "ff.h"
+extern const neo_storage_ops_t neo_storage_fatfs_ops;   // neo_storage_fatfs.c (socle)
 
 // Control panel (F1): grid of 8 x 8 cells covering the output, each buffer line shown twice
 #ifdef OLIMEX_NEO6502
@@ -187,6 +190,7 @@ oric_desc_t oric_desc(void) {
 void app_init(void) {
     (void)diag_layout[0];   // Kept by the linker for the host tools
     oric_desc_t desc = oric_desc();
+    neo_storage_set(NEO_VOL_USB, "Clé USB", &neo_storage_fatfs_ops, "");   // Served once the drive is mounted (usb_poll)
     oric_init(&state.oric, &desc);
     oric_set_sample_rate_q8(&state.oric, audio_pwm_rate_q8(22050));   // The rate the PWM really consumes
     oric_menu_init(&menu);
@@ -357,10 +361,9 @@ extern bool msc_inquiry_complete;
 extern void msc_poll(void);
 
 static bool usb_scanned;
-static FIL dsk_fil[ORIC_MENU_DRIVES];
-static bool dsk_open[ORIC_MENU_DRIVES];
-static FIL tap_fil;
-static bool tap_open;
+// Files of the USB drive through neo_storage (volume NEO_VOL_USB, FatFs driver of the socle)
+static neo_file_t dsk_file[ORIC_MENU_DRIVES];
+static neo_file_t tap_file;
 
 static bool has_ext(const char *name, const char *ext) {
     size_t n = strlen(name), e = strlen(ext);
@@ -373,53 +376,29 @@ static bool has_ext(const char *name, const char *ext) {
     return true;
 }
 
-// Track reader / writer of the WD1793 (ctx = drive)
-static bool dsk_read(void *ctx, uint32_t offset, uint8_t *buf, uint32_t len) {
-    FIL *f = &dsk_fil[(intptr_t)ctx];
-    UINT n = 0;
-    return f_lseek(f, offset) == FR_OK && f_read(f, buf, len, &n) == FR_OK && n == len;
-}
-
-static bool dsk_write(void *ctx, uint32_t offset, const uint8_t *buf, uint32_t len) {
-    FIL *f = &dsk_fil[(intptr_t)ctx];
-    UINT n = 0;
-    return f_lseek(f, offset) == FR_OK && f_write(f, buf, len, &n) == FR_OK && n == len && f_sync(f) == FR_OK;
-}
-
-static bool tap_read(void *ctx, uint32_t offset, uint8_t *buf, uint32_t len) {
-    (void)ctx;
-    UINT n = 0;
-    return f_lseek(&tap_fil, offset) == FR_OK && f_read(&tap_fil, buf, len, &n) == FR_OK && n == len;
-}
-
 static void usb_scan(void);
 
 // CSAVE: one NAME.TAP file per recording in the root of the USB drive (oric_tape_rec.h)
-static FIL rec_fil;
-static bool rec_open;
+static neo_file_t rec_file;
 static bool rec_file_open(void *ctx, const char *name) {
     (void)ctx;
-    if (rec_open) f_close(&rec_fil);
-    rec_open = f_open(&rec_fil, name, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK;
-    return rec_open;
+    neo_file_close(&rec_file);
+    return neo_file_open(&rec_file, NEO_VOL_USB, name, NEO_WRITE | NEO_CREATE);
 }
 static void rec_file_write(void *ctx, const uint8_t *data, uint32_t len) {
     (void)ctx;
-    UINT n;
-    if (rec_open) f_write(&rec_fil, data, len, &n);
+    if (neo_file_is_open(&rec_file)) neo_file_append(&rec_file, data, len);
 }
 static void rec_file_close(void *ctx) {
     (void)ctx;
-    if (rec_open) f_close(&rec_fil);
-    rec_open = false;
+    neo_file_close(&rec_file);
     usb_scan();   // List the new file (the configuration is not applied again)
 }
 static const oric_tape_rec_out_t rec_out = {rec_file_open, rec_file_write, rec_file_close, 0};
 
 static void dsk_close(int d) {
     wd1793_eject(&state.oric.wd, d);   // Writes the cached track back first
-    if (dsk_open[d]) f_close(&dsk_fil[d]);
-    dsk_open[d] = false;
+    neo_file_close(&dsk_file[d]);
     menu.drive[d][0] = 0;
     menu.drive_ro[d] = false;
 }
@@ -427,17 +406,15 @@ static void dsk_close(int d) {
 static bool dsk_insert(int d, const char *name) {
     dsk_close(d);
     bool ro = false;
-    if (f_open(&dsk_fil[d], name, FA_READ | FA_WRITE) != FR_OK) {
-        if (f_open(&dsk_fil[d], name, FA_READ) != FR_OK) return false;
+    neo_file_t *f = &dsk_file[d];
+    if (!neo_file_open(f, NEO_VOL_USB, name, NEO_READ | NEO_WRITE)) {
+        if (!neo_file_open(f, NEO_VOL_USB, name, NEO_READ)) return false;
         ro = true;
     }
-    dsk_open[d] = true;
     uint8_t header[ORIC_DSK_HEADER_SIZE];
-    if (!dsk_read((void *)(intptr_t)d, 0, header, sizeof(header)) ||
-        !wd1793_insert_streamed(&state.oric.wd, d, header, (uint32_t)f_size(&dsk_fil[d]), dsk_read, ro ? 0 : dsk_write,
-                                (void *)(intptr_t)d)) {
-        f_close(&dsk_fil[d]);
-        dsk_open[d] = false;
+    if (!neo_file_read(f, 0, header, sizeof(header)) ||
+        !wd1793_insert_streamed(&state.oric.wd, d, header, f->size, neo_file_read_cb, ro ? 0 : neo_file_write_cb, f)) {
+        neo_file_close(f);
         return false;
     }
     snprintf(menu.drive[d], sizeof(menu.drive[d]), "%s", name);
@@ -447,20 +424,18 @@ static bool dsk_insert(int d, const char *name) {
 
 static void tap_close(void) {
     oric_eject_tape(&state.oric);
-    if (tap_open) f_close(&tap_fil);
-    tap_open = false;
+    neo_file_close(&tap_file);
     menu.tape[0] = 0;
 }
 
 static bool tap_insert(const char *name) {
-    if (tap_open && !strcmp(menu.tape, name)) {
+    if (neo_file_is_open(&tap_file) && !strcmp(menu.tape, name)) {
         oric_tape_rewind(&state.oric.tape);   // The same tape: rewound
         return true;
     }
     tap_close();
-    if (f_open(&tap_fil, name, FA_READ) != FR_OK) return false;
-    tap_open = true;
-    if (!oric_insert_tape(&state.oric, (uint32_t)f_size(&tap_fil), tap_read, 0)) {
+    if (!neo_file_open(&tap_file, NEO_VOL_USB, name, NEO_READ)) return false;
+    if (!oric_insert_tape(&state.oric, tap_file.size, neo_file_read_cb, &tap_file)) {
         tap_close();
         return false;
     }
@@ -469,21 +444,22 @@ static bool tap_insert(const char *name) {
 }
 
 // .dsk and .tap files of the root, sorted by name
+static bool usb_scan_entry(const neo_dirent_t *e, void *user) {
+    (void)user;
+    if (menu.nfiles >= ORIC_MENU_FILES) return false;
+    if (e->dir || e->hidden) return true;
+    int kind = has_ext(e->name, ".dsk") ? ORIC_FILE_DSK : has_ext(e->name, ".tap") ? ORIC_FILE_TAP : -1;
+    if (kind < 0) return true;
+    oric_menu_file_t *f = &menu.files[menu.nfiles++];
+    snprintf(f->name, sizeof(f->name), "%s", e->name);
+    f->size = e->size;
+    f->kind = (uint8_t)kind;
+    return true;
+}
+
 static void usb_scan(void) {
-    DIR dir;
-    FILINFO fno;
     menu.nfiles = 0;
-    if (f_opendir(&dir, "/") != FR_OK) return;
-    while (menu.nfiles < ORIC_MENU_FILES && f_readdir(&dir, &fno) == FR_OK && fno.fname[0]) {
-        if (fno.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
-        int kind = has_ext(fno.fname, ".dsk") ? ORIC_FILE_DSK : has_ext(fno.fname, ".tap") ? ORIC_FILE_TAP : -1;
-        if (kind < 0) continue;
-        oric_menu_file_t *f = &menu.files[menu.nfiles++];
-        snprintf(f->name, sizeof(f->name), "%s", fno.fname);
-        f->size = (uint32_t)fno.fsize;
-        f->kind = (uint8_t)kind;
-    }
-    f_closedir(&dir);
+    if (!neo_storage_list(NEO_VOL_USB, "/", usb_scan_entry, 0)) return;
     for (int i = 1; i < menu.nfiles; i++) {
         oric_menu_file_t t = menu.files[i];
         int j = i - 1;
@@ -544,12 +520,8 @@ static int profile_find(const char *v) {
 }
 
 static bool rom_load(const char *name) {
-    FIL f;
-    UINT n = 0;
-    if (f_open(&f, name, FA_READ) != FR_OK) return false;
-    bool ok = f_size(&f) == sizeof(usb_rom) && f_read(&f, usb_rom, sizeof(usb_rom), &n) == FR_OK && n == sizeof(usb_rom);
-    f_close(&f);
-    return ok;
+    uint32_t n;
+    return neo_file_load(NEO_VOL_USB, name, usb_rom, sizeof(usb_rom), &n, true);
 }
 
 // Apply a profile: ROM, interface, drives and tape (those not given are emptied), then reset
@@ -595,14 +567,20 @@ static void profile_apply(int k) {
 
 // ORIC.CFG of the USB drive: user settings (interface, drives, tape), profiles
 // and start choice; demarrage=choix opens the "Démarrer sur…" page
+// Contents of ORIC.CFG, read whole (config_load, then config_save for the merge)
+static char config_text[1536];
+
 static void config_load(void) {
-    FIL f;
+    char *text = config_text;
+    uint32_t len;
     usb_nprofiles = 0;
-    if (f_open(&f, ORIC_CONFIG_FILE, FA_READ) != FR_OK) {
+    if (!neo_file_load(NEO_VOL_USB, ORIC_CONFIG_FILE, (uint8_t *)text, sizeof(config_text) - 1, &len, false)) {
         profiles_list();
         return;
     }
+    text[len] = 0;
     char line[160];
+    const char *next = text;
     int fdc = -1;
     static char drives[ORIC_MENU_DRIVES][ORIC_MENU_NAME_LEN];
     static char tape[ORIC_MENU_NAME_LEN];
@@ -610,7 +588,14 @@ static void config_load(void) {
     memset(drives, 0, sizeof(drives));
     tape[0] = 0;
     start[0] = 0;
-    while (f_gets(line, sizeof(line), &f)) {
+    while (*next) {
+        // One line (f_gets-like: kept with its end of line, cut at 159 characters)
+        size_t n = 0;
+        while (next[n] && next[n] != '\n') n++;
+        const size_t take = n + (next[n] == '\n') < sizeof(line) - 1 ? n + (next[n] == '\n') : sizeof(line) - 1;
+        memcpy(line, next, take);
+        line[take] = 0;
+        next += n + (next[n] == '\n');
         const char *v;
         if ((v = oric_config_value(line, "fdc"))) {
             fdc = oric_config_fdc(v);
@@ -630,7 +615,6 @@ static void config_load(void) {
             }
         }
     }
-    f_close(&f);
     profiles_list();
     int k = start[0] ? profile_find(start) : -1;
     if (k >= 0) {
@@ -654,22 +638,14 @@ static void config_load(void) {
 }
 
 static void config_save(void) {
-    static char old[1024], out[1536];
-    old[0] = 0;
-    FIL f;
-    UINT n = 0;
-    if (f_open(&f, ORIC_CONFIG_FILE, FA_READ) == FR_OK) {
-        if (f_read(&f, old, sizeof(old) - 1, &n) != FR_OK) n = 0;
-        old[n] = 0;
-        f_close(&f);
-    }
+    static char out[1536];
+    char *old = config_text;
+    uint32_t n = 0;
+    if (!neo_file_load(NEO_VOL_USB, ORIC_CONFIG_FILE, (uint8_t *)old, sizeof(config_text) - 1, &n, false)) n = 0;
+    old[n] = 0;
     const char *drives[ORIC_MENU_DRIVES] = {menu.drive[0], menu.drive[1], menu.drive[2], menu.drive[3]};
     size_t len = oric_config_merge(old, menu.fdc, drives, menu.tape, audio_volume_level(), out, sizeof(out));
-    bool ok = f_open(&f, ORIC_CONFIG_FILE, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK;
-    if (ok) {
-        ok = f_write(&f, out, (UINT)len, &n) == FR_OK && n == len;
-        ok = (f_close(&f) == FR_OK) && ok;
-    }
+    bool ok = neo_file_save(NEO_VOL_USB, ORIC_CONFIG_FILE, (const uint8_t *)out, (uint32_t)len);
     oric_menu_message(&menu, !ok, ok ? "Configuration enregistrée dans ORIC.CFG" : "ORIC.CFG : écriture impossible");
 }
 
@@ -692,33 +668,32 @@ enum { DIAG_FILE_CREATE = 1, DIAG_FILE_WRITE = 2, DIAG_FILE_CLOSE = 3, DIAG_FILE
 volatile uint32_t diag_file_cmd, diag_file_status, diag_file_len;
 volatile char diag_file_name[64];
 uint8_t diag_file_buf[DIAG_FILE_CHUNK];
-static FIL diag_fil;
+static neo_file_t diag_file;
 
 static void diag_file_service(void) {
     uint32_t cmd = diag_file_cmd;
     if (!cmd) return;
     __dmb();
-    FRESULT r = FR_OK;
-    UINT n = 0;
+    uint32_t r = 0;   // 0: done, 1: failed
     switch (cmd) {
         case DIAG_FILE_CREATE:
-            r = f_open(&diag_fil, (const char *)diag_file_name, FA_WRITE | FA_CREATE_ALWAYS);
+            neo_file_close(&diag_file);
+            r = !neo_file_open(&diag_file, NEO_VOL_USB, (const char *)diag_file_name, NEO_WRITE | NEO_CREATE);
             break;
         case DIAG_FILE_WRITE:
-            r = f_write(&diag_fil, diag_file_buf, diag_file_len > DIAG_FILE_CHUNK ? DIAG_FILE_CHUNK : diag_file_len, &n);
-            if (r == FR_OK && n != diag_file_len) r = FR_DISK_ERR;
+            r = diag_file_len > DIAG_FILE_CHUNK || !neo_file_append(&diag_file, diag_file_buf, diag_file_len);
             break;
         case DIAG_FILE_CLOSE:
-            r = f_close(&diag_fil);
+            r = !neo_file_close(&diag_file);
             break;
         case DIAG_FILE_RESCAN:
             usb_scanned = false;   // usb_poll lists the files again and applies ORIC.CFG
             break;
         default:
-            r = FR_INVALID_PARAMETER;
+            r = 1;
             break;
     }
-    diag_file_status = (uint32_t)r;
+    diag_file_status = r;
     __dmb();
     diag_file_cmd = 0;
 }

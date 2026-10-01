@@ -83,6 +83,14 @@ static uint8_t* oric_nib_images[1];
 #include "devices/oric_dsk.h"
 #include "devices/wd1793.h"
 #include "systems/oric.h"
+#define NEO_STORAGE_IMPL
+#include "devices/neo_storage.h"
+#include "../../../neo_storage_posix.h"
+
+// Files through neo_storage, as on the board: volume 0 = paths as given (-T),
+// volume 1 = the CSAVE directory (-R)
+#define VOL_FILES 0
+#define VOL_REC   1
 
 static oric_t oric;
 
@@ -142,25 +150,21 @@ static void write_ppm(const char* path) {
 }
 
 // CSAVE (-R DIR): one DIR/NAME.TAP file per recording
-static const char* rec_path_dir;
-static FILE* rec_fp;
+static neo_file_t rec_file;
 static bool rec_open(void* ctx, const char* name) {
     (void)ctx;
-    char path[512];
-    snprintf(path, sizeof(path), "%s/%s", rec_path_dir, name);
-    if (rec_fp) fclose(rec_fp);
-    rec_fp = fopen(path, "wb");
-    if (rec_fp) printf("tape: recording %s\n", name);
-    return rec_fp != 0;
+    neo_file_close(&rec_file);
+    if (!neo_file_open(&rec_file, VOL_REC, name, NEO_WRITE | NEO_CREATE)) return false;
+    printf("tape: recording %s\n", name);
+    return true;
 }
 static void rec_write(void* ctx, const uint8_t* data, uint32_t len) {
     (void)ctx;
-    if (rec_fp) fwrite(data, 1, len, rec_fp);
+    if (neo_file_is_open(&rec_file)) neo_file_append(&rec_file, data, len);
 }
 static void rec_close(void* ctx) {
     (void)ctx;
-    if (rec_fp) fclose(rec_fp);
-    rec_fp = 0;
+    neo_file_close(&rec_file);
 }
 static const oric_tape_rec_out_t rec_out = {rec_open, rec_write, rec_close, 0};
 
@@ -239,17 +243,21 @@ int main(int argc, char** argv) {
     }
     oric_reset(&oric);
 
-    uint32_t tap_size = 0;
-    uint8_t* tap = 0;
+    // Tape read as a stream, as on the board (neo_file_read_cb)
+    neo_storage_set(VOL_FILES, "Fichiers", &neo_storage_posix_ops, "");
+    static neo_file_t tap_file;
     if (tape_file) {
-        tap = load_file(tape_file, &tap_size);
-        oric_insert_tap(&oric, tap, tap_size);
+        if (!neo_file_open(&tap_file, VOL_FILES, tape_file, NEO_READ) ||
+            !oric_insert_tape(&oric, tap_file.size, neo_file_read_cb, &tap_file)) {
+            fprintf(stderr, "oric_headless: cannot read %s\n", tape_file);
+            return 2;
+        }
     }
     if (fast && !oric_tape_fast(&oric, true)) {
         fprintf(stderr, "oric_headless: fast tape loading needs the BASIC 1.1 ROM\n");
     }
     if (rec_dir) {
-        rec_path_dir = rec_dir;
+        neo_storage_set(VOL_REC, "CSAVE", &neo_storage_posix_ops, (void*)rec_dir);
         oric_tape_recorder(&oric, &rec_out);
     }
 

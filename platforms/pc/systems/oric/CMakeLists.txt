@@ -63,3 +63,11 @@ if (NOT MSVC)
 endif()
 add_test(NAME oric_menu COMMAND oric_menu_test)
 
+#=== EXECUTABLE: neo_storage_test (common file volumes: memory and POSIX drivers)
+
+add_executable(neo_storage_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/test_neo_storage.c)
+target_include_directories(neo_storage_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+if (NOT MSVC)
+    target_compile_options(neo_storage_test PUBLIC -Wall -Wextra -Wsign-compare)
+endif()
+add_test(NAME neo_storage COMMAND neo_storage_test)

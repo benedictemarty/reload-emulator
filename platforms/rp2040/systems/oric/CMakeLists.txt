@@ -8,6 +8,7 @@ add_executable(oric
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_storage_fatfs.c
 )
 
 target_compile_options(oric PRIVATE -Wall)
@@ -48,6 +49,7 @@ function(oric_diag_variant name)
 		${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
 		${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 		${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_storage_fatfs.c
 	)
 	target_compile_options(${name} PRIVATE -Wall -g)   # -g: line tables for the SWD PC sampling (same code)
 	target_compile_definitions(${name} PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1 ${ARGN})

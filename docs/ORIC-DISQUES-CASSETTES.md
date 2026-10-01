@@ -119,7 +119,7 @@ Code : `src/osd/osd.h` (surface commune avec le Telestrat, rendu en plans de 1 b
 grille 100 × 30 sur le Neo6502 en 800 × 480, 120 × 34 en 960 × 544),
 `src/osd/osd_font.h` (police du Telestrat : unscii-8 de Viznut, domaine public, et
 icônes du projet), `src/osd/oric_menu.h` (menu, indépendant de la plate-forme),
-`src/osd/oric_config.h` (`ORIC.CFG`), `platforms/rp2040/systems/oric/src/oric.c`
+`src/osd/oric_config.h` (`ORIC.CFG`), `src/devices/neo_storage.h` (fichiers de la clé par volume, pilote FatFs du socle), `platforms/rp2040/systems/oric/src/oric.c`
 (clé USB, flux, rendu par le cœur 1).
 
 ### Essai sur la carte (Neo6502, 2026-10-01, `oric_diag` à 8b3a6b0, bus PIO, 345 MHz)
