@@ -136,6 +136,17 @@ l'Oric (corrigé), `memset`/`memcpy`/divisions dans le rendu du BBC (corrigé :
 `PICO_MEM_IN_RAM`, `PICO_DIVIDER_IN_RAM`), `memset` chez le Telestrat, une table en flash
 dans le rendu de la NES (`_nes_ppu_spread4`).
 
+**Cause trouvée pour les traits en jeu de Tangerine (v0.10.1)** : `core1_flash.py` a montré
+la table des motifs « chunky » (`pattern.0` : 00, F0, 0F, FF), `const` donc en flash, lue
+par `mt_render_line` sur le cœur 1 à chaque case en mode chunky — les jeux en sont pleins,
+l'écran texte de TANBUG non (d'où le 0 mesuré en v0.9.4 sur l'écran texte). Corrigé : motif
+calculé sans table. Tangerine passe l'outil dans son `make test` (`--court`) ; il échoue sur
+la v0.10.0 et passe sur la v0.10.1. Mesure sur la carte à venir.
+
+**Leçon générale** : une table `const` lue par le cœur 1 est aussi dangereuse qu'une
+fonction en flash ; une mesure faite sur un seul écran (texte) ne couvre pas les autres
+chemins de rendu (graphique).
+
 Constats (bmarty, 2026-10-01) : **deux mécanismes**. NES et Trinity : **au démarrage,
 pendant le montage USB**, puis plus rien (confirmé par leurs mesures). Tangerine : **pendant
 les jeux**, apparu avec le son (v0.10.0) : piste à vérifier, comparer v0.9.4 et v0.10.0 sur
