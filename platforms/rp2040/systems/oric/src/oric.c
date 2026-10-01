@@ -86,6 +86,8 @@
 #include "devices/neo_tnfs.h"
 #define NEO_ESP_AT_IMPL
 #include "devices/neo_esp_at.h"
+#define NEO_DGRAM_SERIAL_IMPL
+#include "devices/neo_dgram_serial.h"
 #include "systems/oric.h"
 #define ORIC_PLANES_RAM __attribute__((section(".time_critical.oric_planes")))
 #include "systems/oric_planes.h"
@@ -113,6 +115,7 @@
 extern const neo_storage_ops_t neo_storage_fatfs_ops;   // neo_storage_fatfs.c (socle)
 // Wi-Fi modem on the USB hub (Neo6502picowifi): neo_cdc_serial.c (socle)
 bool neo_cdc_ready(void);
+bool neo_cdc_port_ready(int port);
 uint32_t neo_cdc_mount_count(void);
 bool neo_cdc_write(void *ctx, const uint8_t *p, int n);
 int neo_cdc_read_byte(void *ctx, uint32_t timeout_us);
@@ -676,6 +679,7 @@ static void config_save(void) {
 // wifi_mdp=PASSWORD (otherwise the network saved in the modem). Files on the
 // server are listed and named "net:/NAME" (docs/RESEAU-NEO6502.md).
 static neo_esp_t net_esp;
+static neo_dgram_t net_dgram;
 static neo_tnfs_t net_tnfs;
 static uint32_t net_tried;   // Modem mount count of the last attempt
 
@@ -693,15 +697,26 @@ static void net_poll(void) {
     char *colon = strchr(host, ':');
     const uint16_t port = colon ? (uint16_t)atoi(colon + 1) : NEO_TNFS_PORT;
     if (colon) *colon = 0;
-    neo_esp_init(&net_esp, neo_cdc_write, neo_cdc_read_byte, 0);
-    neo_tnfs_init(&net_tnfs, neo_esp_xfer, &net_esp);
-    const bool ok = neo_esp_open_udp(&net_esp, host, port, net_ssid[0] ? net_ssid : 0, net_pass) &&
-                    neo_tnfs_mount(&net_tnfs, "/", 0, 0);
+    neo_esp_init(&net_esp, neo_cdc_write, neo_cdc_read_byte, (void *)0);
+    // Second serial port of the modem (Neo6502picowifi eeda7d3, PicoWiFiModemUSB): TNFS in
+    // frames there, the server given by AT$TNFS, and the AT port stays free (Minitel).
+    // Otherwise (one port only, or not mounted: the USB host has 15 endpoints in all), AT UDP.
+    const bool relay = neo_cdc_port_ready(1);
+    bool ok;
+    if (relay) {
+        neo_dgram_init(&net_dgram, neo_cdc_write, neo_cdc_read_byte, (void *)1);
+        neo_tnfs_init(&net_tnfs, neo_dgram_xfer, &net_dgram);
+        ok = neo_esp_set_tnfs(&net_esp, host, port, net_ssid[0] ? net_ssid : 0, net_pass);
+    } else {
+        neo_tnfs_init(&net_tnfs, neo_esp_xfer, &net_esp);
+        ok = neo_esp_open_udp(&net_esp, host, port, net_ssid[0] ? net_ssid : 0, net_pass);
+    }
+    ok = ok && neo_tnfs_mount(&net_tnfs, "/", 0, 0);
     if (ok) {
         neo_storage_set(NEO_VOL_NET, "Réseau", &neo_storage_tnfs_ops, &net_tnfs);
         usb_scan();
     }
-    printf("Network: %s %s\n", net_server, ok ? "mounted" : "failed");
+    printf("Network: %s %s (%s)\n", net_server, ok ? "mounted" : "failed", relay ? "TNFS port" : "AT UDP");
     oric_menu_message(&menu, !ok, ok ? "Réseau monté" : "Réseau : serveur injoignable");
 }
 

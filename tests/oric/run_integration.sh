@@ -77,9 +77,9 @@ check "Jasmin: BASIC usable after the boot" " 12" "$FTDOS_DSK" -c auto -0 "$FTDO
 # Files over the network (TNFS, devices/neo_tnfs.h): a reference tnfsd serving a
 # temporary directory; tape and disk read as streams, then a Sedoric SAVE read back
 if [ ! -x "$TNFSD" ]; then
-    echo "SKIP TNFS tests (missing $TNFSD)"; skip=$((skip + 5))
+    echo "SKIP TNFS tests (missing $TNFSD)"; skip=$((skip + 7))
 elif ss -lun 2>/dev/null | grep -q ':16384 '; then
-    echo "SKIP TNFS tests (UDP port 16384 already in use)"; skip=$((skip + 5))
+    echo "SKIP TNFS tests (UDP port 16384 already in use)"; skip=$((skip + 7))
 else
     mkdir -p "$TMP/tnfs"
     [ -f "$BASIC_TAP" ] && cp "$BASIC_TAP" "$TMP/tnfs/SIEVE.TAP"
@@ -98,12 +98,15 @@ else
         "$NETBRIDGE" -p "$TMP/pty.txt" > /dev/null 2> "$TMP/bridge.log" &
         BRIDGE_PID=$!
         sleep 1
-        PTY=$(cat "$TMP/pty.txt" 2>/dev/null)
+        PTY=$(sed -n 1p "$TMP/pty.txt" 2>/dev/null)
         check "Modem: CLOAD through the AT Wi-Fi modem" "531 CALL#50D" "$TMP/tnfs/SIEVE.TAP" -S "$PTY" -N 127.0.0.1 -T /SIEVE.TAP -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
         check "Modem: Sedoric streamed through the modem (sees the SAVE)" "RLNET    .COM" "$TMP/tnfs/SED.DSK" -S "$PTY" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1300 -w 900 -t ' DIR\n' -s
+        PTY2=$(sed -n 2p "$TMP/pty.txt" 2>/dev/null)
+        check "Modem: CLOAD through the second (TNFS) serial port" "531 CALL#50D" "$TMP/tnfs/SIEVE.TAP" -S "$PTY" -D "$PTY2" -N 127.0.0.1 -T /SIEVE.TAP -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
+        check "Modem: Sedoric through the TNFS port" "RLNET    .COM" "$TMP/tnfs/SED.DSK" -S "$PTY" -D "$PTY2" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1300 -w 900 -t ' DIR\n' -s
         kill "$BRIDGE_PID" 2>/dev/null; BRIDGE_PID=
     else
-        echo "SKIP modem tests (missing $NETBRIDGE)"; skip=$((skip + 2))
+        echo "SKIP modem tests (missing $NETBRIDGE)"; skip=$((skip + 4))
     fi
     kill "$TNFSD_PID" 2>/dev/null; TNFSD_PID=
 fi

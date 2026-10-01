@@ -70,8 +70,14 @@ typedef struct {
 void neo_esp_init(neo_esp_t* e, bool (*write)(void*, const uint8_t*, int), int (*read_byte)(void*, uint32_t), void* ctx);
 // Commande (sans \r\n) ; true sur OK, false sur ERROR / FAIL ou sans réponse
 bool neo_esp_command(neo_esp_t* e, const char* cmd, uint32_t timeout_ms);
+// Synchronise le modem (AT, ATE0), rejoint le réseau si ssid est donné, attend une adresse IP
+bool neo_esp_prepare(neo_esp_t* e, const char* ssid, const char* password);
 // Prépare le modem et ouvre le lien UDP ; ssid NULL : réseau Wi-Fi enregistré dans le modem
 bool neo_esp_open_udp(neo_esp_t* e, const char* host, uint16_t port, const char* ssid, const char* password);
+// Prépare le modem et donne le serveur TNFS à son second port série (AT$TNFS="hôte",port :
+// Neo6502picowifi eeda7d3 ; PicoWiFiModemUSB, convenu) ; les datagrammes passent ensuite
+// par ce second port (src/devices/neo_dgram_serial.h)
+bool neo_esp_set_tnfs(neo_esp_t* e, const char* host, uint16_t port, const char* ssid, const char* password);
 // Transport pour neo_tnfs_init(t, neo_esp_xfer, &e)
 int neo_esp_xfer(void* ctx, const uint8_t* req, int len, uint8_t* resp, int max, uint32_t timeout_ms);
 
@@ -176,7 +182,7 @@ bool neo_esp_command(neo_esp_t* e, const char* cmd, uint32_t timeout_ms) {
     return _neo_esp_wait(e, _neo_esp_has_result, timeout_ms) && e->result == NEO_ESP_OK;
 }
 
-bool neo_esp_open_udp(neo_esp_t* e, const char* host, uint16_t port, const char* ssid, const char* password) {
+bool neo_esp_prepare(neo_esp_t* e, const char* ssid, const char* password) {
     bool sync = false;
     for (int i = 0; i < 3 && !sync; i++) sync = neo_esp_command(e, "AT", 1000);
     if (!sync) return false;
@@ -199,7 +205,19 @@ bool neo_esp_open_udp(neo_esp_t* e, const char* host, uint16_t port, const char*
             for (int k = 0; k < 50; k++) e->read_byte(e->ctx, 10000);
         }
     }
-    if (!ip) return false;
+    return ip;
+}
+
+bool neo_esp_set_tnfs(neo_esp_t* e, const char* host, uint16_t port, const char* ssid, const char* password) {
+    if (!neo_esp_prepare(e, ssid, password)) return false;
+    char cmd[160];
+    if (snprintf(cmd, sizeof(cmd), "AT$TNFS=\"%s\",%u", host, (unsigned)port) >= (int)sizeof(cmd)) return false;
+    return neo_esp_command(e, cmd, 2000);
+}
+
+bool neo_esp_open_udp(neo_esp_t* e, const char* host, uint16_t port, const char* ssid, const char* password) {
+    if (!neo_esp_prepare(e, ssid, password)) return false;
+    char cmd[160];
     neo_esp_command(e, "AT+CIPCLOSE", 1000);   // ERROR when no link is open: fine
     if (snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"UDP\",\"%s\",%u", host, (unsigned)port) >= (int)sizeof(cmd)) return false;
     e->open = neo_esp_command(e, cmd, 12000);   // A host name: DNS up to 10 s in the modem

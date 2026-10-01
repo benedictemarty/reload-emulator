@@ -18,6 +18,9 @@
 //             (Neo6502picowifi on /dev/ttyACM0, or neo_esp_modem_pc) instead of
 //             UDP from the PC; needs -N SERVER (AT+CIPSTART="UDP"); Wi-Fi network
 //             from the environment (NEO_WIFI_SSID, NEO_WIFI_PASS) or the modem's own
+//   -D TTY    with -S and -N: TNFS through the modem's second serial port TTY
+//             (Neo6502picowifi /dev/ttyACM1: one length-prefixed datagram per frame),
+//             the server given by AT$TNFS on the AT port, instead of AT UDP
 //   -t TEXT   type TEXT after -w frames (default 60; \n = RETURN, ~ = pause of 50 frames)
 //   -w N      frames before typing
 //   -h N      hold each key N frames, then release it N frames (default 3)
@@ -98,6 +101,8 @@ static uint8_t* oric_nib_images[1];
 #include "../../../neo_tnfs_udp.h"
 #define NEO_ESP_AT_IMPL
 #include "devices/neo_esp_at.h"
+#define NEO_DGRAM_SERIAL_IMPL
+#include "devices/neo_dgram_serial.h"
 #include "../../../neo_serial_posix.h"
 
 // Files through neo_storage, as on the board: volume 0 = paths as given (-T),
@@ -189,6 +194,7 @@ int main(int argc, char** argv) {
     const char* rec_dir = 0;
     const char* tnfs_host = 0;
     const char* serial_tty = 0;
+    const char* dgram_tty = 0;
     bool fast = false;
     const char* text = 0;
     const char* ppm_file = 0;
@@ -207,6 +213,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "-R") && v) { rec_dir = v; i++; }
         else if (!strcmp(a, "-N") && v) { tnfs_host = v; i++; }
         else if (!strcmp(a, "-S") && v) { serial_tty = v; i++; }
+        else if (!strcmp(a, "-D") && v) { dgram_tty = v; i++; }
         else if (!strcmp(a, "-F")) fast = true;
         else if (!strcmp(a, "-t") && v) { text = v; i++; }
         else if (!strcmp(a, "-w") && v) { wait_frames = atoi(v); i++; }
@@ -243,7 +250,8 @@ int main(int argc, char** argv) {
     static neo_tnfs_t tnfs;
     static neo_tnfs_udp_t udp;
     static neo_esp_t esp;
-    int serial_fd = -1;
+    static neo_dgram_t dgram;
+    int serial_fd = -1, dgram_fd = -1;
     if (serial_tty) {
         // Wi-Fi modem on a serial port (Neo6502picowifi, or neo_esp_modem_pc)
         if (!tnfs_host) {
@@ -261,12 +269,23 @@ int main(int argc, char** argv) {
         char* colon = strchr(host, ':');
         const uint16_t port = colon ? (uint16_t)atoi(colon + 1) : NEO_TNFS_PORT;
         if (colon) *colon = 0;
-        if (!neo_esp_open_udp(&esp, host, port, getenv("NEO_WIFI_SSID"), getenv("NEO_WIFI_PASS"))) {
-            fprintf(stderr, "oric_headless: Wi-Fi modem on %s: no UDP link to %s\n", serial_tty, tnfs_host);
-            return 2;
+        if (dgram_tty) {
+            // Second serial port of the modem: server set by AT$TNFS, datagrams in frames
+            dgram_fd = neo_serial_open(dgram_tty);
+            if (dgram_fd < 0 || !neo_esp_set_tnfs(&esp, host, port, getenv("NEO_WIFI_SSID"), getenv("NEO_WIFI_PASS"))) {
+                fprintf(stderr, "oric_headless: TNFS port %s: modem not configured for %s\n", dgram_tty, tnfs_host);
+                return 2;
+            }
+            neo_dgram_init(&dgram, neo_serial_write, neo_serial_read_byte, (void*)(intptr_t)dgram_fd);
+            neo_tnfs_init(&tnfs, neo_dgram_xfer, &dgram);
+        } else {
+            if (!neo_esp_open_udp(&esp, host, port, getenv("NEO_WIFI_SSID"), getenv("NEO_WIFI_PASS"))) {
+                fprintf(stderr, "oric_headless: Wi-Fi modem on %s: no UDP link to %s\n", serial_tty, tnfs_host);
+                return 2;
+            }
+            neo_tnfs_init(&tnfs, neo_esp_xfer, &esp);
         }
-        tnfs_host = serial_tty;   // The files are on the network from here on
-        neo_tnfs_init(&tnfs, neo_esp_xfer, &esp);
+        tnfs_host = dgram_tty ? dgram_tty : serial_tty;   // The files are on the network from here on
         tnfs.sleep = neo_tnfs_udp_sleep;
     } else if (tnfs_host) {
         char host[256];
@@ -427,8 +446,14 @@ int main(int argc, char** argv) {
         printf("tnfs: %u request(s), %u resent\n", (unsigned)tnfs.sent, (unsigned)tnfs.resent);
         neo_tnfs_umount(&tnfs);
         if (serial_fd >= 0) {
-            printf("modem: %u datagram(s) received, %u dropped, %u send failure(s)\n", (unsigned)esp.datagrams,
-                   (unsigned)esp.dropped, (unsigned)esp.send_fail);
+            if (dgram_fd >= 0) {
+                printf("tnfs port: %u frame(s) received, %u stale, %u resync\n", (unsigned)dgram.received,
+                       (unsigned)dgram.stale, (unsigned)dgram.resync);
+                close(dgram_fd);
+            } else {
+                printf("modem: %u datagram(s) received, %u dropped, %u send failure(s)\n", (unsigned)esp.datagrams,
+                       (unsigned)esp.dropped, (unsigned)esp.send_fail);
+            }
             close(serial_fd);
         } else {
             neo_tnfs_udp_close(&udp);

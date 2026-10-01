@@ -19,7 +19,7 @@ target_compile_definitions(oric PRIVATE
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_sock_cfg
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 	ORIC_BUS_PIO=1   # 65C02 bus on a PIO state machine (measured fastest, validated on the board 2026-09-30)
-	CFG_TUH_CDC=1    # Wi-Fi modem Neo6502picowifi on the USB hub (network volume, docs/RESEAU-NEO6502.md)
+	CFG_TUH_CDC=2    # Wi-Fi modem on the USB hub: AT port + TNFS port (network volume, docs/RESEAU-NEO6502.md)
 	CFG_TUH_CDC_RX_BUFSIZE=256
 	CFG_TUH_CDC_TX_BUFSIZE=256
 	# DVI_DEFAULT_SERIAL_CONFIG=olimex_rp2040pc_cfg

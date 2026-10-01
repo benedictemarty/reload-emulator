@@ -69,6 +69,20 @@ Côté reload, prêt et testé sur PC :
 - `platforms/rp2040/src/neo_cdc_serial.c` : deux ports série USB par ordre d'interface
   (port 0 = AT, port 1 = TNFS), `ctx` = numéro de port.
 
+**Implémenté dans Neo6502picowifi** (eeda7d3, à la demande de bmarty) : USB composite,
+interfaces 0-1 « Modem AT », 2-3 « TNFS » ; `AT$TNFS="hôte",port` (ou `hôte:port`, `hôte`,
+`=0`, `?`) enregistré en flash ; trames de 1 à 1472 octets ; réponses gardées dans une file de
+4 Ko et envoyées seulement port ouvert (DTR). Côté reload : `neo_esp_set_tnfs` (AT$TNFS),
+`oric_headless -S PORT_AT -D PORT_TNFS -N SERVEUR`, modem PC simulé à deux pseudo-terminaux ;
+intégration : CLOAD et Sedoric par le port TNFS (21/21 avec tnfsd). L'Oric prend le port TNFS
+s'il est monté, sinon l'AT UDP (`CFG_TUH_CDC=2` ; oric_diag reste à 1 port, RAM).
+
+**Attention, hôte USB du RP2040** (relevé par la session picowifi dans le code de TinyUSB
+0.21, même pilote dans le socle) : 16 entrées de points de terminaison pour tous les
+appareils, 15 utilisables (`ep_pool[USB_MAX_ENDPOINTS]`, `hcd_rp2040.c`). Hub + 2 HID + clé ≈ 10 ;
+modem composite 7 → 17/15 : le port TNFS risque de ne pas monter. D'où le repli sur l'AT UDP
+(port 0 seul). Non mesuré sur la carte de reload.
+
 Convenu avec le Telestrat (2026-10-01) : longueur **petit-boutiste** ; serveur donné par
 `AT$TNFS=hôte:port` sur le port 0, gardé en flash par `AT&W` ; le port 1 ne porte que des
 datagrammes. Reste : l'accord de la session qui tient PicoWiFiModemUSB, puis son

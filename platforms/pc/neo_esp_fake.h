@@ -34,6 +34,13 @@ typedef struct {
     uint8_t send_buf[2048];
     uint32_t commands, sent, received;
     int no_ip_polls;   // AT+CIPSTATUS answers STATUS:5 (no IP) this many times first
+    // Second port (TNFS relay, AT$TNFS): server, and the callbacks of that port
+    char tnfs_host[128];
+    uint16_t tnfs_port;
+    void (*tnfs_out)(void* ctx, const uint8_t* p, int n);          // Frames to the host
+    bool (*tnfs_send)(void* ctx, const char* host, uint16_t port, const uint8_t* p, int n);
+    uint8_t tnfs_in[2048];
+    int tnfs_in_len;
 } neo_esp_fake_t;
 
 static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
@@ -44,6 +51,9 @@ static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
     m->ssid[0] = 0;
     m->commands = m->sent = m->received = 0;
     m->no_ip_polls = 0;
+    m->tnfs_host[0] = 0;
+    m->tnfs_port = 0;
+    m->tnfs_in_len = 0;
 }
 
 static inline void _fake_out(neo_esp_fake_t* m, const char* s) { m->out(m->ctx, (const uint8_t*)s, (int)strlen(s)); }
@@ -83,6 +93,27 @@ static inline void _fake_command(neo_esp_fake_t* m, const char* cmd) {
         char s[48];
         snprintf(s, sizeof(s), "STATUS:%d\r\n\r\nOK\r\n", st);
         _fake_out(m, s);
+    } else if (!strncmp(cmd, "AT$TNFS=", 8)) {
+        // AT$TNFS="host",port | host:port | host | 0 (cleared) — Neo6502picowifi eeda7d3
+        const char* p = cmd + 8;
+        if (!strcmp(p, "0")) {
+            m->tnfs_host[0] = 0;
+        } else if (*p == '"') {
+            if (!_fake_quoted(&p, m->tnfs_host, sizeof(m->tnfs_host))) {
+                _fake_out(m, "\r\nERROR\r\n");
+                return;
+            }
+            m->tnfs_port = (uint16_t)(*p == ',' ? atoi(p + 1) : 16384);
+        } else {
+            snprintf(m->tnfs_host, sizeof(m->tnfs_host), "%s", p);
+            char* c = strchr(m->tnfs_host, ':');
+            m->tnfs_port = 16384;
+            if (c) {
+                *c = 0;
+                m->tnfs_port = (uint16_t)atoi(c + 1);
+            }
+        }
+        _fake_out(m, "\r\nOK\r\n");
     } else if (!strcmp(cmd, "AT+CIPCLOSE")) {
         if (!m->linked) {
             _fake_out(m, "\r\nERROR\r\n");
@@ -169,4 +200,27 @@ static inline void neo_esp_fake_udp_in(neo_esp_fake_t* m, const uint8_t* p, int 
 static inline void neo_esp_fake_unsolicited(neo_esp_fake_t* m, const char* line) {
     _fake_out(m, line);
     _fake_out(m, "\r\n");
+}
+
+// Bytes on the second port (TNFS relay): frames length (2 bytes, little endian) + datagram
+static inline void neo_esp_fake_tnfs_input(neo_esp_fake_t* m, const uint8_t* p, int n) {
+    for (int i = 0; i < n && m->tnfs_in_len < (int)sizeof(m->tnfs_in); i++) m->tnfs_in[m->tnfs_in_len++] = p[i];
+    while (m->tnfs_in_len >= 2) {
+        const int len = m->tnfs_in[0] | (m->tnfs_in[1] << 8);
+        if (len < 1 || len > 1472) {
+            m->tnfs_in_len = 0;   // Resynchronisation: the block is dropped
+            return;
+        }
+        if (m->tnfs_in_len < 2 + len) return;
+        if (m->tnfs_host[0] && m->tnfs_send) m->tnfs_send(m->ctx, m->tnfs_host, m->tnfs_port, m->tnfs_in + 2, len);
+        memmove(m->tnfs_in, m->tnfs_in + 2 + len, (size_t)(m->tnfs_in_len - 2 - len));
+        m->tnfs_in_len -= 2 + len;
+    }
+}
+
+// A datagram from the TNFS server: one frame on the second port
+static inline void neo_esp_fake_tnfs_udp_in(neo_esp_fake_t* m, const uint8_t* p, int n) {
+    const uint8_t h[2] = {(uint8_t)n, (uint8_t)(n >> 8)};
+    m->tnfs_out(m->ctx, h, 2);
+    m->tnfs_out(m->ctx, p, n);
 }
