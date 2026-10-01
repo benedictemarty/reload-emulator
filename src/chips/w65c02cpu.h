@@ -769,11 +769,13 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
             _W65_DONE();
 
         case W65_BRK:
-            // Software interrupt: signature byte read, PC += 1, B pushed set, vector $FFFE
+            // Software interrupt: signature byte read at A+1, then PC = A+2 (pushed), B set,
+            // vector $FFFE. The read address matters on I/O (Neo6502nes: nes-test-roms
+            // cpu_exec_space_ppuio, $2007 side effect; SingleStepTests bus level)
             c->in_brk = true;
             c->irq_vec = 0xFE;
-            c->PC++;
             _w65_rd(c, c->PC);
+            c->PC++;
             c->step = 101;
             return;
 

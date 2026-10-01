@@ -41,6 +41,13 @@ harte_c02 [-b] [-v] [-x 5c] ~/.cache/65x02/wdc65c02/v1 [OPCODES…]
 `-b` : premier écart de bus de chaque opcode ; `-v` : tous les échecs ; `-x` :
 opcodes aux écarts connus, exécutés et affichés mais non comptés.
 
+## Correctif BRK (2026-10-02)
+
+Signalé par Neo6502nes (v0.8.3, mesuré sur la carte) : pour un BRK en A, le cycle 2 lit
+l'octet de signature en **A+1** (puis PC = A+2), et non en A+2. Avant : 10 000 écarts de bus
+sur l'opcode 00 (« cycle 2 : A+2 read, attendu A+1 ») ; après : 0. Effet visible quand A+1
+tombe sur un registre d'entrée-sortie (nes-test-roms cpu_exec_space_ppuio, $2007).
+
 ## Résultats (2026-09-30)
 
 | Cœur | Tests | Échecs fonctionnels | Écarts de bus seuls |
