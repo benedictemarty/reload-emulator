@@ -33,7 +33,8 @@ OSD_COLS, OSD_ROWS = 100, 30
 
 # Codes de hid_app.c : ASCII, ou usage HID | 0x100
 SPECIALES = {"F1": 0x13A, "ESC": 0x1B, "ENTREE": 0x0D, "HAUT": 0x152, "BAS": 0x151, "GAUCHE": 0x150,
-             "DROITE": 0x14F, "SUPPR": 0x7F, "DEBUT": 0x14A, "FIN": 0x14D, "PGPREC": 0x14B, "PGSUIV": 0x14E}
+             "DROITE": 0x14F, "SUPPR": 0x7F, "DEBUT": 0x14A, "FIN": 0x14D, "PGPREC": 0x14B, "PGSUIV": 0x14E,
+             "F11": 0x144, "F12": 0x145}
 
 
 def symboles():
