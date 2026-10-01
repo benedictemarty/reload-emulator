@@ -31,6 +31,10 @@ for v in "Neo6502nes||nes" "Neo6502TeleStrat||telestrat" "Neo6502TeleStrat|-DTEL
             [ -n "$lim" ] && margins="$margins $(basename "$map" .elf.map)=$(( 0x20040000 - lim )) o"
         done
         echo "OK    $name : RAM au-delà du tas :$margins"
+        # Core 1 path: functions in flash reached (tools/core1_flash.py; red lines)
+        for elf in $(find "$TMP/$name" -maxdepth 3 -name '*.elf' ! -name '*bench*'); do
+            echo "      cœur 1 de $(basename "$elf") : $(python3 "$RELOAD/tools/core1_flash.py" --court "$elf" 2>&1)"
+        done
     else
         echo "ÉCHEC $name :"
         grep -E "error|Error|overflowed" "$TMP/$name.log" | head -5

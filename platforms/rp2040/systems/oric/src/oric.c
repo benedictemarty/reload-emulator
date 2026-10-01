@@ -905,6 +905,21 @@ volatile uint32_t diag_frame_us;       // Core 1: last frame (us), Oric picture 
 volatile uint32_t diag_line_us_max;    // Core 1: slowest line of the last frame (us)
 #endif
 
+// Words of the planes outside the Oric picture (the panel may have drawn there):
+// oric_planes_line rewrites every word it covers. No memset: it lives in flash, and
+// core 1 must not wait for the flash while core 0 uses it (tools/core1_flash.py);
+// volatile stores so that GCC does not turn the loops back into a memset call.
+#define ORIC_PLANE_WORDS  (FRAME_WIDTH / 32)
+#define ORIC_FIRST_WORD   (ORIC_LEFT / 32)
+#define ORIC_END_WORD     ((ORIC_LEFT + ORIC_PLANES_PIXELS + 31) / 32)
+static inline void __not_in_flash_func(clear_plane_margins)(void) {
+    for (int p = 0; p < 3; p++) {
+        volatile uint32_t *w = planes[p];
+        for (int i = 0; i < ORIC_FIRST_WORD; i++) w[i] = 0;
+        for (int i = ORIC_END_WORD; i < ORIC_PLANE_WORDS; i++) w[i] = 0;
+    }
+}
+
 static inline void __not_in_flash_func(render_frame)() {
 #ifdef ORIC_DIAG
     uint32_t t0 = time_us_32(), worst = 0;
@@ -929,7 +944,7 @@ static inline void __not_in_flash_func(render_frame)() {
         } else if (y < ORIC_TOP || y >= ORIC_TOP + ORIC_SCREEN_HEIGHT) {
             copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
         } else {
-            memset(planes, 0, sizeof(planes));
+            clear_plane_margins();
             oric_planes_line(&state.oric.fb[(y - ORIC_TOP) * ORIC_PLANES_BYTES_PER_LINE], planes[0], planes[1], planes[2],
                              ORIC_LEFT);
             encode_planes(tmdsbuf);

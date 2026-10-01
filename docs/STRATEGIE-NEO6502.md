@@ -117,6 +117,25 @@ même écran) :
 | Tangerine | 800×480, 1,20 V | 1 bpp monochrome | **1** | 6 | **oui, pendant les jeux** (bmarty ; v0.9.4 mesurait 0 en jeu, la v0.10.0 ajoute 2 AY et `audio.c`) |
 | Trinity 0.16.64 | mode 0/2 : 640×480, 252 MHz ; mode 1 : 720×480, 283 MHz, 1,25 V | 16 bpp (palette) | 2 (modes 0/2), 1 (mode 1) | ? | **oui** : ≈ 76 épisodes au démarrage, 0 en régime, 0-1 en rafale clé |
 
+**Cause trouvée pour le démarrage (2026-10-01, mesurée sur la carte par la NES et Trinity,
+traits disparus à l'œil de bmarty)** : l'encodeur 16 bpp de PicoDVI
+(`tmds_encode_data_channel_16bpp`, cœur 1, chaque ligne) appelle `interp_save` /
+`interp_restore` du SDK, **en flash**. Pendant le montage USB, le cœur 0 exécute TinyUSB
+depuis la flash et le cœur 1 attend. NES : 20-22 lignes manquées et 113 µs au pire → 0 et
+39 µs ; Trinity : 74 épisodes → 0. Correctifs équivalents : `platforms/rp2040/src/neo_interp_ram.c`
+du socle (copies en RAM + `-Wl,--wrap=interp_save -Wl,--wrap=interp_restore`, méthode de la
+NES) ou le patch de PicoDVI de Trinity (`firmware/patches/picodvi-interp-ram.sh`, copies
+inline). Ports concernés : ceux qui encodent en 16 bpp (NES, Vic20, Trinity).
+
+**Outil : `tools/core1_flash.py FIRMWARE.elf`** — part des points d'entrée du cœur 1, suit les
+appels (relais vers la flash compris) et liste les fonctions en flash atteintes avec leur
+chemin, les littéraux pointant en flash (tables lues en flash) et les appels indirects à
+vérifier. Lancé par `tools/socle_consommateurs.sh` sur chaque consommateur. Le
+2026-10-01 il a trouvé : `interp_save`/`interp_restore` (Vic20), `memset` à chaque ligne de
+l'Oric (corrigé), `memset`/`memcpy`/divisions dans le rendu du BBC (corrigé :
+`PICO_MEM_IN_RAM`, `PICO_DIVIDER_IN_RAM`), `memset` chez le Telestrat, une table en flash
+dans le rendu de la NES (`_nes_ppu_spread4`).
+
 Constats (bmarty, 2026-10-01) : **deux mécanismes**. NES et Trinity : **au démarrage,
 pendant le montage USB**, puis plus rien (confirmé par leurs mesures). Tangerine : **pendant
 les jeux**, apparu avec le son (v0.10.0) : piste à vérifier, comparer v0.9.4 et v0.10.0 sur
