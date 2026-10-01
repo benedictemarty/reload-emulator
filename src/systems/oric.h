@@ -234,10 +234,12 @@ static inline void _oric_via_cb1(oric_t* sys, bool level) {
     if (level != sys->via.cb1_pin) via_set_cb1(&sys->via, level);   // Only on a change: keeps the lazy mode
 }
 static inline bool _oric_via_tick4(oric_t* sys) {
-    via_tick(&sys->via);
-    via_tick(&sys->via);
-    via_tick(&sys->via);
-    via_tick(&sys->via);
+    if (sys->via.quiet >= 4) {   // Usual case inline: 4 quiet cycles counted
+        sys->via.quiet -= 4;
+        sys->via.pending += 4;
+    } else {
+        via_advance(&sys->via, 4);
+    }
     return sys->via.irq_line;
 }
 // The keyboard is read through the port B callback when the 6502 reads ORB

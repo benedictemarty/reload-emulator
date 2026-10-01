@@ -369,6 +369,20 @@ void via_pb6_pulse(via6522_t* via);
 
 
 
+/* reload (socle) : avance par lots et lecture sans effet de bord (VIA unique, étape 9)
+ *
+ * via_quiet_cycles : cycles à venir pendant lesquels la VIA ne ferait que décompter
+ * (aucune IRQ, aucune impulsion, aucun événement) ; valable jusqu'au prochain accès.
+ * via_advance(via, n) : avance de n cycles, exactement comme n appels de via_tick (la
+ * partie calme d'un coup, le reste cycle par cycle) ; pour un système qui avance par
+ * pas de 4 cycles (Oric, Telestrat).
+ * via_peek : la valeur que donnerait via_read, sans effacer de drapeau ni déclencher
+ * de poignée de main (lue sur une copie) ; les rappels de port de l'hôte sont appelés
+ * et doivent être sans effet de bord. */
+static inline uint16_t via_quiet_cycles(const via6522_t* via) { return via->quiet; }
+void via_advance(via6522_t* via, int cycles);
+uint8_t via_peek(const via6522_t* via, uint8_t reg);
+
 /* reload (socle) : accesseurs en ligne, appelés tous les 4 cycles par l'Oric (pilotage de
  * l'AY par CA2/CB2) ; dans via6522.c, chaque appel coûtait ~2,7 % de l'émulation. */
 static inline bool via_get_ca2(via6522_t* via) {

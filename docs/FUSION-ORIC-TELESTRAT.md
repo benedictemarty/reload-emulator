@@ -29,7 +29,7 @@ changeant d'étiquette de socle quand il le décide, et retire alors sa copie.
 | 6 | **Cassette** — côté reload **fait** (socle-2026-09-30-3 : l'Oric utilise `oric_tape*.h` ; remplissage et `oric_tape_insert_mem` ajoutés ; le retour au démarrage du moteur n'a pas été nécessaire, `CLOAD` passe ; WAVE retiré) | **Telestrat** (`oric_tape.h`, `oric_tape_rec.h` CSAVE, `oric_tape_turbo.h`) : exacte au cycle, sans état global | ajouter de reload : retour au démarrage du moteur si arrêt en cours de fichier, remplissage d'un dernier fichier tronqué, entrée mémoire, lectures courtes, WAVE (tap2wave réécrit) ; l'Oric remplace `oric_td.h` ; registres du turbo non décodés quand Jasmin ou Pravetz occupent `$03FE-$03FF` | moyen |
 | 7 | **Menu à l'écran** — `osd.h` **fait** (socle-2026-09-30-4 : un seul rendu en plans, celui de reload, sans table en RAM ; coût : un peu moins cher dans un banc isolé, 6 % de plus en moyenne dans le firmware du Telestrat ; option `OSD_NOINLINE` ; noms du Telestrat `osd_render_line` / `osd_render_cells` ; `osd_frame` à titre facultatif ; `OSD_RAM` accepté ; grille par défaut 100 × 30, le Telestrat définit 120 × 34 ; aperçus de l'Oric identiques au bit près ; suite du Telestrat 458/458 avec ce fichier) | `osd.h` unifié ; reste le moteur commun `osd_ui.h` (styles, panneaux, bandeaux paramétrés), `osd_browser.h` (sélecteur), `osd_cfgfile.h` (fichier de configuration, profils) | chaque machine garde son `<machine>_menu.h` et sa configuration ; `rom_pool.h`, `rom_builtin.h` restent au Telestrat ; côté Telestrat : définir `OSD_COLS=120`, `OSD_ROWS=34`, retirer l'appel à `osd_init_luts` (banc) | moyen |
 | 8 | Clé USB — `MSC_VOLUMES` **fait** (essai sur carte à faire) | `msc_app.c` de reload | option « un seul volume » (RAM), diagnostics SWD en option ; essai sur carte | moyen |
-| 9 | VIA 6522 — **essai en cours** (2026-10-01) | candidate : `src/chips/via6522.c/.h` du Vic20 (61/61 tests VICE, mode paresseux prouvé, EUPL-1.2 ou zlib), copiée dans le socle avec deux ajouts à remonter au Vic20 : accesseurs `via_get_ca2/cb2/pb7` en ligne, placement `VIA6522_HOT` | Oric : couche `_oric_via_*` dans `oric.h`, option `ORIC_VIA6522` (défaut inchangé : tests identiques) ; avec via6522 : intégration Oric 22/22, écran de 3D Fongus identique, −0,8 % d'instructions (callgrind, 400 trames de 3D Fongus) ; clavier lu par le rappel du port B ; ACK imprimante en impulsion basse. Firmware `oric_diag_via6522` compilé (VIA en RAM, 5 424 o de marge). **Reste** : charge sur la carte (`oric_carte.py mesure`), puis rejeu du Telestrat, Tangerine | élevé |
+| 9 | VIA 6522 — **essai en cours** (2026-10-01) | candidate : `src/chips/via6522.c/.h` du Vic20 (61/61 tests VICE, mode paresseux prouvé, EUPL-1.2 ou zlib), copiée dans le socle avec deux ajouts à remonter au Vic20 : accesseurs `via_get_ca2/cb2/pb7` en ligne, placement `VIA6522_HOT`, avance par lots `via_quiet_cycles` / `via_advance`, lecture sans effet `via_peek` | Oric : couche `_oric_via_*` dans `oric.h`, option `ORIC_VIA6522` (défaut inchangé : tests identiques) ; avec via6522 : intégration Oric 22/22, écran de 3D Fongus identique, −0,8 % d'instructions, puis −3,8 % avec `via_advance` dans le tick de 4 cycles (callgrind, 400 trames de 3D Fongus : 1 505 contre 1 564 millions) ; clavier lu par le rappel du port B ; ACK imprimante en impulsion basse. Firmware `oric_diag_via6522` compilé (VIA en RAM, 5 424 o de marge). **Reste** : charge sur la carte (`oric_carte.py mesure`), puis rejeu du Telestrat, Tangerine | élevé |
 | 10 | Pilote de bus | `wdc65C02bus.h` (SIO puis PIO) | étape 5 ; carte (TELEMON, banques, disquettes) | élevé |
 
 ## Le Vic20 (Neo6502Vic20) dans la fusion
@@ -84,6 +84,9 @@ Candidate : `src/chips/via6522.c/.h` (VIA du Vic20, 61/61 tests VICE). Exigences
 1. Résultat **identique à des pas de 4 cycles**, IRQ comprise (test_replay A, B, C) ; une API
    publique « combien de pas de 4 cycles sans événement » et « avancer de n pas sans événement »
    (il lit aujourd'hui t1/t2.counter, t_out, intr.pip, ifr/ier, acr, CB2 de mos6522via).
+   **Fait (étape 2)** : `via_quiet_cycles(via)` = cycles à venir sans événement,
+   `via_advance(via, n)` = n cycles ; égal à n `via_tick` (tests/devices/test_via6522.c :
+   200 000 pas aléatoires de 1 à 40 cycles, registres, IRQ, PB7, CA2, CB2 comparés, 0 écart).
 2. Correctif IER (désactiver une source active relâche l'IRQ) : STRATSED en dépend.
 3. Même retard de pipeline de l'IRQ que mos6522via, ou le rejeu change (démarrage à froid en
    RAM 64 Ko : bus flottant, sensible au cycle près).
@@ -96,8 +99,8 @@ Candidate : `src/chips/via6522.c/.h` (VIA du Vic20, 61/61 tests VICE). Exigences
 1. Calage de MAME 6522via (IFR_DELAY 3) : IRQ de T1/T2 N+3 cycles après l'écriture ; roue
    libre toutes les N+3 (N+2 entre bascules de PB7) ; lecture du compteur = reste − 3 ; écrire
    l'ACR en roue libre relance T1 depuis son compteur.
-2. `via_peek` : lecture sans effet de bord (vidages, bus tenu en reset) — **absente** de la
-   candidate.
+2. `via_peek` : lecture sans effet de bord (vidages, bus tenu en reset) — **ajoutée**
+   (étape 2) : même valeur que `via_read`, structure inchangée (vérifié par le test).
 3. PB7 piloté par T1 et lu par le port B (sortie cassette).
 4. CB2 en entrée, front choisi par PCR, mode « indépendant » (présent dans la candidate).
 5. Latches de mise sous tension comme MAME, puis reset.

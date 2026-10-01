@@ -745,5 +745,25 @@ void via_pb6_pulse(via6522_t* via) {
     }
 }
 
+/* reload (socle) : avance par lots (voir via6522.h) */
+void VIA6522_HOT via_advance(via6522_t* via, int cycles) {
+    while (cycles > 0) {
+#ifndef VIA_NO_LAZY
+        if (via->quiet) {
+            const uint16_t k = (uint16_t)(cycles < via->quiet ? cycles : via->quiet);
+            via->quiet = (uint16_t)(via->quiet - k);
+            via->pending = (uint16_t)(via->pending + k);
+            cycles -= k;
+            continue;
+        }
+#endif
+        via_update(via, 1);
+        cycles--;
+    }
+}
 
-
+uint8_t via_peek(const via6522_t* via, uint8_t reg) {
+    via6522_t copy = *via;
+    copy.irq_callback = 0;   /* The copy's IRQ changes are not reported */
+    return via_read(&copy, reg);
+}
