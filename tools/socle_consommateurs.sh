@@ -12,12 +12,16 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 status=0
 # project|cmake options|name of the build
-for v in "Neo6502nes||nes" "Neo6502TeleStrat||telestrat" "Neo6502TeleStrat|-DTELESTRAT_RAM64K=ON|telestrat_ram64k" "Neo6502Vic20||vic20"; do
+for v in "Neo6502nes||nes" "Neo6502TeleStrat||telestrat" "Neo6502TeleStrat|-DTELESTRAT_RAM64K=ON|telestrat_ram64k" "Neo6502Vic20||vic20" "Neo6502Atari2600/platforms/rp2040/neo||atari2600"; do
     p="${v%%|*}"
     rest="${v#*|}"
     opts="${rest%%|*}"
     name="${rest#*|}"
-    src="$HOME/$p/platforms/rp2040"
+    # A project, or a path to its CMake root when it is not platforms/rp2040
+    case "$p" in
+        */*) src="$HOME/$p" ;;
+        *) src="$HOME/$p/platforms/rp2040" ;;
+    esac
     if [ ! -d "$src" ]; then
         echo "SKIP  $name : $src absent"
         continue
