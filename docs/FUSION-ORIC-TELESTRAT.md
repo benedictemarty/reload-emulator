@@ -139,6 +139,14 @@ Conséquences :
   on suit le matériel (proposition du Vic20), et l'écart de berzerk devient un écart de MAME, à
   documenter chez Tangerine.
 - A et B ne sont pas couverts par les tests du Vic20, à ma connaissance. À vérifier avec lui.
+  Ce qu'on a : `vic20-testprogs/via_defaults/readme.txt` cite la datasheet Rockwell : « A low
+  reset input clears all internal registers to logic 0 (except T1 and T2 latches and counters
+  and the Shift Register) [...] disables the timers ». Le reset **garde** donc latches et
+  compteurs, ce qui va dans le sens de MAME pour B et contre `via_reset` du socle. Les valeurs à la
+  mise sous tension sont notées « ? », non mesurées. « disables the timers » ne dit pas si
+  les compteurs continuent de décompter (A) : je ne sais pas.
+- IER (exigence 2 du Telestrat) : son cas STRATSED est repris dans `test_via6522.c`
+  (`test_ier_release`) et via6522 le passe déjà. Le défaut venait de l'ancienne mos6522via.
 - Le banc se trouve dans le dossier temporaire de la session (`tgr/src/via6522.c`, variables
   `SV_DRIVE`, `SV_FREE`, `SV_LATCH`, `VIA_DIFF`, `VIA_T1`) ; il n'est pas versionné.
 

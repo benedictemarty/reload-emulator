@@ -106,7 +106,24 @@ static void test_peek(void) {
     CHECK(!(v.ifr & VIA_INT_T1));             // ...which clears the flag
 }
 
+// Neo6502TeleStrat (STRATSED, LDA #$7F : STA IER) : disabling the active source releases
+// the IRQ at once; the T1 flag stays set, IFR bit 7 (any enabled flag) goes to 0
+static void test_ier_release(void) {
+    static via6522_t v;
+    via_init(&v);
+    via_write(&v, VIA_IER, 0x80 | VIA_INT_T1);
+    via_write(&v, VIA_T1CL, 10);
+    via_write(&v, VIA_T1CH, 0);
+    for (int i = 0; i < 20; i++) via_tick(&v);
+    CHECK(v.irq_line);
+    via_write(&v, VIA_IER, VIA_INT_T1);   // Bit 7 = 0: disable T1
+    CHECK(!v.irq_line);
+    CHECK(!(via_peek(&v, VIA_IFR) & 0x80));
+    CHECK(via_peek(&v, VIA_IFR) & VIA_INT_T1);
+}
+
 int main(void) {
+    test_ier_release();
     test_advance();
     test_peek();
     printf("%d checks, %d failed\n", tests_run, tests_failed);
