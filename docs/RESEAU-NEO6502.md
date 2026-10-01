@@ -107,6 +107,15 @@ Coût mesuré par le Telestrat : `CFG_TUH_CDC=2` = +504 o de RAM (sa variante 64
 - Liste d'un répertoire distant : STAT de chaque entrée pendant la lecture (vérifié contre
   `tnfsd` : tailles, répertoires).
 
+## Telestrat (Neo6502TeleStrat v0.16.26, 3fe976b, compilé, non essayé sur la carte)
+
+- Volume réseau TNFS dans la variante standard : `CFG_TUH_CDC=2`, `neo_cdc_serial.c` du socle
+  pour le modem, `neo_tnfs.h`, `neo_dgram_serial.h`. RAM : +3 348 o (marge 8 704 → 5 356 o).
+- Variante RAM 64 Ko : pas de TNFS (`CFG_TUH_CDC=1`), +16 o (marge 708 o).
+- Différences de `neo_cdc_serial.c` avec son ancien accès CDC : l'écriture attend jusqu'à 1 s
+  quand la file est pleine (l'ancien perdait l'excédent) ; lecture octet par octet ; un seul
+  appareil série (les ports du premier appareil monté).
+
 ## Reste à faire
 
 - Essai du Pico W sur PC, puis sur la carte ; UART de l'UEXT en option ; autres systèmes.
