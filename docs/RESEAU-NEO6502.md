@@ -55,14 +55,32 @@ et `platforms/pc/neo_esp_fake.h` reproduisent le dialogue du modem.
 3. `NEO_WIFI_SSID=… NEO_WIFI_PASS=… oric_headless -S /dev/ttyACM0 -N <serveur> -T /JEU.TAP …`
    (sans `NEO_WIFI_SSID`, le réseau enregistré dans le modem est utilisé).
 
+## Second port TNFS sur PicoWiFiModemUSB (décision de bmarty, 2026-10-01)
+
+Un seul lien à la fois chez les deux modems : la Minitel du Telestrat (TCP) et les fichiers
+(UDP) ne peuvent pas cohabiter sur le port AT. Décision : **PicoWiFiModemUSB** (`~/picowifi`,
+le modem du Minitel du Telestrat) gagne un **second port série USB** réservé à TNFS, qui relaie
+des datagrammes ; Neo6502picowifi et son AT UDP restent (module ESP8266, essais).
+
+Côté reload, prêt et testé sur PC :
+- `src/devices/neo_dgram_serial.h` : un datagramme par trame, **longueur sur 2 octets
+  petit-boutiste** (proposé), puis le datagramme ; trames en retard vidées avant chaque
+  requête, longueur fausse resynchronisée (`test_neo_dgram` : 7 vérifications) ;
+- `platforms/rp2040/src/neo_cdc_serial.c` : deux ports série USB par ordre d'interface
+  (port 0 = AT, port 1 = TNFS), `ctx` = numéro de port.
+
+À convenir avec la session du firmware : ordre des octets de la longueur ; comment le relais
+connaît le serveur (commande AT sur le port 0 gardée en flash, ou trame de configuration sur
+le port 1). L'Oric n'utilise pas encore ce port (il parle AT UDP sur le port 0).
+
 ## Sur la Neo6502 (Oric, 2026-10-01, compilé, non essayé sur la carte)
 
 - `platforms/rp2040/src/neo_cdc_serial.c` (socle) : port série USB côté hôte (TinyUSB CDC,
   `CFG_TUH_CDC=1` dans le CMake du firmware) au format de `neo_esp_init`.
 - Oric : `ORIC.CFG` `reseau=`, `wifi=`, `wifi_mdp=` ; au branchement du modem, le volume
   `NEO_VOL_NET` est monté et ses fichiers listés `net:/NOM` dans le menu ; `neo_storage_split`
-  choisit le volume d'après le préfixe du nom. RAM : 3,5 Ko (oric : 9 536 o de marge,
-  oric_diag : 340 o).
+  choisit le volume d'après le préfixe du nom. RAM : 3,6 Ko (oric : 9 416 o de marge,
+  **oric_diag : 220 o, très serré**).
 - Liste d'un répertoire distant : STAT de chaque entrée pendant la lecture (vérifié contre
   `tnfsd` : tailles, répertoires).
 

@@ -89,3 +89,12 @@ if (NOT MSVC)
     target_compile_options(neo_esp_test PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 add_test(NAME neo_esp COMMAND neo_esp_test)
+
+#=== EXECUTABLE: neo_dgram_test (TNFS through a datagram relay: one length-prefixed frame per datagram)
+
+add_executable(neo_dgram_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/test_neo_dgram.c)
+target_include_directories(neo_dgram_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+if (NOT MSVC)
+    target_compile_options(neo_dgram_test PUBLIC -Wall -Wextra -Wsign-compare)
+endif()
+add_test(NAME neo_dgram COMMAND neo_dgram_test)
