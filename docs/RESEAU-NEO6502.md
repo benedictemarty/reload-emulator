@@ -69,9 +69,12 @@ Côté reload, prêt et testé sur PC :
 - `platforms/rp2040/src/neo_cdc_serial.c` : deux ports série USB par ordre d'interface
   (port 0 = AT, port 1 = TNFS), `ctx` = numéro de port.
 
-À convenir avec la session du firmware : ordre des octets de la longueur ; comment le relais
-connaît le serveur (commande AT sur le port 0 gardée en flash, ou trame de configuration sur
-le port 1). L'Oric n'utilise pas encore ce port (il parle AT UDP sur le port 0).
+Convenu avec le Telestrat (2026-10-01) : longueur **petit-boutiste** ; serveur donné par
+`AT$TNFS=hôte:port` sur le port 0, gardé en flash par `AT&W` ; le port 1 ne porte que des
+datagrammes. Reste : l'accord de la session qui tient PicoWiFiModemUSB, puis son
+implémentation. L'Oric n'utilise pas encore ce port (il parle AT UDP sur le port 0).
+Coût mesuré par le Telestrat : `CFG_TUH_CDC=2` = +504 o de RAM (sa variante 64 Ko tomberait
+à 220 o, sous son seuil de 300 o : place à regagner avant).
 
 ## Sur la Neo6502 (Oric, 2026-10-01, compilé, non essayé sur la carte)
 
