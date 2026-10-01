@@ -21,3 +21,4 @@ add_subdirectory(systems)
 
 add_subdirectory(cputest)
 add_subdirectory(devices)
+add_subdirectory(netbridge)

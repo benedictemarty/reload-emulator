@@ -80,3 +80,12 @@ if (NOT MSVC)
     target_compile_options(neo_tnfs_test PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 add_test(NAME neo_tnfs COMMAND neo_tnfs_test)
+
+#=== EXECUTABLE: neo_netlink_test (serial link to the network bridge: frames, TNFS over it)
+
+add_executable(neo_netlink_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/test_neo_netlink.c)
+target_include_directories(neo_netlink_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+if (NOT MSVC)
+    target_compile_options(neo_netlink_test PUBLIC -Wall -Wextra -Wsign-compare)
+endif()
+add_test(NAME neo_netlink COMMAND neo_netlink_test)
