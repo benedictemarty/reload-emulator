@@ -138,6 +138,9 @@ volatile uint32_t prof_cycles[8], prof_calls[8];
 #include "class/hid/hid.h"
 #include "neo_multiboot.h"
 #include "ff.h"
+#define NEO_STORAGE_IMPL
+#include "devices/neo_storage.h"
+extern const neo_storage_ops_t neo_storage_fatfs_ops;   // neo_storage_fatfs.c (socle)
 
 typedef struct {
     bbc_t bbc;
@@ -234,8 +237,7 @@ bbc_desc_t bbc_desc(void) {
 static char usb_files[USB_MAX_FILES][13];   // 8.3 names of .ssd/.dsd files in the root
 static int usb_num_files = 0;
 static bool usb_scanned = false;
-static FIL usb_fil;
-static bool usb_fil_open = false;
+static neo_file_t usb_file;   // Disc image of the USB drive (neo_storage, volume NEO_VOL_USB)
 static int current_image = -1;               // 0.. usb files, then flash images
 
 extern bool msc_inquiry_complete;
@@ -252,39 +254,31 @@ static bool has_ext(const char* name, const char* ext) {
     return true;
 }
 
-// Sector reader for the WD1770: 256 bytes at `offset` of the open USB file
+// Sector reader / writer for the WD1770: 256 bytes at `offset` of the open USB file
 static bool usb_read_sector(void* ctx, uint32_t offset, uint8_t* buf) {
     (void)ctx;
-    UINT n = 0;
-    if (!usb_fil_open) return false;
-    if (f_lseek(&usb_fil, offset) != FR_OK) return false;
-    if (f_read(&usb_fil, buf, 256, &n) != FR_OK) return false;
-    return n == 256;
+    return neo_file_read(&usb_file, offset, buf, 256);
 }
 
 static bool usb_write_sector(void* ctx, uint32_t offset, const uint8_t* buf) {
     (void)ctx;
-    UINT n = 0;
-    if (!usb_fil_open) return false;
-    if (f_lseek(&usb_fil, offset) != FR_OK) return false;
-    if (f_write(&usb_fil, buf, 256, &n) != FR_OK || n != 256) return false;
-    return f_sync(&usb_fil) == FR_OK;
+    return neo_file_write(&usb_file, offset, buf, 256);   // Durable on return (the driver syncs)
+}
+
+static bool usb_scan_entry(const neo_dirent_t* e, void* user) {
+    (void)user;
+    if (usb_num_files >= USB_MAX_FILES) return false;
+    if (e->dir || strlen(e->name) > 12) return true;
+    if (has_ext(e->name, ".ssd") || has_ext(e->name, ".dsd")) {
+        strcpy(usb_files[usb_num_files], e->name);
+        usb_num_files++;
+    }
+    return true;
 }
 
 static void usb_scan(void) {
-    DIR dir;
-    FILINFO fno;
     usb_num_files = 0;
-    if (f_opendir(&dir, "/") != FR_OK) return;
-    while (usb_num_files < USB_MAX_FILES && f_readdir(&dir, &fno) == FR_OK && fno.fname[0]) {
-        if (fno.fattrib & AM_DIR) continue;
-        if (has_ext(fno.fname, ".ssd") || has_ext(fno.fname, ".dsd")) {
-            strncpy(usb_files[usb_num_files], fno.fname, 12);
-            usb_files[usb_num_files][12] = 0;
-            usb_num_files++;
-        }
-    }
-    f_closedir(&dir);
+    if (!neo_storage_list(NEO_VOL_USB, "/", usb_scan_entry, 0)) return;
     printf("USB: %d disc image(s)\n", usb_num_files);
 }
 
@@ -293,20 +287,16 @@ static int num_images(void) { return usb_num_files + BBC_NUM_IMAGES; }
 // Insert image `index` (read-only) in drive 0: USB file or flash image
 static void insert_image(int index) {
     if (index < 0 || index >= num_images()) return;
-    if (usb_fil_open) {
-        f_close(&usb_fil);
-        usb_fil_open = false;
-    }
+    neo_file_close(&usb_file);
     if (index < usb_num_files) {
         const char* name = usb_files[index];
-        if (f_open(&usb_fil, name, FA_READ | FA_WRITE) != FR_OK) {
+        if (!neo_file_open_path(&usb_file, name, NEO_READ | NEO_WRITE)) {
             printf("USB: cannot open %s\n", name);
             return;
         }
-        usb_fil_open = true;
-        wd1770_insert_streamed(&state.bbc.fdc, 0, f_size(&usb_fil), has_ext(name, ".dsd") ? 2 : 1, usb_read_sector,
+        wd1770_insert_streamed(&state.bbc.fdc, 0, usb_file.size, has_ext(name, ".dsd") ? 2 : 1, usb_read_sector,
                                usb_write_sector, 0);
-        printf("Disc inserted: %s (%u bytes)\n", name, (unsigned)f_size(&usb_fil));
+        printf("Disc inserted: %s (%u bytes)\n", name, (unsigned)usb_file.size);
     } else {
 #ifdef BBC_HAVE_IMAGES
         const bbc_disc_image_t* im = &bbc_disc_images[index - usb_num_files];
@@ -450,6 +440,7 @@ extern volatile uint32_t diag_layout[4];
 void app_init(void) {
     (void)diag_layout[0];   // Kept by the linker for the host tools
     bbc_desc_t desc = bbc_desc();
+    neo_storage_set(NEO_VOL_USB, "Clé USB", &neo_storage_fatfs_ops, "");   // Ready once a drive is mounted
     bbc_init(&state.bbc, &desc);
     bbc_set_sample_rate_q8(&state.bbc, audio_pwm_rate_q8(22050));   // The rate the PWM really consumes
     bbc_reset(&state.bbc);
