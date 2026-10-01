@@ -38,15 +38,16 @@ jour au profit de picowifi.
 | Client → modem AT simulé → faux serveur (écho, lignes spontanées, +IPD avant ou après SEND OK, SEND FAIL) | `test_neo_esp` | 11 vérifications |
 | `oric_headless -N 127.0.0.1` ↔ `tnfsd` (UDP direct) | intégration | CLOAD, Sedoric DIR en flux, SAVE puis LOAD |
 | `oric_headless -S <pty> -N 127.0.0.1` ↔ `neo_esp_modem_pc` ↔ `tnfsd` | intégration | CLOAD, Sedoric en flux (voit le SAVE) |
-| Neo6502picowifi réel | — | **attend sa version UDP** |
+| **Interpréteur AT réel de Neo6502picowifi** (`at_modem.c` de b054568, non modifié, compilé sur PC dans un harnais : pseudo-terminal, socket UDP connecté) ↔ `tnfsd` | essai du 2026-10-01 | CLOAD (7 requêtes), Sedoric SAVE (350) puis LOAD dans une nouvelle session ; 640 datagrammes, 0 perdu, 0 répétition |
+| Pico W réel (Wi-Fi, lwIP) | — | à faire quand bmarty flashe `picow_modem.uf2` |
 
 Intégration : `ORIC_TNFSD=…/tnfsd tests/oric/run_integration.sh …/oric_headless` (19 essais ;
 sans `tnfsd`, les 5 essais réseau sont sautés). `neo_esp_modem_pc` (pseudo-terminal, UDP réel)
 et `platforms/pc/neo_esp_fake.h` reproduisent le dialogue du modem.
 
-## Essayer avec le Pico W (dès que picowifi a l'UDP)
+## Essayer avec le Pico W
 
-1. Flasher Neo6502picowifi sur le Pico W, le brancher sur le PC : `/dev/ttyACM0`.
+1. Flasher Neo6502picowifi (≥ b054568, `~/Neo6502picowifi/build/picow_modem.uf2`) sur le Pico W, le brancher sur le PC : `/dev/ttyACM0`.
 2. Lancer `tnfsd` sur une machine du réseau Wi-Fi.
 3. `NEO_WIFI_SSID=… NEO_WIFI_PASS=… oric_headless -S /dev/ttyACM0 -N <serveur> -T /JEU.TAP …`
    (sans `NEO_WIFI_SSID`, le réseau enregistré dans le modem est utilisé).
