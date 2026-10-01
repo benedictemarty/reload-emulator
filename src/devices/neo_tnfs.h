@@ -354,46 +354,43 @@ static bool _neo_tnfs_vclose(void* h) {
     return ok;
 }
 
-// Listing: the names are read first (READDIR up to the end, then CLOSEDIR), then
-// each one is STAT'ed for its size and type (mandatory commands only; READDIRX,
-// which returns both at once, is optional in the protocol)
-#ifndef NEO_TNFS_LIST_MAX
-#define NEO_TNFS_LIST_MAX 32
-#endif
-static char _neo_tnfs_names[NEO_TNFS_LIST_MAX][NEO_STORAGE_NAME_MAX];
-static int _neo_tnfs_count;
+// Listing: each entry is STAT'ed as it is read (size, type), on the same session
+// as the open directory (tnfsd serves both; mandatory commands only, READDIRX
+// being optional), so no list of names is kept in RAM
+typedef struct {
+    neo_tnfs_t* t;
+    const char* dir;
+    neo_dirent_cb_t cb;
+    void* user;
+} _neo_tnfs_list_t;
 
-static bool _neo_tnfs_collect(const char* name, void* user) {
-    (void)user;
-    if (strlen(name) >= NEO_STORAGE_NAME_MAX) return true;   // Too long to be named: skipped
-    if (_neo_tnfs_count >= NEO_TNFS_LIST_MAX) return false;
-    strcpy(_neo_tnfs_names[_neo_tnfs_count++], name);
-    return true;
+static bool _neo_tnfs_list_entry(const char* name, void* user) {
+    _neo_tnfs_list_t* l = (_neo_tnfs_list_t*)user;
+    const size_t nl = strlen(name), dl = strlen(l->dir);
+    if (nl >= NEO_STORAGE_NAME_MAX) return true;   // Too long to be named: skipped
+    neo_dirent_t e;
+    memset(&e, 0, sizeof(e));
+    memcpy(e.name, name, nl);
+    e.hidden = name[0] == '.';
+    char p[NEO_TNFS_MSG_MAX - 16];
+    if (dl + 1 + nl + 1 > sizeof(p)) return true;
+    memcpy(p, l->dir, dl);
+    size_t k = dl;
+    if (k == 0 || p[k - 1] != '/') p[k++] = '/';
+    memcpy(p + k, name, nl + 1);
+    // The STAT reuses t->req / t->resp: the READDIR answer (name) was copied above
+    uint16_t m = 0;
+    neo_tnfs_stat(l->t, p, &e.size, &m);
+    e.dir = (m & NEO_TNFS_S_IFMT) == NEO_TNFS_S_IFDIR;
+    return l->cb(&e, l->user);
 }
 
 static bool _neo_tnfs_vlist(void* vol, const char* dir, neo_dirent_cb_t cb, void* user) {
     neo_tnfs_t* t = (neo_tnfs_t*)vol;
     char d[NEO_TNFS_MSG_MAX - 80];
     _neo_tnfs_abs(dir[0] ? dir : "/", d, sizeof(d));
-    _neo_tnfs_count = 0;
-    if (!neo_tnfs_list(t, d, _neo_tnfs_collect, 0)) return false;
-    const size_t dl = strlen(d);
-    for (int i = 0; i < _neo_tnfs_count; i++) {
-        neo_dirent_t e;
-        memset(&e, 0, sizeof(e));
-        strcpy(e.name, _neo_tnfs_names[i]);
-        e.hidden = e.name[0] == '.';
-        char p[NEO_TNFS_MSG_MAX - 16];
-        memcpy(p, d, dl);
-        size_t k = dl;
-        if (p[k - 1] != '/') p[k++] = '/';
-        strcpy(p + k, e.name);
-        uint16_t m = 0;
-        neo_tnfs_stat(t, p, &e.size, &m);
-        e.dir = (m & NEO_TNFS_S_IFMT) == NEO_TNFS_S_IFDIR;
-        if (!cb(&e, user)) break;
-    }
-    return true;
+    _neo_tnfs_list_t l = {t, d, cb, user};
+    return neo_tnfs_list(t, d, _neo_tnfs_list_entry, &l);
 }
 
 static bool _neo_tnfs_vremove(void* vol, const char* path) {

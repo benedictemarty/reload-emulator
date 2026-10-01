@@ -82,6 +82,10 @@
 #include "devices/wd1793.h"
 #define NEO_STORAGE_IMPL
 #include "devices/neo_storage.h"
+#define NEO_TNFS_IMPL
+#include "devices/neo_tnfs.h"
+#define NEO_ESP_AT_IMPL
+#include "devices/neo_esp_at.h"
 #include "systems/oric.h"
 #define ORIC_PLANES_RAM __attribute__((section(".time_critical.oric_planes")))
 #include "systems/oric_planes.h"
@@ -107,6 +111,11 @@
 #include "neo_multiboot.h"
 #include "ff.h"
 extern const neo_storage_ops_t neo_storage_fatfs_ops;   // neo_storage_fatfs.c (socle)
+// Wi-Fi modem on the USB hub (Neo6502picowifi): neo_cdc_serial.c (socle)
+bool neo_cdc_ready(void);
+uint32_t neo_cdc_mount_count(void);
+bool neo_cdc_write(void *ctx, const uint8_t *p, int n);
+int neo_cdc_read_byte(void *ctx, uint32_t timeout_us);
 
 // Control panel (F1): grid of 8 x 8 cells covering the output, each buffer line shown twice
 #ifdef OLIMEX_NEO6502
@@ -361,6 +370,8 @@ extern bool msc_inquiry_complete;
 extern void msc_poll(void);
 
 static bool usb_scanned;
+// Network settings of ORIC.CFG (reseau, wifi, wifi_mdp), used by net_poll
+static char net_server[64], net_ssid[33], net_pass[64];
 // Files of the USB drive through neo_storage (volume NEO_VOL_USB, FatFs driver of the socle)
 static neo_file_t dsk_file[ORIC_MENU_DRIVES];
 static neo_file_t tap_file;
@@ -407,8 +418,8 @@ static bool dsk_insert(int d, const char *name) {
     dsk_close(d);
     bool ro = false;
     neo_file_t *f = &dsk_file[d];
-    if (!neo_file_open(f, NEO_VOL_USB, name, NEO_READ | NEO_WRITE)) {
-        if (!neo_file_open(f, NEO_VOL_USB, name, NEO_READ)) return false;
+    if (!neo_file_open_path(f, name, NEO_READ | NEO_WRITE)) {
+        if (!neo_file_open_path(f, name, NEO_READ)) return false;
         ro = true;
     }
     uint8_t header[ORIC_DSK_HEADER_SIZE];
@@ -434,7 +445,7 @@ static bool tap_insert(const char *name) {
         return true;
     }
     tap_close();
-    if (!neo_file_open(&tap_file, NEO_VOL_USB, name, NEO_READ)) return false;
+    if (!neo_file_open_path(&tap_file, name, NEO_READ)) return false;
     if (!oric_insert_tape(&state.oric, tap_file.size, neo_file_read_cb, &tap_file)) {
         tap_close();
         return false;
@@ -443,15 +454,16 @@ static bool tap_insert(const char *name) {
     return true;
 }
 
-// .dsk and .tap files of the root, sorted by name
+// .dsk and .tap files of the root of the USB drive, then of the network volume
+// (named "net:/NAME", user = that prefix), sorted by name
 static bool usb_scan_entry(const neo_dirent_t *e, void *user) {
-    (void)user;
+    const char *prefix = (const char *)user;
     if (menu.nfiles >= ORIC_MENU_FILES) return false;
     if (e->dir || e->hidden) return true;
     int kind = has_ext(e->name, ".dsk") ? ORIC_FILE_DSK : has_ext(e->name, ".tap") ? ORIC_FILE_TAP : -1;
     if (kind < 0) return true;
     oric_menu_file_t *f = &menu.files[menu.nfiles++];
-    snprintf(f->name, sizeof(f->name), "%s", e->name);
+    snprintf(f->name, sizeof(f->name), "%s%s", prefix ? prefix : "", e->name);
     f->size = e->size;
     f->kind = (uint8_t)kind;
     return true;
@@ -459,7 +471,9 @@ static bool usb_scan_entry(const neo_dirent_t *e, void *user) {
 
 static void usb_scan(void) {
     menu.nfiles = 0;
-    if (!neo_storage_list(NEO_VOL_USB, "/", usb_scan_entry, 0)) return;
+    const bool usb = neo_storage_list(NEO_VOL_USB, "/", usb_scan_entry, 0);
+    const bool net = neo_storage_list(NEO_VOL_NET, "/", usb_scan_entry, (void *)NEO_NET_PREFIX "/");
+    if (!usb && !net) return;
     for (int i = 1; i < menu.nfiles; i++) {
         oric_menu_file_t t = menu.files[i];
         int j = i - 1;
@@ -469,7 +483,7 @@ static void usb_scan(void) {
         }
         menu.files[j + 1] = t;
     }
-    snprintf(menu.usb_label, sizeof(menu.usb_label), "Clé montée");
+    snprintf(menu.usb_label, sizeof(menu.usb_label), "%s", usb && net ? "Clé montée + réseau" : usb ? "Clé montée" : "Réseau");
     menu.usb_present = true;
     printf("USB: %d image(s)\n", menu.nfiles);
 }
@@ -521,7 +535,9 @@ static int profile_find(const char *v) {
 
 static bool rom_load(const char *name) {
     uint32_t n;
-    return neo_file_load(NEO_VOL_USB, name, usb_rom, sizeof(usb_rom), &n, true);
+    int vol;
+    const char *p = neo_storage_split(name, &vol);
+    return neo_file_load(vol, p, usb_rom, sizeof(usb_rom), &n, true);
 }
 
 // Apply a profile: ROM, interface, drives and tape (those not given are emptied), then reset
@@ -605,6 +621,12 @@ static void config_load(void) {
             if (usb_nprofiles < ORIC_CONFIG_PROFILES && oric_config_profile(v, &usb_profiles[usb_nprofiles])) usb_nprofiles++;
         } else if ((v = oric_config_value(line, "demarrage"))) {
             oric_config_copy(start, sizeof(start), v);
+        } else if ((v = oric_config_value(line, "reseau"))) {
+            oric_config_copy(net_server, sizeof(net_server), v);
+        } else if ((v = oric_config_value(line, "wifi"))) {
+            oric_config_copy(net_ssid, sizeof(net_ssid), v);
+        } else if ((v = oric_config_value(line, "wifi_mdp"))) {
+            oric_config_copy(net_pass, sizeof(net_pass), v);
         } else if ((v = oric_config_value(line, "volume"))) {
             const int level = oric_config_volume(v, HID_VOLUME_MAX);
             if (level >= 0) audio_set_volume((uint8_t)level, false);
@@ -647,6 +669,40 @@ static void config_save(void) {
     size_t len = oric_config_merge(old, menu.fdc, drives, menu.tape, audio_volume_level(), out, sizeof(out));
     bool ok = neo_file_save(NEO_VOL_USB, ORIC_CONFIG_FILE, (const uint8_t *)out, (uint32_t)len);
     oric_menu_message(&menu, !ok, ok ? "Configuration enregistrée dans ORIC.CFG" : "ORIC.CFG : écriture impossible");
+}
+
+/*-- Network volume (TNFS through the Wi-Fi modem Neo6502picowifi) -----------*/
+// ORIC.CFG: reseau=SERVER[:PORT] (TNFS server), and optionally wifi=NETWORK and
+// wifi_mdp=PASSWORD (otherwise the network saved in the modem). Files on the
+// server are listed and named "net:/NAME" (docs/RESEAU-NEO6502.md).
+static neo_esp_t net_esp;
+static neo_tnfs_t net_tnfs;
+static uint32_t net_tried;   // Modem mount count of the last attempt
+
+static void net_poll(void) {
+    if (net_tnfs.mounted && !neo_cdc_ready()) {
+        net_tnfs.mounted = false;   // Modem pulled out: the volume is no longer ready
+        usb_scan();
+        oric_menu_message(&menu, true, "Réseau : modem retiré");
+        return;
+    }
+    if (!net_server[0] || net_tnfs.mounted || !neo_cdc_ready() || neo_cdc_mount_count() == net_tried) return;
+    net_tried = neo_cdc_mount_count();   // One attempt per plugging of the modem (it blocks the emulation meanwhile)
+    char host[64];
+    snprintf(host, sizeof(host), "%s", net_server);
+    char *colon = strchr(host, ':');
+    const uint16_t port = colon ? (uint16_t)atoi(colon + 1) : NEO_TNFS_PORT;
+    if (colon) *colon = 0;
+    neo_esp_init(&net_esp, neo_cdc_write, neo_cdc_read_byte, 0);
+    neo_tnfs_init(&net_tnfs, neo_esp_xfer, &net_esp);
+    const bool ok = neo_esp_open_udp(&net_esp, host, port, net_ssid[0] ? net_ssid : 0, net_pass) &&
+                    neo_tnfs_mount(&net_tnfs, "/", 0, 0);
+    if (ok) {
+        neo_storage_set(NEO_VOL_NET, "Réseau", &neo_storage_tnfs_ops, &net_tnfs);
+        usb_scan();
+    }
+    printf("Network: %s %s\n", net_server, ok ? "mounted" : "failed");
+    oric_menu_message(&menu, !ok, ok ? "Réseau monté" : "Réseau : serveur injoignable");
 }
 
 // Called every frame: once the USB drive is mounted, list its images and apply ORIC.CFG
@@ -1039,6 +1095,7 @@ int main() {
         }
 #endif
         usb_poll();
+        net_poll();
         banner_update();
 #ifdef ORIC_DIAG
         diag_file_service();

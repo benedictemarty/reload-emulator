@@ -53,8 +53,7 @@ typedef struct {
     char line[NEO_ESP_LINE_MAX];
     int line_len;
     int ipd;                 // 0 : texte ; 1 : longueur de +IPD ; 2 : données
-    uint32_t ipd_len, ipd_got;
-    uint8_t rx[NEO_ESP_DGRAM_MAX];
+    uint32_t ipd_len, ipd_got;   // Received straight into the free queue slot
     bool prompt;             // « > » reçu
     int result;              // NEO_ESP_*
     // Datagrammes reçus en attente
@@ -98,15 +97,17 @@ static void _neo_esp_line(neo_esp_t* e) {
 
 static void _neo_esp_feed(neo_esp_t* e, uint8_t c) {
     if (e->ipd == 2) {
-        if (e->ipd_got < sizeof(e->rx)) e->rx[e->ipd_got] = c;
+        // Into the next free slot; a datagram that is too long, or with the queue
+        // full, is read to its end and dropped
+        const bool keep = e->queued < 2 && e->ipd_len <= NEO_ESP_DGRAM_MAX;
+        if (keep) e->queue[e->queued][e->ipd_got] = c;
         if (++e->ipd_got == e->ipd_len) {
             e->ipd = 0;
             e->datagrams++;
-            if (e->ipd_len > sizeof(e->rx) || e->queued == 2) {
-                e->dropped++;
-            } else {
-                memcpy(e->queue[e->queued], e->rx, e->ipd_len);
+            if (keep) {
                 e->queue_len[e->queued++] = (int)e->ipd_len;
+            } else {
+                e->dropped++;
             }
         }
         return;

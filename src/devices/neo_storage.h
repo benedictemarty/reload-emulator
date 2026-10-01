@@ -49,6 +49,12 @@ extern "C" {
 
 // Volumes usuels
 #define NEO_VOL_USB 0
+#define NEO_VOL_NET 1   // Réseau (TNFS, devices/neo_tnfs.h)
+
+// Un chemin peut désigner son volume par un préfixe : « net:/JEU.DSK » est sur le
+// réseau, un chemin sans préfixe sur la clé. Les noms gardés par un émulateur
+// (lecteurs, ORIC.CFG, profils) restent ainsi de simples chaînes.
+#define NEO_NET_PREFIX "net:"
 
 // Modes d'ouverture
 #define NEO_READ   1
@@ -102,8 +108,26 @@ bool neo_storage_ready(int vol);
 bool neo_storage_list(int vol, const char* dir, neo_dirent_cb_t cb, void* user);
 bool neo_file_remove(int vol, const char* path);
 
+// Volume désigné par le préfixe du chemin (NEO_VOL_USB sans préfixe) ; renvoie le
+// chemin sans préfixe
+static inline const char* neo_storage_split(const char* path, int* vol) {
+    const size_t n = sizeof(NEO_NET_PREFIX) - 1;
+    if (!strncmp(path, NEO_NET_PREFIX, n)) {
+        *vol = NEO_VOL_NET;
+        return path + n;
+    }
+    *vol = NEO_VOL_USB;
+    return path;
+}
+
 // Fichiers
 bool neo_file_open(neo_file_t* f, int vol, const char* path, int mode);
+// Même chose, le volume pris dans le préfixe du chemin
+static inline bool neo_file_open_path(neo_file_t* f, const char* path, int mode) {
+    int vol;
+    const char* p = neo_storage_split(path, &vol);
+    return neo_file_open(f, vol, p, mode);
+}
 static inline bool neo_file_is_open(const neo_file_t* f) { return f->h != 0; }
 bool neo_file_read(neo_file_t* f, uint32_t offset, uint8_t* buf, uint32_t len);
 bool neo_file_write(neo_file_t* f, uint32_t offset, const uint8_t* buf, uint32_t len);

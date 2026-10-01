@@ -62,6 +62,13 @@ images intégrées au firmware (F1 à F8 auparavant).
 `a=` … `d=` (lecteurs), `tape=`, `volume=0` … `volume=8` ; appliqué au montage de la clé (l'Oric redémarre
 alors sur la disquette du lecteur A) ; le menu réécrit ces lignes et garde les autres.
 
+**Réseau** (docs/RESEAU-NEO6502.md) : `reseau=SERVEUR[:PORT]` (serveur TNFS),
+`wifi=RÉSEAU` et `wifi_mdp=MOT DE PASSE` (facultatifs : sinon le réseau enregistré dans le
+modem). Quand le modem Wi-Fi Neo6502picowifi (Pico W) est branché sur le hub USB, l'Oric
+monte le serveur et liste ses fichiers sous la forme `net:/NOM.DSK` à côté de ceux de la clé
+(`a=net:/SED.DSK` dans `ORIC.CFG` fonctionne aussi). La connexion bloque l'émulation le temps
+de l'établir (une tentative par branchement du modem). **Non essayé sur la carte.**
+
 ![Sélecteur de disquette](images/oric_menu_disque.png)
 
 ### Bandeau de la cassette

@@ -37,6 +37,13 @@ static bool stop_cb(const neo_dirent_t* e, void* user) {
     return false;
 }
 
+static void test_split(void) {
+    int vol = -1;
+    CHECK(!strcmp(neo_storage_split("net:/SED.DSK", &vol), "/SED.DSK") && vol == NEO_VOL_NET);
+    CHECK(!strcmp(neo_storage_split("SED.DSK", &vol), "SED.DSK") && vol == NEO_VOL_USB);
+    CHECK(!strcmp(neo_storage_split("netx.dsk", &vol), "netx.dsk") && vol == NEO_VOL_USB);
+}
+
 static void test_volumes(void) {
     CHECK(!neo_storage_volume(0) && !neo_storage_ready(0));
     CHECK(!neo_storage_volume(-1) && !neo_storage_volume(NEO_STORAGE_VOLUMES));
@@ -120,6 +127,7 @@ static void test_posix(void) {
 }
 
 int main(void) {
+    test_split();
     test_volumes();
     test_mem();
     test_posix();

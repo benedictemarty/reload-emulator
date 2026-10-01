@@ -52,8 +52,17 @@ et `platforms/pc/neo_esp_fake.h` reproduisent le dialogue du modem.
 3. `NEO_WIFI_SSID=… NEO_WIFI_PASS=… oric_headless -S /dev/ttyACM0 -N <serveur> -T /JEU.TAP …`
    (sans `NEO_WIFI_SSID`, le réseau enregistré dans le modem est utilisé).
 
+## Sur la Neo6502 (Oric, 2026-10-01, compilé, non essayé sur la carte)
+
+- `platforms/rp2040/src/neo_cdc_serial.c` (socle) : port série USB côté hôte (TinyUSB CDC,
+  `CFG_TUH_CDC=1` dans le CMake du firmware) au format de `neo_esp_init`.
+- Oric : `ORIC.CFG` `reseau=`, `wifi=`, `wifi_mdp=` ; au branchement du modem, le volume
+  `NEO_VOL_NET` est monté et ses fichiers listés `net:/NOM` dans le menu ; `neo_storage_split`
+  choisit le volume d'après le préfixe du nom. RAM : 3,5 Ko (oric : 9 536 o de marge,
+  oric_diag : 340 o).
+- Liste d'un répertoire distant : STAT de chaque entrée pendant la lecture (vérifié contre
+  `tnfsd` : tailles, répertoires).
+
 ## Reste à faire
 
-- Sur la Neo6502 : liaison série vers le modem (TinyUSB CDC hôte : `CFG_TUH_CDC` est à 0 dans
-  le socle ; ou UART de l'UEXT), configuration réseau lue sur la clé, volume « Réseau » dans
-  le menu.
+- Essai du Pico W sur PC, puis sur la carte ; UART de l'UEXT en option ; autres systèmes.

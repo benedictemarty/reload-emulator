@@ -9,6 +9,7 @@ add_executable(oric
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_storage_fatfs.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_cdc_serial.c
 )
 
 target_compile_options(oric PRIVATE -Wall)
@@ -18,6 +19,9 @@ target_compile_definitions(oric PRIVATE
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_sock_cfg
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 	ORIC_BUS_PIO=1   # 65C02 bus on a PIO state machine (measured fastest, validated on the board 2026-09-30)
+	CFG_TUH_CDC=1    # Wi-Fi modem Neo6502picowifi on the USB hub (network volume, docs/RESEAU-NEO6502.md)
+	CFG_TUH_CDC_RX_BUFSIZE=256
+	CFG_TUH_CDC_TX_BUFSIZE=256
 	# DVI_DEFAULT_SERIAL_CONFIG=olimex_rp2040pc_cfg
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_zero_cfg
 )
@@ -50,9 +54,11 @@ function(oric_diag_variant name)
 		${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
 		${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_storage_fatfs.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_cdc_serial.c
 	)
 	target_compile_options(${name} PRIVATE -Wall -g)   # -g: line tables for the SWD PC sampling (same code)
-	target_compile_definitions(${name} PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1 ${ARGN})
+	target_compile_definitions(${name} PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg ORIC_DIAG=1
+		CFG_TUH_CDC=1 CFG_TUH_CDC_RX_BUFSIZE=256 CFG_TUH_CDC_TX_BUFSIZE=256 ${ARGN})
 	target_link_libraries(${name} pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs hardware_pio)
 	pico_generate_pio_header(${name} ${CMAKE_CURRENT_SOURCE_DIR}/../../src/chips/bus6502.pio)
 	pico_add_extra_outputs(${name})
