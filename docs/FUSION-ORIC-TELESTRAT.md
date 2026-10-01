@@ -76,6 +76,36 @@ Le câblage réel de READY sur la Microdisc et le Telestrat n'est pas mesuré.
 Choix encore ouverts, à trancher par les deux suites d'intégration : pause après
 l'en-tête de cassette (1248 ou 1281 cycles), fin de bande (4 bits 1 ou 2 alternances).
 
+## VIA unique : critères d'acceptation (étape 9, 2026-10-01)
+
+Candidate : `src/chips/via6522.c/.h` (VIA du Vic20, 61/61 tests VICE). Exigences reçues :
+
+**Telestrat** (rejeu cycle à cycle, charge 59 / 67 %) :
+1. Résultat **identique à des pas de 4 cycles**, IRQ comprise (test_replay A, B, C) ; une API
+   publique « combien de pas de 4 cycles sans événement » et « avancer de n pas sans événement »
+   (il lit aujourd'hui t1/t2.counter, t_out, intr.pip, ifr/ier, acr, CB2 de mos6522via).
+2. Correctif IER (désactiver une source active relâche l'IRQ) : STRATSED en dépend.
+3. Même retard de pipeline de l'IRQ que mos6522via, ou le rejeu change (démarrage à froid en
+   RAM 64 Ko : bus flottant, sensible au cycle près).
+4. Lignes : VIA 1 comme l'Oric (AY par PA/CA2/CB2, clavier PB0-3, imprimante PB4/CA1, PB7 pour
+   CSAVE, CB1 cassette) ; VIA 2 : PA0-2 = banque avec DDR (une ligne en entrée garde la banque
+   précédente), PA4 série, PB manettes, CB1 sonnerie redonnée à chaque pas.
+5. Instantanés : version de format + 1 si la structure change (accepté).
+
+**Tangerine** (vérifié contre MAME au cycle près, 11 jeux identiques en RAM) :
+1. Calage de MAME 6522via (IFR_DELAY 3) : IRQ de T1/T2 N+3 cycles après l'écriture ; roue
+   libre toutes les N+3 (N+2 entre bascules de PB7) ; lecture du compteur = reste − 3 ; écrire
+   l'ACR en roue libre relance T1 depuis son compteur.
+2. `via_peek` : lecture sans effet de bord (vidages, bus tenu en reset) — **absente** de la
+   candidate.
+3. PB7 piloté par T1 et lu par le port B (sortie cassette).
+4. CB2 en entrée, front choisi par PCR, mode « indépendant » (présent dans la candidate).
+5. Latches de mise sous tension comme MAME, puis reset.
+
+**Question ouverte** : calage temporel. La candidate suit VICE (période N+2 en roue libre),
+Tangerine suit MAME (IRQ à N+3, lecture − 3). À départager par les tests VICE du Vic20 et le
+test golden MAME de Tangerine, sur la même VIA ; on ne choisit pas sans mesure.
+
 ## La NES (Neo6502nes) dans la fusion
 
 Ajoutée le 2026-09-30. La NES consomme déjà le socle par `RELOAD_DIR` (SDK, PicoDVI,
