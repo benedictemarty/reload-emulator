@@ -109,6 +109,39 @@ Candidate : `src/chips/via6522.c/.h` (VIA du Vic20, 61/61 tests VICE). Exigences
 Tangerine suit MAME (IRQ à N+3, lecture − 3). À départager par les tests VICE du Vic20 et le
 test golden MAME de Tangerine, sur la même VIA ; on ne choisit pas sans mesure.
 
+**Mesure (2026-10-01) : golden MAME de Tangerine avec la VIA du socle.** Un clone de
+Neo6502Tangerine (sans toucher à son dépôt), dans lequel `src/via6522.[ch]` devient un adaptateur
+vers la VIA du socle. Un banc fait aussi tourner les deux VIA côte à côte et journalise chaque
+lecture, chaque niveau d'IRQ et chaque PB7 qui diffèrent.
+
+| Essai | Golden (15 cas) |
+|---|---|
+| VIA de Tangerine (référence) | 15 réussis ; écarts connus : berzerk 83, defender 15, hangman 2 octets |
+| VIA du socle telle quelle | 13 ; **échecs** : mooncresta (31 octets), son de berzerk ; berzerk 145, defender 150 |
+| + latches de MAME seuls | identique (13) |
+| + compteurs en marche dès la mise sous tension + latches MAME | 14 ; mooncresta réussi, defender 15, berzerk 52 ; son de berzerk en échec |
+| + monostable sans rechargement (comme MAME) | **15** ; berzerk 83, defender 15, hangman 2 (identique à la référence) |
+
+Différences trouvées entre les deux VIA. **Aucune ne relève du calage N+2 / N+3** :
+- **A. Compteurs avant toute écriture.** MAME les fait décompter dès la mise sous tension. Le
+  socle les laisse figés à FFFF jusqu'à l'écriture de T1CH / T2CH, et `via_reset` les arrête.
+  mooncresta et defender lisent T1CL / T2CL sans les avoir écrits (hasard, a priori).
+- **B. Mise sous tension et reset.** MAME met les latches à B5F3 et son reset les garde ; le
+  socle les remet à FFFF. B5F3 est une valeur de MAME ; le vrai circuit, je ne sais pas.
+- **C. Lecture du compteur.** Le socle lit 1 cycle de plus que MAME, et après l'écriture de
+  T1CH il tient FFFF deux cycles. Visible dans la trace, **sans effet sur le golden**.
+- **D. Monostable après le délai.** Le socle recharge depuis le latch (période latch + 2) ;
+  `via6522.c` dit que c'est mesuré sur un vrai VIC-20 (viavarious via1). MAME boucle par FFFF
+  sans recharger. Le son de berzerk dépend de D.
+
+Conséquences :
+- Le golden est un **autre émulateur**. Pour D, la référence matérielle du Vic20 contredit MAME :
+  on suit le matériel (proposition du Vic20), et l'écart de berzerk devient un écart de MAME, à
+  documenter chez Tangerine.
+- A et B ne sont pas couverts par les tests du Vic20, à ma connaissance. À vérifier avec lui.
+- Le banc se trouve dans le dossier temporaire de la session (`tgr/src/via6522.c`, variables
+  `SV_DRIVE`, `SV_FREE`, `SV_LATCH`, `VIA_DIFF`, `VIA_T1`) ; il n'est pas versionné.
+
 ## La NES (Neo6502nes) dans la fusion
 
 Ajoutée le 2026-09-30. La NES consomme déjà le socle par `RELOAD_DIR` (SDK, PicoDVI,
