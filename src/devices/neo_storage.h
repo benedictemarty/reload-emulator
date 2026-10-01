@@ -77,6 +77,8 @@ typedef struct {
     bool (*close)(void* h);
     // Entrées du répertoire dir ("/" : la racine), dans l'ordre du pilote
     bool (*list)(void* vol, const char* dir, neo_dirent_cb_t cb, void* user);
+    // Efface un fichier ; NULL : le volume ne sait pas effacer
+    bool (*remove)(void* vol, const char* path);
 } neo_storage_ops_t;
 
 typedef struct {
@@ -98,6 +100,7 @@ void neo_storage_set(int vol, const char* label, const neo_storage_ops_t* ops, v
 const neo_volume_t* neo_storage_volume(int vol);   // NULL si le volume n'est pas défini
 bool neo_storage_ready(int vol);
 bool neo_storage_list(int vol, const char* dir, neo_dirent_cb_t cb, void* user);
+bool neo_file_remove(int vol, const char* path);
 
 // Fichiers
 bool neo_file_open(neo_file_t* f, int vol, const char* path, int mode);
@@ -158,6 +161,11 @@ bool neo_storage_ready(int vol) {
 bool neo_storage_list(int vol, const char* dir, neo_dirent_cb_t cb, void* user) {
     const neo_volume_t* v = neo_storage_volume(vol);
     return v && v->ops->list && neo_storage_ready(vol) && v->ops->list(v->ctx, dir, cb, user);
+}
+
+bool neo_file_remove(int vol, const char* path) {
+    const neo_volume_t* v = neo_storage_volume(vol);
+    return v && v->ops->remove && neo_storage_ready(vol) && v->ops->remove(v->ctx, path);
 }
 
 bool neo_file_open(neo_file_t* f, int vol, const char* path, int mode) {
@@ -271,6 +279,6 @@ static bool _neo_mem_list(void* vol, const char* dir, neo_dirent_cb_t cb, void* 
     return true;
 }
 const neo_storage_ops_t neo_storage_mem_ops = {0, _neo_mem_open, _neo_mem_read, _neo_mem_write, _neo_mem_close,
-                                               _neo_mem_list};
+                                               _neo_mem_list, 0};   // No removal: fixed files
 
 #endif  // NEO_STORAGE_IMPL

@@ -166,6 +166,12 @@ static int srv_handle(const uint8_t* req, int len, uint8_t* resp) {
             srv_dir_pos++;
             return srv_reply(req, 0, (const uint8_t*)name, (int)strlen(name) + 1, resp);
         }
+        case NEO_TNFS_UNLINK: {
+            const int f = srv_find((const char*)p);
+            if (f < 0) return srv_reply(req, NEO_TNFS_ENOENT, 0, 0, resp);
+            srv_file[f].exists = false;
+            return srv_reply(req, 0, 0, 0, resp);
+        }
         case NEO_TNFS_CLOSEDIR:
             srv_dir_pos = -1;
             return srv_reply(req, 0, 0, 0, resp);
@@ -302,6 +308,8 @@ static void test_volume(void) {
     CHECK(!neo_file_open(&f, 1, "NONE.DSK", NEO_READ));
     listed = 0;
     CHECK(neo_storage_list(1, "/", list_cb, 0) && listed == 2);
+    CHECK(neo_file_remove(1, "C.DSK") && !neo_file_open(&f, 1, "C.DSK", NEO_READ));
+    CHECK(!neo_file_remove(1, "C.DSK") && t.error == NEO_TNFS_ENOENT);
     neo_tnfs_umount(&t);
     CHECK(!neo_storage_ready(1));
 }

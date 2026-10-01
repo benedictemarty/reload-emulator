@@ -79,5 +79,11 @@ static bool neo_fatfs_list(void *vol, const char *dir, neo_dirent_cb_t cb, void 
     return true;
 }
 
+static bool neo_fatfs_remove(void *vol, const char *path) {
+    char p[96];
+    neo_fatfs_path((const char *)vol, path, p, sizeof(p));
+    return f_unlink(p) == FR_OK;
+}
+
 const neo_storage_ops_t neo_storage_fatfs_ops = {0, neo_fatfs_open, neo_fatfs_read, neo_fatfs_write, neo_fatfs_close,
-                                                 neo_fatfs_list};
+                                                 neo_fatfs_list, neo_fatfs_remove};

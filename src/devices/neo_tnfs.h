@@ -44,7 +44,7 @@ enum {
     NEO_TNFS_MOUNT = 0x00, NEO_TNFS_UMOUNT = 0x01,
     NEO_TNFS_OPENDIR = 0x10, NEO_TNFS_READDIR = 0x11, NEO_TNFS_CLOSEDIR = 0x12,
     NEO_TNFS_READ = 0x21, NEO_TNFS_WRITE = 0x22, NEO_TNFS_CLOSE = 0x23, NEO_TNFS_STAT = 0x24,
-    NEO_TNFS_LSEEK = 0x25, NEO_TNFS_OPEN = 0x29,
+    NEO_TNFS_LSEEK = 0x25, NEO_TNFS_UNLINK = 0x26, NEO_TNFS_OPEN = 0x29,
 };
 // Drapeaux d'OPEN, codes de retour utiles
 #define NEO_TNFS_O_RDONLY 0x0001
@@ -105,6 +105,8 @@ bool neo_tnfs_write(neo_tnfs_t* t, uint8_t fd, const uint8_t* buf, uint32_t len)
 // Entrées du répertoire path (« . » et « .. » omis) ; cb renvoie false pour arrêter
 typedef bool (*neo_tnfs_dir_cb_t)(const char* name, void* user);
 bool neo_tnfs_list(neo_tnfs_t* t, const char* path, neo_tnfs_dir_cb_t cb, void* user);
+// Efface un fichier (UNLINK, commande facultative du protocole : tnfsd la sert)
+bool neo_tnfs_unlink(neo_tnfs_t* t, const char* path);
 
 extern const neo_storage_ops_t neo_storage_tnfs_ops;
 
@@ -279,6 +281,11 @@ bool neo_tnfs_list(neo_tnfs_t* t, const char* path, neo_tnfs_dir_cb_t cb, void* 
     return ok;
 }
 
+bool neo_tnfs_unlink(neo_tnfs_t* t, const char* path) {
+    if (strlen(path) + 1 > NEO_TNFS_MSG_MAX - 4) return false;
+    return _neo_tnfs_call(t, NEO_TNFS_UNLINK, _neo_tnfs_str(t->req + 4, path)) >= 0;
+}
+
 // Volume neo_storage : le descripteur est un neo_tnfs_file_t (qui pointe vers son
 // client) ; la position du serveur est suivie : un LSEEK seulement quand elle change
 static void _neo_tnfs_abs(const char* path, char* out, size_t n) {
@@ -389,7 +396,13 @@ static bool _neo_tnfs_vlist(void* vol, const char* dir, neo_dirent_cb_t cb, void
     return true;
 }
 
+static bool _neo_tnfs_vremove(void* vol, const char* path) {
+    char p[NEO_TNFS_MSG_MAX - 16];
+    _neo_tnfs_abs(path, p, sizeof(p));
+    return neo_tnfs_unlink((neo_tnfs_t*)vol, p);
+}
+
 const neo_storage_ops_t neo_storage_tnfs_ops = {_neo_tnfs_ready, _neo_tnfs_vopen, _neo_tnfs_vread, _neo_tnfs_vwrite,
-                                                _neo_tnfs_vclose, _neo_tnfs_vlist};
+                                                _neo_tnfs_vclose, _neo_tnfs_vlist, _neo_tnfs_vremove};
 
 #endif  // NEO_TNFS_IMPL

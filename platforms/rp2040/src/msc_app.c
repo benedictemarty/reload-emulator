@@ -16,6 +16,7 @@
 #define MSC_SLOTS MSC_VOLUMES
 static FATFS msc_fatfs_volumes[MSC_SLOTS];
 static volatile bool msc_volume_busy[MSC_SLOTS];
+static volatile uint8_t msc_io_status[MSC_SLOTS];   // CSW status of the last transfer (0: passed)
 static uint8_t msc_slot_addr[MSC_SLOTS];   // USB address of the drive in each slot, 0: free
 
 static int msc_slot(uint8_t dev_addr) {
@@ -64,6 +65,7 @@ void msc_poll(void) {
     if (!msc_pending_mount) return;
     uint8_t dev_addr = (uint8_t)(msc_pending_mount - 1);
     msc_pending_mount = 0;
+    if (!tuh_msc_mounted(dev_addr)) return;   // Pulled out since its INQUIRY: no slot for a dead address
     const int slot = msc_slot_take(dev_addr);
     if (slot < 0) {
         printf("MSC: no free volume for USB address %u (%d volumes)\r\n", dev_addr, MSC_SLOTS);
@@ -75,6 +77,7 @@ void msc_poll(void) {
     FRESULT result = f_mount(&msc_fatfs_volumes[slot], drive_path, 1);
     if (result != FR_OK) {
         printf("MSC filesystem mount failed (%d)\r\n", result);
+        msc_slot_addr[slot] = 0;   // Slot given back: the drive may be plugged in again
         return;
     }
 
@@ -94,12 +97,16 @@ void tuh_msc_mount_cb(uint8_t dev_addr) {
 }
 
 void tuh_msc_umount_cb(uint8_t dev_addr) {
+    if (msc_pending_mount == (uint8_t)(dev_addr + 1)) msc_pending_mount = 0;   // Pulled out before msc_poll
     const int slot = msc_slot(dev_addr);
     if (slot < 0) return;
     char drive_path[3] = "0:";
     drive_path[0] += slot;
     f_unmount(drive_path);
     msc_slot_addr[slot] = 0;
+    bool any = false;
+    for (int i = 0; i < MSC_SLOTS; i++) any = any || msc_slot_addr[i];
+    msc_inquiry_complete = any;
 }
 
 // Give up on a transfer after this long: on the RP2040 host a bulk transfer can
@@ -107,6 +114,8 @@ void tuh_msc_umount_cb(uint8_t dev_addr) {
 // keyboard), which would freeze the caller.
 #define MSC_IO_TIMEOUT_US 1000000
 
+// True if the transfer completed and the drive reported success (CSW status 0):
+// a refused write (locked card, bad sector) must not pass for a written one
 static bool wait_for_disk_io(BYTE pdrv) {
     uint32_t start = time_us_32();
     while (msc_volume_busy[pdrv]) {
@@ -117,13 +126,19 @@ static bool wait_for_disk_io(BYTE pdrv) {
             return false;
         }
     }
+    if (msc_io_status[pdrv] != 0) {
+        printf("MSC transfer failed (CSW status %u)\r\n", msc_io_status[pdrv]);
+        return false;
+    }
     return true;
 }
 
 static bool disk_io_complete(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_data) {
-    (void)cb_data;
     const int slot = msc_slot(dev_addr);
-    if (slot >= 0) msc_volume_busy[slot] = false;
+    if (slot >= 0) {
+        msc_io_status[slot] = (cb_data && cb_data->csw) ? cb_data->csw->status : 0xFF;
+        msc_volume_busy[slot] = false;
+    }
     return true;
 }
 
@@ -143,6 +158,7 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
     uint8_t const dev_addr = msc_slot_addr[pdrv];
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
+    msc_io_status[pdrv] = 0xFF;
     if (!tuh_msc_read10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
         msc_volume_busy[pdrv] = false;
         return RES_ERROR;
@@ -155,6 +171,7 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
     uint8_t const dev_addr = msc_slot_addr[pdrv];
     uint8_t const lun = 0;
     msc_volume_busy[pdrv] = true;
+    msc_io_status[pdrv] = 0xFF;
     if (!tuh_msc_write10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
         msc_volume_busy[pdrv] = false;
         return RES_ERROR;
@@ -170,7 +187,7 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
         case CTRL_SYNC:
             return RES_OK;
         case GET_SECTOR_COUNT:
-            *((DWORD *)buff) = (WORD)tuh_msc_get_block_count(dev_addr, lun);
+            *((DWORD *)buff) = (DWORD)tuh_msc_get_block_count(dev_addr, lun);   // Was cut to 16 bits (keys > 32 MB)
             return RES_OK;
         case GET_SECTOR_SIZE:
             *((WORD *)buff) = (WORD)tuh_msc_get_block_size(dev_addr, lun);

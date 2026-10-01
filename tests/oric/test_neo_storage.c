@@ -76,6 +76,7 @@ static void test_mem(void) {
     int seen = 0;
     CHECK(neo_storage_list(1, "/", stop_cb, &seen) && seen == 1);   // The callback stops the listing
     CHECK(!neo_storage_list(1, "/SUB", count_cb, 0));
+    CHECK(!neo_file_remove(1, "SAVE.TAP"));   // The memory volume cannot remove
     neo_storage_set(1, 0, 0, 0);
     CHECK(!neo_storage_volume(1));
 }
@@ -100,6 +101,10 @@ static void test_posix(void) {
     listed = 0;
     CHECK(neo_storage_list(NEO_VOL_USB, "/", count_cb, 0) && listed == 2);
     CHECK(!neo_file_open(&f, NEO_VOL_USB, "NONE.TAP", NEO_READ));
+    // Removal
+    CHECK(neo_file_remove(NEO_VOL_USB, "/B.TAP") && !neo_file_open(&f, NEO_VOL_USB, "B.TAP", NEO_READ));
+    CHECK(!neo_file_remove(NEO_VOL_USB, "B.TAP"));   // Already gone
+    CHECK(neo_file_save(NEO_VOL_USB, "B.TAP", (const uint8_t*)"x", 1));
     // Streamed tape: a .tap read by the Oric tape reader through neo_file_read_cb
     static const uint8_t tap[] = {0x16, 0x16, 0x16, 0x24, 0, 0, 0x80, 0, 0x05, 0x01, 0x05, 0x00, 0, 'A', 0, 0x42, 0x43};
     CHECK(neo_file_save(NEO_VOL_USB, "T.TAP", tap, sizeof(tap)));

@@ -72,5 +72,11 @@ static bool _neo_posix_list(void* vol, const char* dir, neo_dirent_cb_t cb, void
     return true;
 }
 
+static bool _neo_posix_remove(void* vol, const char* path) {
+    char p[1024];
+    _neo_posix_path((const char*)vol, path, p, sizeof(p));
+    return remove(p) == 0;
+}
+
 static const neo_storage_ops_t neo_storage_posix_ops = {0, _neo_posix_open, _neo_posix_read, _neo_posix_write,
-                                                        _neo_posix_close, _neo_posix_list};
+                                                        _neo_posix_close, _neo_posix_list, _neo_posix_remove};
