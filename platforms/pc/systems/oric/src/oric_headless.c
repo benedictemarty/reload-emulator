@@ -14,10 +14,10 @@
 //   -N HOST[:PORT]  files over the network: -0..-3 and -T are paths on the TNFS
 //             server HOST (devices/neo_tnfs.h), disks read and written as streams
 //             (as on the board), not loaded in memory
-//   -S TTY    TNFS through a network bridge on the serial port TTY (Pico W on
-//             /dev/ttyACM0, or the pseudo-terminal of neo_netbridge_pc) instead of
-//             UDP; with -N, the bridge is configured first (server, and the Wi-Fi
-//             network from the environment: NEO_WIFI_SSID, NEO_WIFI_PASS)
+//   -S TTY    TNFS through an ESP8266 AT Wi-Fi modem on the serial port TTY
+//             (Neo6502picowifi on /dev/ttyACM0, or neo_esp_modem_pc) instead of
+//             UDP from the PC; needs -N SERVER (AT+CIPSTART="UDP"); Wi-Fi network
+//             from the environment (NEO_WIFI_SSID, NEO_WIFI_PASS) or the modem's own
 //   -t TEXT   type TEXT after -w frames (default 60; \n = RETURN, ~ = pause of 50 frames)
 //   -w N      frames before typing
 //   -h N      hold each key N frames, then release it N frames (default 3)
@@ -96,8 +96,8 @@ static uint8_t* oric_nib_images[1];
 #define NEO_TNFS_IMPL
 #include "devices/neo_tnfs.h"
 #include "../../../neo_tnfs_udp.h"
-#define NEO_NETLINK_IMPL
-#include "devices/neo_netlink.h"
+#define NEO_ESP_AT_IMPL
+#include "devices/neo_esp_at.h"
 #include "../../../neo_serial_posix.h"
 
 // Files through neo_storage, as on the board: volume 0 = paths as given (-T),
@@ -242,37 +242,31 @@ int main(int argc, char** argv) {
     // Volume of the files: the local file system, or a TNFS server (-N)
     static neo_tnfs_t tnfs;
     static neo_tnfs_udp_t udp;
-    static neo_netlink_t link;
+    static neo_esp_t esp;
     int serial_fd = -1;
     if (serial_tty) {
-        // Network bridge on a serial port (Pico W, or neo_netbridge_pc)
+        // Wi-Fi modem on a serial port (Neo6502picowifi, or neo_esp_modem_pc)
+        if (!tnfs_host) {
+            fprintf(stderr, "oric_headless: -S needs -N SERVER\n");
+            return 2;
+        }
         serial_fd = neo_serial_open(serial_tty);
         if (serial_fd < 0) {
             fprintf(stderr, "oric_headless: cannot open %s\n", serial_tty);
             return 2;
         }
-        neo_netlink_init(&link, neo_serial_write, neo_serial_read_byte, (void*)(intptr_t)serial_fd);
-        if (tnfs_host) {
-            char host[256];
-            snprintf(host, sizeof(host), "%s", tnfs_host);
-            char* colon = strchr(host, ':');
-            const uint16_t port = colon ? (uint16_t)atoi(colon + 1) : NEO_TNFS_PORT;
-            if (colon) *colon = 0;
-            const char* ssid = getenv("NEO_WIFI_SSID");
-            const char* pass = getenv("NEO_WIFI_PASS");
-            neo_netlink_configure(&link, ssid ? ssid : "", pass ? pass : "", host, port);
-        }
-        int st = -1;
-        for (int i = 0; i < 60 && st != NEO_NET_UP; i++) {   // Up to 30 s for the Wi-Fi to join
-            st = neo_netlink_status(&link, 0, 0, 500);
-            if (st != NEO_NET_UP) usleep(500000);
-        }
-        if (st != NEO_NET_UP) {
-            fprintf(stderr, "oric_headless: network bridge on %s not ready (state %d)\n", serial_tty, st);
+        neo_esp_init(&esp, neo_serial_write, neo_serial_read_byte, (void*)(intptr_t)serial_fd);
+        char host[256];
+        snprintf(host, sizeof(host), "%s", tnfs_host);
+        char* colon = strchr(host, ':');
+        const uint16_t port = colon ? (uint16_t)atoi(colon + 1) : NEO_TNFS_PORT;
+        if (colon) *colon = 0;
+        if (!neo_esp_open_udp(&esp, host, port, getenv("NEO_WIFI_SSID"), getenv("NEO_WIFI_PASS"))) {
+            fprintf(stderr, "oric_headless: Wi-Fi modem on %s: no UDP link to %s\n", serial_tty, tnfs_host);
             return 2;
         }
         tnfs_host = serial_tty;   // The files are on the network from here on
-        neo_tnfs_init(&tnfs, neo_netlink_xfer, &link);
+        neo_tnfs_init(&tnfs, neo_esp_xfer, &esp);
         tnfs.sleep = neo_tnfs_udp_sleep;
     } else if (tnfs_host) {
         char host[256];
@@ -433,7 +427,8 @@ int main(int argc, char** argv) {
         printf("tnfs: %u request(s), %u resent\n", (unsigned)tnfs.sent, (unsigned)tnfs.resent);
         neo_tnfs_umount(&tnfs);
         if (serial_fd >= 0) {
-            printf("netlink: %u frame(s) received, %u bad\n", (unsigned)link.dec.frames, (unsigned)link.dec.bad);
+            printf("modem: %u datagram(s) received, %u dropped, %u send failure(s)\n", (unsigned)esp.datagrams,
+                   (unsigned)esp.dropped, (unsigned)esp.send_fail);
             close(serial_fd);
         } else {
             neo_tnfs_udp_close(&udp);

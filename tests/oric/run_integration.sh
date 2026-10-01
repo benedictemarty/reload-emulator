@@ -27,8 +27,8 @@ FTDOS_DSK=${ORIC_FTDOS_DSK:-$HOME/oriclib/games/dsk/FTDOS.dsk}
 BASIC_TAP=${ORIC_BASIC_TAP:-$HOME/oric-bench/sieve_cc65.tap}
 HIRES_TAP=${ORIC_HIRES_TAP:-$HOME/pichires/spell.tap}
 TNFSD=${ORIC_TNFSD:-$HOME/spectranet/tnfs/tnfsd/bin/tnfsd}
-# Network bridge on the PC (the Pico W's twin), built next to oric_headless
-NETBRIDGE=${ORIC_NETBRIDGE:-$(dirname "$HEADLESS")/../../netbridge/neo_netbridge_pc}
+# Wi-Fi modem simulated on the PC (ESP8266 AT: the twin of Neo6502picowifi), built next to oric_headless
+NETBRIDGE=${ORIC_NETBRIDGE:-$(dirname "$HEADLESS")/../../netbridge/neo_esp_modem_pc}
 
 TMP=$(mktemp -d)
 TNFSD_PID=
@@ -93,17 +93,17 @@ else
         "$HEADLESS" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1800 -w 900 -t ' 10 PRINT 4242\nSAVE"RLNET"\n' > /dev/null 2>&1
     fi
     check "TNFS: Sedoric SAVE, then LOAD in a new session" "10 PRINT 4242" "$TMP/tnfs/SED.DSK" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1600 -w 900 -t ' LOAD"RLNET"\nLIST\n' -s
-    # Through the serial link and the network bridge (devices/neo_netlink.h), as with the Pico W
+    # Through a Wi-Fi modem on a serial port (devices/neo_esp_at.h), as with Neo6502picowifi
     if [ -x "$NETBRIDGE" ]; then
-        "$NETBRIDGE" -s 127.0.0.1 -p "$TMP/pty.txt" > /dev/null 2> "$TMP/bridge.log" &
+        "$NETBRIDGE" -p "$TMP/pty.txt" > /dev/null 2> "$TMP/bridge.log" &
         BRIDGE_PID=$!
         sleep 1
         PTY=$(cat "$TMP/pty.txt" 2>/dev/null)
-        check "Bridge: CLOAD over the serial link" "531 CALL#50D" "$TMP/tnfs/SIEVE.TAP" -S "$PTY" -N 127.0.0.1 -T /SIEVE.TAP -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
-        check "Bridge: Sedoric streamed over the serial link (sees the SAVE)" "RLNET    .COM" "$TMP/tnfs/SED.DSK" -S "$PTY" -c microdisc -0 /SED.DSK -f 1300 -w 900 -t ' DIR\n' -s
+        check "Modem: CLOAD through the AT Wi-Fi modem" "531 CALL#50D" "$TMP/tnfs/SIEVE.TAP" -S "$PTY" -N 127.0.0.1 -T /SIEVE.TAP -f 3500 -w 150 -t 'CLOAD""\n~~~~~~~~~~~~~~~~~~~~~~~~LIST\n' -s
+        check "Modem: Sedoric streamed through the modem (sees the SAVE)" "RLNET    .COM" "$TMP/tnfs/SED.DSK" -S "$PTY" -N 127.0.0.1 -c microdisc -0 /SED.DSK -f 1300 -w 900 -t ' DIR\n' -s
         kill "$BRIDGE_PID" 2>/dev/null; BRIDGE_PID=
     else
-        echo "SKIP bridge tests (missing $NETBRIDGE)"; skip=$((skip + 2))
+        echo "SKIP modem tests (missing $NETBRIDGE)"; skip=$((skip + 2))
     fi
     kill "$TNFSD_PID" 2>/dev/null; TNFSD_PID=
 fi
