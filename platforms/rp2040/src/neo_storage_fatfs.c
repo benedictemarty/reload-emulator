@@ -3,8 +3,8 @@
 // Volume : ctx = préfixe de lecteur FatFs ("" : lecteur par défaut, "1:"…).
 //   neo_storage_set(NEO_VOL_USB, "Clé USB", &neo_storage_fatfs_ops, "");
 // Fichiers ouverts en même temps : NEO_FATFS_FILES (une réserve de FIL, pas
-// d'allocation). Prêt : à l'appelant de ne servir le volume qu'une fois la clé
-// montée (ready est NULL ; msc_app.c n'expose pas d'état commun à tous les ports).
+// d'allocation). Prêt quand une clé est montée (msc_inquiry_complete de msc_app.c,
+// que tous les firmwares du socle utilisent ; demandé par le Vic20).
 //
 // Copyright (c) 2026 bmarty — licence zlib/libpng (voir src/devices/neo_storage.h)
 
@@ -18,6 +18,13 @@
 #ifndef NEO_FATFS_FILES
 #define NEO_FATFS_FILES 6   // 4 lecteurs + cassette + enregistrement / configuration
 #endif
+
+extern bool msc_inquiry_complete;   // msc_app.c: a USB drive is mounted
+
+static bool neo_fatfs_ready(void *vol) {
+    (void)vol;
+    return msc_inquiry_complete;
+}
 
 static FIL neo_fatfs_fil[NEO_FATFS_FILES];
 static bool neo_fatfs_used[NEO_FATFS_FILES];
@@ -85,5 +92,5 @@ static bool neo_fatfs_remove(void *vol, const char *path) {
     return f_unlink(p) == FR_OK;
 }
 
-const neo_storage_ops_t neo_storage_fatfs_ops = {0, neo_fatfs_open, neo_fatfs_read, neo_fatfs_write, neo_fatfs_close,
+const neo_storage_ops_t neo_storage_fatfs_ops = {neo_fatfs_ready, neo_fatfs_open, neo_fatfs_read, neo_fatfs_write, neo_fatfs_close,
                                                  neo_fatfs_list, neo_fatfs_remove};

@@ -682,6 +682,7 @@ static neo_esp_t net_esp;
 static neo_dgram_t net_dgram;
 static neo_tnfs_t net_tnfs;
 static uint32_t net_tried;   // Modem mount count of the last attempt
+static bool net_usb_enabled;  // AT$TNFSUSB=1 sent once (the modem then restarts)
 
 static void net_poll(void) {
     if (net_tnfs.mounted && !neo_cdc_ready()) {
@@ -701,15 +702,25 @@ static void net_poll(void) {
     // Second serial port of the modem (Neo6502picowifi eeda7d3, PicoWiFiModemUSB): TNFS in
     // frames there, the server given by AT$TNFS, and the AT port stays free (Minitel).
     // Otherwise (one port only, or not mounted: the USB host has 15 endpoints in all), AT UDP.
-    const bool relay = neo_cdc_port_ready(1);
-    bool ok;
-    if (relay) {
+    bool relay = neo_cdc_port_ready(1);
+    bool ok = neo_esp_prepare(&net_esp, net_ssid[0] ? net_ssid : 0, net_pass);
+    if (ok && !relay && !net_usb_enabled && neo_esp_tnfs_usb(&net_esp) == 0) {
+        // The modem has a TNFS port, disabled (default of Neo6502picowifi): enabled once,
+        // in its flash, then it restarts; the next attempt comes with its new enumeration
+        net_usb_enabled = true;
+        if (neo_esp_enable_tnfs_usb(&net_esp)) {
+            oric_menu_message(&menu, false, "Réseau : port TNFS du modem activé, redémarrage du modem");
+            return;
+        }
+    }
+    if (ok && relay) {
         neo_dgram_init(&net_dgram, neo_cdc_write, neo_cdc_read_byte, (void *)1);
         neo_tnfs_init(&net_tnfs, neo_dgram_xfer, &net_dgram);
-        ok = neo_esp_set_tnfs(&net_esp, host, port, net_ssid[0] ? net_ssid : 0, net_pass);
-    } else {
+        ok = neo_esp_tnfs_server(&net_esp, host, port);
+    } else if (ok) {
+        // One port only (old firmware, or the TNFS port did not mount: 15 endpoints in all)
         neo_tnfs_init(&net_tnfs, neo_esp_xfer, &net_esp);
-        ok = neo_esp_open_udp(&net_esp, host, port, net_ssid[0] ? net_ssid : 0, net_pass);
+        ok = neo_esp_udp_start(&net_esp, host, port);
     }
     ok = ok && neo_tnfs_mount(&net_tnfs, "/", 0, 0);
     if (ok) {

@@ -128,6 +128,15 @@ int main(void) {
     modem.no_ip_polls = 3;
     neo_esp_init(&e3, host_write, host_read, 0);
     CHECK(neo_esp_open_udp(&e3, "192.168.1.10", 16384, 0, 0) && modem.no_ip_polls == 0 && e3.status == 2);
+    // Second TNFS port: disabled, enabled once (flash) then the modem restarts; old firmware: -1
+    neo_esp_fake_init(&modem);
+    static neo_esp_t e4;
+    neo_esp_init(&e4, host_write, host_read, 0);
+    CHECK(neo_esp_prepare(&e4, 0, 0) && neo_esp_tnfs_usb(&e4) == 0);
+    CHECK(neo_esp_enable_tnfs_usb(&e4) && modem.tnfs_usb == 1 && modem.resets == 1);
+    CHECK(neo_esp_prepare(&e4, 0, 0) && neo_esp_tnfs_usb(&e4) == 1);
+    modem.tnfs_usb = -1;
+    CHECK(neo_esp_tnfs_usb(&e4) == -1);
     // Unknown host: CIPSTART fails
     static neo_esp_t e2;
     neo_esp_fake_init(&modem);

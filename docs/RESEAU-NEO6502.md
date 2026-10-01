@@ -77,6 +77,12 @@ interfaces 0-1 « Modem AT », 2-3 « TNFS » ; `AT$TNFS="hôte",port` (ou `hôt
 intégration : CLOAD et Sedoric par le port TNFS (21/21 avec tnfsd). L'Oric prend le port TNFS
 s'il est monté, sinon l'AT UDP (`CFG_TUH_CDC=2` ; oric_diag reste à 1 port, RAM).
 
+**Port désactivé par défaut** (décision de bmarty, Neo6502picowifi 5dae630) : `AT$TNFSUSB=1`
+(gardé en flash) puis `AT+RST` ; le port n'apparaît qu'à l'énumération suivante. Le client
+(`neo_esp_tnfs_usb`, `neo_esp_enable_tnfs_usb`) : si le port 2 n'est pas monté et que le modem
+répond `$TNFSUSB:0`, il l'active **une fois** et attend le retour du modem ; sinon (ancien
+firmware, ou port activé mais non monté) il prend l'AT UDP. L'Oric le fait dans `net_poll`.
+
 **Attention, hôte USB du RP2040** (relevé par la session picowifi dans le code de TinyUSB
 0.21, même pilote dans le socle) : 16 entrées de points de terminaison pour tous les
 appareils, 15 utilisables (`ep_pool[USB_MAX_ENDPOINTS]`, `hcd_rp2040.c`). Hub + 2 HID + clé ≈ 10 ;

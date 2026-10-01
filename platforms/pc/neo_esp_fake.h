@@ -41,6 +41,8 @@ typedef struct {
     bool (*tnfs_send)(void* ctx, const char* host, uint16_t port, const uint8_t* p, int n);
     uint8_t tnfs_in[2048];
     int tnfs_in_len;
+    int tnfs_usb;      // AT$TNFSUSB: 0/1 ; -1 : commande inconnue (ancien firmware)
+    uint32_t resets;   // AT+RST reçus
 } neo_esp_fake_t;
 
 static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
@@ -54,6 +56,8 @@ static inline void neo_esp_fake_init(neo_esp_fake_t* m) {
     m->tnfs_host[0] = 0;
     m->tnfs_port = 0;
     m->tnfs_in_len = 0;
+    m->tnfs_usb = 0;
+    m->resets = 0;
 }
 
 static inline void _fake_out(neo_esp_fake_t* m, const char* s) { m->out(m->ctx, (const uint8_t*)s, (int)strlen(s)); }
@@ -113,6 +117,18 @@ static inline void _fake_command(neo_esp_fake_t* m, const char* cmd) {
                 m->tnfs_port = (uint16_t)atoi(c + 1);
             }
         }
+        _fake_out(m, "\r\nOK\r\n");
+    } else if (!strcmp(cmd, "AT$TNFSUSB?") && m->tnfs_usb >= 0) {
+        char s[40];
+        snprintf(s, sizeof(s), "$TNFSUSB:%d\r\n\r\nOK\r\n", m->tnfs_usb);
+        _fake_out(m, s);
+    } else if (!strncmp(cmd, "AT$TNFSUSB=", 11) && m->tnfs_usb >= 0) {
+        m->tnfs_usb = atoi(cmd + 11) ? 1 : 0;
+        _fake_out(m, "\r\nOK\r\n");
+    } else if (!strcmp(cmd, "AT+RST")) {
+        m->resets++;
+        m->echo = true;
+        m->linked = false;
         _fake_out(m, "\r\nOK\r\n");
     } else if (!strcmp(cmd, "AT+CIPCLOSE")) {
         if (!m->linked) {
