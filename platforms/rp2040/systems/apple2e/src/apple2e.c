@@ -384,6 +384,28 @@ static inline void __not_in_flash_func(render_scanline)(const uint32_t *pixbuf, 
     apple2e_render_scanline(pixbuf, scanbuf, n_pix);
 }
 
+#ifdef APPLE_DIAG
+// Bench over SWD (-DAPPLE_DIAG, tools/oric_carte.py taper): key queue as oric_diag (codes
+// as hid_app.c gives them, each key held then released for 4 frames), frame counter,
+// late scanlines of PicoDVI summed by core 1 (dvi0.late_scanline_ctr is a debt that goes
+// down again: only its rises are added, sampled at every line)
+volatile uint16_t diag_keyq[256];
+volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames, diag_exec_us, diag_exec_max;
+volatile uint32_t diag_late_total, diag_late_frames, core1_frames;
+static uint32_t diag_late_prev;
+static inline void __not_in_flash_func(diag_late_sample)(void) {
+    const uint32_t late = dvi0.late_scanline_ctr;
+    if (late > diag_late_prev) {
+        diag_late_total += late - diag_late_prev;
+        diag_late_frames = core1_frames;
+    }
+    diag_late_prev = late;
+}
+#define DIAG_LATE_SAMPLE() diag_late_sample()
+#else
+#define DIAG_LATE_SAMPLE() ((void)0)
+#endif
+
 #define APPLE2E_EMPTY_LINES   ((FRAME_HEIGHT - APPLE2E_SCREEN_HEIGHT * 2) / 4)
 #define APPLE2E_EMPTY_COLUMNS ((FRAME_WIDTH - APPLE2E_SCREEN_WIDTH) / 2)
 
@@ -393,10 +415,12 @@ static inline void __not_in_flash_func(render_empty_scanlines)() {
         queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
         copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
+        DIAG_LATE_SAMPLE();
 
         queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
         copy_tmdsbuf(tmdsbuf, empty_tmdsbuf);
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
+        DIAG_LATE_SAMPLE();
     }
 }
 
@@ -408,12 +432,14 @@ static inline void __not_in_flash_func(render_frame)() {
                         280);
         tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
+        DIAG_LATE_SAMPLE();
 
         queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
         render_scanline((const uint32_t *)(&state.apple2e.fb[(y + 1) * 280]),
                         (uint32_t *)(&scanbuf[APPLE2E_EMPTY_COLUMNS]), 280);
         tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
+        DIAG_LATE_SAMPLE();
     }
 }
 
@@ -424,6 +450,9 @@ void __not_in_flash_func(core1_main()) {
     dvi_start(&dvi0);
 
     while (1) {
+#ifdef APPLE_DIAG
+        core1_frames++;
+#endif
         render_empty_scanlines();
         render_frame();
         render_empty_scanlines();
@@ -446,6 +475,26 @@ void wait_for_msc_ready(void) {
         msc_poll();   // Mounts the volume outside tuh_task
     }
 }
+
+#ifdef APPLE_DIAG
+static void diag_key_service(void) {
+    static int phase, timer, key;
+    diag_frames++;
+    if (timer > 0) {
+        timer--;
+    } else if (phase == 1) {
+        kbd_raw_key_up(key);
+        phase = 0;
+        timer = 4;
+    } else if (diag_keyq_head != diag_keyq_tail) {
+        key = diag_keyq[diag_keyq_head & 255];
+        diag_keyq_head++;
+        kbd_raw_key_down(key);
+        phase = 1;
+        timer = 4;
+    }
+}
+#endif
 
 // The emulation loop, with apple2e_tick inlined, runs from RAM too
 static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
@@ -490,9 +539,16 @@ int main() {
 
         apple2e_screen_update(&state.apple2e);
         tuh_task();
+#ifdef APPLE_DIAG
+        diag_key_service();
+#endif
 
         uint32_t end_time_in_micros = time_us_32();
         uint32_t execution_time = end_time_in_micros - start_time_in_micros;
+#ifdef APPLE_DIAG
+        diag_exec_us = execution_time;
+        if (execution_time > diag_exec_max) diag_exec_max = execution_time;
+#endif
         // printf("%d us\n", execution_time);
 
         int sleep_time = 16666 - execution_time;

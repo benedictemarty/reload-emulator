@@ -37,3 +37,21 @@ neo_multiboot_slot(apple2e "${NEO_SLOT_APPLE2E}")
 
 pico_enable_stdio_usb(apple2e 0)
 pico_enable_stdio_uart(apple2e 1)
+
+#=== Bench firmware over SWD (tools/oric_carte.py taper ; screen read in the emulated RAM):
+# key queue diag_keyq, frame counter, late scanlines summed by core 1
+add_executable(apple2e_diag
+	${CMAKE_CURRENT_SOURCE_DIR}/src/apple2e.c
+	${CMAKE_CURRENT_SOURCE_DIR}/src/utils.S
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_storage_fatfs.c
+)
+target_compile_options(apple2e_diag PRIVATE -Wall)
+target_compile_definitions(apple2e_diag PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
+	NEO_FATFS_FILES=1 APPLE_DIAG=1)
+target_link_libraries(apple2e_diag pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
+pico_add_extra_outputs(apple2e_diag)
+pico_enable_stdio_usb(apple2e_diag 0)
+pico_enable_stdio_uart(apple2e_diag 1)
