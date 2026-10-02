@@ -220,8 +220,9 @@ exactement avec une période de N+8 ; $B9 avec N+2.
 - RP2040 : `oric` et les `oric_diag*` avec la VIA en RAM (`VIA6522_HOT`) ; `oric_diag_mos`
   remplace `oric_diag_via6522` pour comparer. Marge RAM : oric 7 188 o, oric_diag 4 960 o.
 - Vérifié : CTest 16/16 (intégration 22/22 avec les deux VIA), firmwares compilés, cœur 1 :
-  0 fonction en flash. Sur la carte (mesure de la veille, même code) : −9,6 % de temps
-  d'émulation.
+  0 fonction en flash. Sur la carte (2026-10-02, tête f718721, boucle BASIC vérifiée à
+  l'écran) : oric_diag 12 959 µs par trame (64,9 %) contre oric_diag_mos 14 328 µs (71,8 %),
+  soit −9,6 %, comme la veille ; le panneau F1 (osd_panel.h) s'ouvre normalement.
 
 ## La NES (Neo6502nes) dans la fusion
 
