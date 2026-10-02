@@ -23,6 +23,13 @@
 #ifndef VIA6522_HOT
 #define VIA6522_HOT
 #endif
+/* reload (socle) : placement des accès aux registres et aux lignes (via_read, via_write,
+ * via_set_ca1, via_set_cb1 et leurs aides), à part du chemin de chaque pas (VIA6522_HOT :
+ * via_advance, via_update, via_sync, via_quiet, via_check_irq, registre à décalage) ;
+ * même placement par défaut. Neo6502TeleStrat (RAM 64 Ko) : le pas en RAM, les accès en flash */
+#ifndef VIA6522_HOT_ACCESS
+#define VIA6522_HOT_ACCESS VIA6522_HOT
+#endif
 
 static void VIA6522_HOT via_check_irq(via6522_t* via) {
     bool irq = (via->ifr & via->ier & VIA_IER_MASK) != 0;
@@ -101,7 +108,7 @@ static void VIA6522_HOT via_sr_event(via6522_t* via) {
 /* Accès (lecture ou écriture) au registre : démarre une séquence si aucune
  * n'est en cours, quel que soit le sens ; en φ2, premier événement au cycle
  * suivant. */
-static void VIA6522_HOT via_sr_access(via6522_t* via) {
+static void VIA6522_HOT_ACCESS via_sr_access(via6522_t* via) {
     uint8_t mode = via->acr & 0x1C;
     if (mode == 0) return;               /* désactivé : ne démarre rien */
     if (mode == 0x10) {                  /* sortie libre : parité conservée */
@@ -119,7 +126,7 @@ static void VIA6522_HOT via_sr_access(via6522_t* via) {
 /* Port access side effects on CA2 (read/write ORA) and CB2 (write ORB):
  * handshake output (100) drives the pin low until the CA1/CB1 active edge;
  * pulse output (101) drives it low for one φ2 cycle. */
-static void VIA6522_HOT via_ca2_port_access(via6522_t* via) {
+static void VIA6522_HOT_ACCESS via_ca2_port_access(via6522_t* via) {
     uint8_t mode = via->pcr & 0x0E;
     if (mode == 0x08) {                   /* 100: handshake output */
         via->ca2_pin = false;
@@ -129,7 +136,7 @@ static void VIA6522_HOT via_ca2_port_access(via6522_t* via) {
     }
 }
 
-static void VIA6522_HOT via_cb2_port_access(via6522_t* via) {
+static void VIA6522_HOT_ACCESS via_cb2_port_access(via6522_t* via) {
     uint8_t mode = via->pcr & 0xE0;
     if (mode == 0x80) {                   /* 100: handshake output */
         via->cb2_pin = false;
@@ -140,7 +147,7 @@ static void VIA6522_HOT via_cb2_port_access(via6522_t* via) {
 }
 
 /* Live Port A input pins: wired-AND of IRA (PSG bus) and external drivers */
-static uint8_t VIA6522_HOT via_pa_pins(via6522_t* via) {
+static uint8_t VIA6522_HOT_ACCESS via_pa_pins(via6522_t* via) {
     uint8_t pins = via->porta_read ? via->porta_read(via->userdata) : 0xFF;
     return (uint8_t)(via->ira & pins);
 }
@@ -253,7 +260,7 @@ void via_reset(via6522_t* via) {
                             * référence viavarious via10-13 du vrai VIC-20) */
 }
 
-uint8_t VIA6522_HOT via_read(via6522_t* via, uint8_t reg) {
+uint8_t VIA6522_HOT_ACCESS via_read(via6522_t* via, uint8_t reg) {
     via_sync(via);
     reg &= 0x0F;
     switch (reg) {
@@ -347,7 +354,7 @@ uint8_t VIA6522_HOT via_read(via6522_t* via, uint8_t reg) {
     return 0xFF;
 }
 
-void VIA6522_HOT via_write(via6522_t* via, uint8_t reg, uint8_t value) {
+void VIA6522_HOT_ACCESS via_write(via6522_t* via, uint8_t reg, uint8_t value) {
     via_sync(via);
     reg &= 0x0F;
     switch (reg) {
@@ -630,7 +637,7 @@ void via_trigger_ca1(via6522_t* via) {
     via_check_irq(via);
 }
 
-void VIA6522_HOT via_set_ca1(via6522_t* via, bool state) {
+void VIA6522_HOT_ACCESS via_set_ca1(via6522_t* via, bool state) {
     via_sync(via);
     bool old = via->ca1_pin;
     via->ca1_pin = state;
@@ -675,7 +682,7 @@ void via_trigger_ca2(via6522_t* via) {
     via_check_irq(via);
 }
 
-void VIA6522_HOT via_set_cb1(via6522_t* via, bool state) {
+void VIA6522_HOT_ACCESS via_set_cb1(via6522_t* via, bool state) {
     via_sync(via);
     bool old = via->cb1_pin;
     via->cb1_pin = state;
