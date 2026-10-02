@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "osd/osd.h"
+#include "osd/osd_panel.h"   // Style commun des panneaux (socle)
 #include "devices/hid_media.h"   // HID_VOLUME_MAX
 
 #ifndef ORIC_MENU_FILES
@@ -332,94 +333,43 @@ static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
 
 /*-- Dessin ------------------------------------------------------------------*/
 
-#define ORIC_OSD_BG        OSD_ATTR(OSD_WHITE, OSD_BLACK)
-#define ORIC_OSD_PANEL     OSD_ATTR(OSD_WHITE, OSD_BLUE | OSD_DITHER)
-#define ORIC_OSD_PANEL_DIM OSD_ATTR(OSD_CYAN, OSD_BLUE | OSD_DITHER)
-#define ORIC_OSD_PANEL_ACC OSD_ATTR(OSD_YELLOW, OSD_BLUE | OSD_DITHER)
-#define ORIC_OSD_PANEL_OK  OSD_ATTR(OSD_GREEN, OSD_BLUE | OSD_DITHER)
-#define ORIC_OSD_PANEL_ERR OSD_ATTR(OSD_RED, OSD_BLUE | OSD_DITHER)
-#define ORIC_OSD_EDGE      OSD_ATTR(OSD_CYAN, OSD_BLUE | OSD_DITHER)
-#define ORIC_OSD_SEL       OSD_ATTR(OSD_WHITE, OSD_BLUE)
-#define ORIC_OSD_SEL_ACC   OSD_ATTR(OSD_YELLOW, OSD_BLUE)
-#define ORIC_OSD_SEL_DIM   OSD_ATTR(OSD_CYAN, OSD_BLUE)
-
 // Origine de la mise en page de 100 x 30 dans la grille
 #define ORIC_OSD_R0 ((OSD_ROWS - 30) / 2)
 #define ORIC_OSD_C0 ((OSD_COLS - 100) / 2)
-
-// Panneau : fond tramé, cadre arrondi, icône et titre dans le filet du haut
-static inline void _oric_panel(osd_surface_t* s, int row, int col, int rows, int cols, uint8_t icon, const char* title) {
-    osd_fill(s, row, col, rows, cols, ORIC_OSD_PANEL);
-    osd_frame(s, row, col, rows, cols, ORIC_OSD_EDGE, NULL, 0);
-    int c = col + 2;
-    osd_putc(s, row, c++, ' ', ORIC_OSD_EDGE);
-    if (icon) {
-        osd_putc(s, row, c++, icon, ORIC_OSD_PANEL_ACC);
-        osd_putc(s, row, c++, (uint8_t)(icon + 1), ORIC_OSD_PANEL_ACC);
-        osd_putc(s, row, c++, ' ', ORIC_OSD_EDGE);
-    }
-    c += osd_puts(s, row, c, title, ORIC_OSD_PANEL, -1);
-    osd_putc(s, row, c, ' ', ORIC_OSD_EDGE);
-}
-
-// Ligne d'élément : barre de sélection pleine, marqueur ▶
-static inline void _oric_item_bar(osd_surface_t* s, int row, int col, int cols, bool selected) {
-    osd_fill(s, row, col, 1, cols, selected ? ORIC_OSD_SEL : ORIC_OSD_PANEL);
-    if (selected) osd_putc(s, row, col, OSD_TRI_R, ORIC_OSD_SEL_ACC);
-}
-
-static inline void _oric_size(char* buf, size_t n, uint32_t size) {
-    if (size >= 1024 * 1024) {
-        snprintf(buf, n, "%u,%u Mo", (unsigned)(size >> 20), (unsigned)((size % (1u << 20)) * 10 >> 20));
-    } else {
-        snprintf(buf, n, "%u Ko", (unsigned)((size + 1023) >> 10));
-    }
-}
-
-static inline void _oric_button(osd_surface_t* s, int row, int col, int cols, const char* label, bool selected) {
-    const uint8_t attr = selected ? OSD_ATTR(OSD_BLACK, OSD_CYAN) : ORIC_OSD_PANEL;
-    osd_fill(s, row, col, 1, cols, attr);
-    osd_puts(s, row, col + (cols - osd_strlen(label)) / 2, label, attr, -1);
-}
 
 static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
     char buf[112];
     const int R = ORIC_OSD_R0, C = ORIC_OSD_C0;
     const bool main_page = m->page == ORIC_PAGE_MAIN;
-    osd_clear(s, ORIC_OSD_BG);
+    osd_clear(s, OSD_PANEL_BG);
 
     // Bandeau
-    osd_fill(s, R, 0, 3, OSD_COLS, OSD_ATTR(OSD_WHITE, OSD_BLUE));
-    osd_puts_big(s, R + 1, C + 3, "ORIC / PRAVETZ / NOVA", OSD_ATTR(OSD_WHITE, OSD_BLUE));
-    osd_puts(s, R + 1, C + 48, "panneau de contrôle", OSD_ATTR(OSD_YELLOW, OSD_BLUE), -1);
     snprintf(buf, sizeof(buf), "Neo6502  %s", m->version ? m->version : "");
-    osd_puts(s, R + 1, C + 97 - osd_strlen(buf), buf, OSD_ATTR(OSD_CYAN, OSD_BLUE), -1);
-    for (int c = 0; c < OSD_COLS; c++) osd_putc(s, R + 3, c, OSD_HLINE, OSD_ATTR(OSD_CYAN, OSD_BLACK));
+    osd_panel_header(s, R, C + 3, "ORIC / PRAVETZ / NOVA", C + 48, "panneau de contrôle", C + 97, buf);
 
     // Interface disque
-    _oric_panel(s, R + 5, C + 2, 3, 47, OSD_FLOP_L, "Interface disque");
+    osd_panel_box(s, R + 5, C + 2, 3, 47, OSD_FLOP_L, "Interface disque");
     {
         const bool sel = main_page && m->cursor == ORIC_ITEM_FDC;
-        _oric_item_bar(s, R + 6, C + 3, 45, sel);
-        osd_puts(s, R + 6, C + 5, oric_menu_fdc_names[m->fdc], sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC, -1);
-        osd_puts(s, R + 6, C + 18, oric_menu_fdc_notes[m->fdc], sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM, -1);
+        osd_panel_item_bar(s, R + 6, C + 3, 45, sel);
+        osd_puts(s, R + 6, C + 5, oric_menu_fdc_names[m->fdc], sel ? OSD_PANEL_SEL_ACC : OSD_PANEL_ACC, -1);
+        osd_puts(s, R + 6, C + 18, oric_menu_fdc_notes[m->fdc], sel ? OSD_PANEL_SEL_DIM : OSD_PANEL_DIM, -1);
     }
 
     // Disquettes
-    _oric_panel(s, R + 9, C + 2, 10, 47, OSD_FLOP_L, "Disquettes");
+    osd_panel_box(s, R + 9, C + 2, 10, 47, OSD_FLOP_L, "Disquettes");
     for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
         const int row = R + 11 + 2 * d;
         const bool sel = main_page && m->cursor == ORIC_ITEM_DRIVE0 + d;
-        _oric_item_bar(s, row, C + 3, 45, sel);
-        const uint8_t base = sel ? ORIC_OSD_SEL : ORIC_OSD_PANEL, dim = sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM;
+        osd_panel_item_bar(s, row, C + 3, 45, sel);
+        const uint8_t base = sel ? OSD_PANEL_SEL : OSD_PANEL, dim = sel ? OSD_PANEL_SEL_DIM : OSD_PANEL_DIM;
         snprintf(buf, sizeof(buf), "%c", 'A' + d);
-        osd_puts(s, row, C + 5, buf, sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC, -1);
+        osd_puts(s, row, C + 5, buf, sel ? OSD_PANEL_SEL_ACC : OSD_PANEL_ACC, -1);
         if (m->drive[d][0]) {
             osd_puts(s, row, C + 8, m->drive[d], base, 27);
             const bool ro = m->drive_ro[d];
             osd_putc(s, row, C + 36, ro ? OSD_LOCK : OSD_DOT,
-                     ro ? (sel ? OSD_ATTR(OSD_RED, OSD_BLUE) : ORIC_OSD_PANEL_ERR)
-                        : (sel ? OSD_ATTR(OSD_GREEN, OSD_BLUE) : ORIC_OSD_PANEL_OK));
+                     ro ? osd_panel_err(sel) : osd_panel_ok(sel));
             osd_puts(s, row, C + 38, ro ? "protégée" : "écriture", dim, -1);
         } else if (!oric_menu_dsk_drives(m) && d > 0) {
             osd_puts(s, row, C + 8, "—", dim, -1);
@@ -429,13 +379,13 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
     }
 
     // Cassette
-    _oric_panel(s, R + 5, C + 51, 5, 47, OSD_TAPE_L, "Cassette");
+    osd_panel_box(s, R + 5, C + 51, 5, 47, OSD_TAPE_L, "Cassette");
     {
         const int row = R + 7;
         const bool sel = main_page && m->cursor == ORIC_ITEM_TAPE;
-        _oric_item_bar(s, row, C + 52, 45, sel);
-        const uint8_t base = sel ? ORIC_OSD_SEL : ORIC_OSD_PANEL, dim = sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM;
-        const uint8_t acc = sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC;
+        osd_panel_item_bar(s, row, C + 52, 45, sel);
+        const uint8_t base = sel ? OSD_PANEL_SEL : OSD_PANEL, dim = sel ? OSD_PANEL_SEL_DIM : OSD_PANEL_DIM;
+        const uint8_t acc = sel ? OSD_PANEL_SEL_ACC : OSD_PANEL_ACC;
         osd_putc(s, row, C + 54, OSD_TAPE_L, acc);
         osd_putc(s, row, C + 55, OSD_TAPE_R, acc);
         if (m->tape[0]) {
@@ -449,45 +399,45 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
         } else {
             osd_puts(s, row, C + 57, "— pas de cassette —", dim, -1);
         }
-        osd_puts(s, R + 8, C + 54, "CLOAD\"\" : la bande défile, moteur en marche", ORIC_OSD_PANEL_DIM, 43);
+        osd_puts(s, R + 8, C + 54, "CLOAD\"\" : la bande défile, moteur en marche", OSD_PANEL_DIM, 43);
     }
 
     // Clé USB
-    _oric_panel(s, R + 11, C + 51, 4, 47, OSD_USB_L, "Clé USB");
+    osd_panel_box(s, R + 11, C + 51, 4, 47, OSD_USB_L, "Clé USB");
     if (m->usb_present) {
         int ndsk = 0, ntap = 0;
         for (int i = 0; i < m->nfiles; i++) {
             if (m->files[i].kind == ORIC_FILE_DSK) ndsk++;
             else ntap++;
         }
-        osd_puts(s, R + 12, C + 54, m->usb_label[0] ? m->usb_label : "Clé montée", ORIC_OSD_PANEL, 42);
+        osd_puts(s, R + 12, C + 54, m->usb_label[0] ? m->usb_label : "Clé montée", OSD_PANEL, 42);
         snprintf(buf, sizeof(buf), "%d .dsk   %d .tap", ndsk, ntap);
-        osd_puts(s, R + 13, C + 54, buf, ORIC_OSD_PANEL_DIM, -1);
+        osd_puts(s, R + 13, C + 54, buf, OSD_PANEL_DIM, -1);
     } else {
-        osd_puts(s, R + 12, C + 54, "Aucune clé", ORIC_OSD_PANEL, -1);
-        osd_puts(s, R + 13, C + 54, "Clé FAT : .dsk et .tap à la racine", ORIC_OSD_PANEL_DIM, -1);
+        osd_puts(s, R + 12, C + 54, "Aucune clé", OSD_PANEL, -1);
+        osd_puts(s, R + 13, C + 54, "Clé FAT : .dsk et .tap à la racine", OSD_PANEL_DIM, -1);
     }
 
     // Profil
-    _oric_panel(s, R + 16, C + 51, 3, 47, OSD_CART_L, "Profil");
+    osd_panel_box(s, R + 16, C + 51, 3, 47, OSD_CART_L, "Profil");
     {
         const bool sel = main_page && m->cursor == ORIC_ITEM_PROFILE;
-        _oric_item_bar(s, R + 17, C + 52, 45, sel);
+        osd_panel_item_bar(s, R + 17, C + 52, 45, sel);
         const bool known = m->profile_cur >= 0 && m->profile_cur < ORIC_MENU_PROFILES && m->profile[m->profile_cur];
         osd_puts(s, R + 17, C + 54, known ? m->profile[m->profile_cur] : "— réglages de l'utilisateur —",
-                 known ? (sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC) : (sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM), 42);
+                 known ? (sel ? OSD_PANEL_SEL_ACC : OSD_PANEL_ACC) : (sel ? OSD_PANEL_SEL_DIM : OSD_PANEL_DIM), 42);
     }
 
     // Son
-    _oric_panel(s, R + 20, C + 2, 3, 96, 0, "Son");
+    osd_panel_box(s, R + 20, C + 2, 3, 96, 0, "Son");
     {
         const bool sel = main_page && m->cursor == ORIC_ITEM_VOLUME;
-        _oric_item_bar(s, R + 21, C + 3, 94, sel);
-        const uint8_t base = sel ? ORIC_OSD_SEL : ORIC_OSD_PANEL, dim = sel ? ORIC_OSD_SEL_DIM : ORIC_OSD_PANEL_DIM;
-        const uint8_t acc = sel ? ORIC_OSD_SEL_ACC : ORIC_OSD_PANEL_ACC;
+        osd_panel_item_bar(s, R + 21, C + 3, 94, sel);
+        const uint8_t base = sel ? OSD_PANEL_SEL : OSD_PANEL, dim = sel ? OSD_PANEL_SEL_DIM : OSD_PANEL_DIM;
+        const uint8_t acc = sel ? OSD_PANEL_SEL_ACC : OSD_PANEL_ACC;
         osd_puts(s, R + 21, C + 5, "Volume", acc, -1);
         if (m->muted) {
-            osd_putc(s, R + 21, C + 14, OSD_CROSS, sel ? OSD_ATTR(OSD_RED, OSD_BLUE) : ORIC_OSD_PANEL_ERR);
+            osd_putc(s, R + 21, C + 14, OSD_CROSS, osd_panel_err(sel));
             osd_puts(s, R + 21, C + 16, "son coupé", base, -1);
         } else {
             for (int i = 0; i < HID_VOLUME_MAX; i++) {
@@ -503,30 +453,18 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
     const char* const labels[3] = {"Redémarrer (RESET)", "Enregistrer la configuration", "Reprendre"};
     const int cols[3] = {2, 34, 70}, widths[3] = {30, 34, 28};
     for (int i = 0; i < 3; i++) {
-        _oric_button(s, R + 24, C + cols[i], widths[i], labels[i], main_page && m->cursor == ORIC_ITEM_RESET + i);
+        osd_panel_button(s, R + 24, C + cols[i], widths[i], labels[i], main_page && m->cursor == ORIC_ITEM_RESET + i);
     }
 
     // Message
-    if (m->message[0]) {
-        osd_putc(s, R + 26, C + 3, m->message_error ? OSD_CROSS : OSD_CHECK,
-                 OSD_ATTR(m->message_error ? OSD_RED : OSD_GREEN, OSD_BLACK));
-        osd_puts(s, R + 26, C + 5, m->message, OSD_ATTR(m->message_error ? OSD_RED : OSD_YELLOW, OSD_BLACK), 93);
-    }
+    if (m->message[0]) osd_panel_message(s, R + 26, C + 3, m->message_error, m->message, 93);
 
     // Pied : aide des touches
-    osd_fill(s, R + 28, 0, 2, OSD_COLS, ORIC_OSD_PANEL);
-    const uint8_t key = OSD_ATTR(OSD_BLACK, OSD_CYAN);
     const char* const help_main[4][2] = {{" Flèches ", "choisir"}, {" Entrée ", "ouvrir, valider"}, {" Suppr ", "éjecter"},
                                          {" Échap ", "reprendre"}};
     const char* const help_browse[4][2] = {{" Flèches ", "choisir"}, {" Entrée ", "valider"}, {" Lettre ", "aller à"},
                                            {" Échap ", "retour"}};
-    const char* const(*help)[2] = main_page ? help_main : help_browse;
-    int c = C + 2;
-    for (int i = 0; i < 4; i++) {
-        c += osd_puts(s, R + 28, c, help[i][0], key, -1) + 1;
-        c += osd_puts(s, R + 28, c, help[i][1], ORIC_OSD_PANEL, -1) + 2;
-    }
-    osd_puts(s, R + 28, C + 86, "F1 : ce menu", OSD_ATTR(OSD_CYAN, OSD_BLUE | OSD_DITHER), -1);
+    osd_panel_footer(s, R + 28, C + 2, main_page ? help_main : help_browse, 4, C + 86, "F1 : ce menu");
 
     if (main_page) return;
 
@@ -539,22 +477,13 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
     else snprintf(buf, sizeof(buf), "Disquette pour le lecteur %c", 'A' + item - ORIC_ITEM_DRIVE0);
     const int first = _oric_browse_first(m);
     const int top = R + 5, left = C + 12, width = 76, height = ORIC_BROWSE_VISIBLE + 4;
-    osd_fill(s, top + 1, left + 2, height, width, ORIC_OSD_PANEL);   // Ombre
-    osd_fill(s, top, left, height, width, OSD_ATTR(OSD_WHITE, OSD_BLACK));
-    osd_frame(s, top, left, height, width, OSD_ATTR(OSD_YELLOW, OSD_BLACK), NULL, 0);
-    osd_putc(s, top, left + 2, ' ', OSD_ATTR(OSD_YELLOW, OSD_BLACK));
-    const uint8_t icon = tape ? OSD_TAPE_L : prof ? OSD_CART_L : OSD_FLOP_L;
-    osd_putc(s, top, left + 3, icon, OSD_ATTR(OSD_YELLOW, OSD_BLACK));
-    osd_putc(s, top, left + 4, (uint8_t)(icon + 1), OSD_ATTR(OSD_YELLOW, OSD_BLACK));
-    const int tl = osd_puts(s, top, left + 6, buf, OSD_ATTR(OSD_WHITE, OSD_BLACK), -1);
-    osd_putc(s, top, left + 6 + tl, ' ', OSD_ATTR(OSD_YELLOW, OSD_BLACK));
+    osd_panel_popup(s, top, left, height, width, tape ? OSD_TAPE_L : prof ? OSD_CART_L : OSD_FLOP_L, buf);
     const int n = m->browse_count + first;
     for (int k = 0; k < ORIC_BROWSE_VISIBLE && m->browse_scroll + k < n; k++) {
         const int idx = m->browse_scroll + k, row = top + 2 + k;
         const bool sel = idx == m->browse_cursor;
-        const uint8_t base = sel ? OSD_ATTR(OSD_BLACK, OSD_CYAN) : OSD_ATTR(OSD_WHITE, OSD_BLACK);
-        const uint8_t dim = sel ? OSD_ATTR(OSD_BLUE, OSD_CYAN) : OSD_ATTR(OSD_CYAN, OSD_BLACK);
-        osd_fill(s, row, left + 2, 1, width - 5, base);
+        uint8_t base, dim;
+        osd_panel_popup_row(s, row, left, width, sel, &base, &dim);
         if (idx < first) {
             osd_puts(s, row, left + 4, tape ? "Éjecter la cassette" : "Éjecter la disquette", dim, -1);
             continue;
@@ -570,34 +499,28 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
             osd_puts(s, row, left + 6, oric_menu_fdc_names[entry], base, -1);
             osd_puts(s, row, left + 20, oric_menu_fdc_notes[entry], dim, -1);
             if (!m->fdc_available[entry]) {
-                osd_puts(s, row, left + width - 17, "ROM absente", sel ? OSD_ATTR(OSD_RED, OSD_CYAN) : OSD_ATTR(OSD_RED, OSD_BLACK), -1);
+                osd_puts(s, row, left + width - 17, "ROM absente", sel ? OSD_PANEL_POPUP_SEL_ERR : OSD_PANEL_POPUP_ERR, -1);
             }
             continue;
         }
         const oric_menu_file_t* f = &m->files[entry];
         osd_puts(s, row, left + 4, f->name, base, 50);
         char size[16];
-        _oric_size(size, sizeof(size), f->size);
+        osd_panel_size(size, sizeof(size), f->size);
         osd_puts(s, row, left + width - 5 - osd_strlen(size), size, dim, -1);
         // Image déjà dans un autre lecteur (la choisir est refusé)
         for (int d = 0; !tape && d < ORIC_MENU_DRIVES; d++) {
             if (d == item - ORIC_ITEM_DRIVE0 || strcmp(m->drive[d], f->name)) continue;
             char tag[8];
             snprintf(tag, sizeof(tag), "en %c", 'A' + d);
-            osd_puts(s, row, left + width - 18, tag, sel ? OSD_ATTR(OSD_RED, OSD_CYAN) : OSD_ATTR(OSD_YELLOW, OSD_BLACK), -1);
+            osd_puts(s, row, left + width - 18, tag, sel ? OSD_PANEL_POPUP_SEL_ERR : OSD_PANEL_POPUP_ACC, -1);
         }
     }
     if (!fdc && !prof && m->browse_count == 0) {
         osd_puts(s, top + 4, left + 4, tape ? "Aucune cassette .tap sur la clé" : "Aucune image .dsk sur la clé",
-                 OSD_ATTR(OSD_RED, OSD_BLACK), -1);
+                 OSD_PANEL_POPUP_ERR, -1);
     }
-    // Barre de défilement
-    if (n > ORIC_BROWSE_VISIBLE) {
-        const int bar = left + width - 2;
-        for (int k = 0; k < ORIC_BROWSE_VISIBLE; k++) osd_putc(s, top + 2 + k, bar, OSD_SHADE, OSD_ATTR(OSD_BLUE, OSD_BLACK));
-        const int thumb = m->browse_scroll * (ORIC_BROWSE_VISIBLE - 1) / (n - ORIC_BROWSE_VISIBLE);
-        osd_putc(s, top + 2 + thumb, bar, OSD_FULL, OSD_ATTR(OSD_CYAN, OSD_BLACK));
-    }
+    osd_panel_scrollbar(s, top + 2, left + width - 2, ORIC_BROWSE_VISIBLE, m->browse_scroll, n);
 }
 
 // Bandeau du volume (touches multimédia du clavier), à la place de celui de la
