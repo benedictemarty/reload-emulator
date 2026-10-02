@@ -11,7 +11,9 @@
 #include "audio.h"
 #include "../../../src/devices/hid_media.h"   // Relative: consumers of these sources (RELOAD_DIR) need no include path
 
-#define SAMPLES_BUFFER_SIZE    2048
+#ifndef SAMPLES_BUFFER_SIZE
+#define SAMPLES_BUFFER_SIZE    2048   // Bytes of the sample FIFO; less to save RAM (Telestrat RAM 64 Ko: 1024)
+#endif
 #define SAMPLES_CHUNK_SIZE     32
 #define SAMPLE_REPETITION_RATE 4
 _Static_assert(SAMPLES_CHUNK_SIZE == 32, "audio_buffer_dequeue fills empty_samples with 8 words");
