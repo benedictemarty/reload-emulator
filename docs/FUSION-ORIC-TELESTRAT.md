@@ -211,6 +211,10 @@ exactement avec une période de N+8 ; $B9 avec N+2.
 
 - `oric.h` : via6522 par défaut ; `ORIC_MOS6522VIA` garde l'ancienne VIA (comparaisons).
 - Instantanés : version 5 (structure de la VIA changée ; les anciens sont refusés).
+- Instantanés : à la reprise, les rappels de la VIA (clavier sur le port B) et leurs données
+  restent ceux de la machine en cours. Les adresses sauvées viennent d'un autre lancement (ASLR sur
+  PC, autre firmware) ; signalé par le Telestrat, qui avait le défaut. Chez l'Oric il est
+  latent : `oric_save_snapshot` / `oric_load_snapshot` n'ont aucun appelant aujourd'hui.
 - PC : `oric`, `oric_headless`, `oric_devices_test` compilent `via6522.c` ;
   `oric_headless_mos` + CTest `oric_integration_mos` pour l'ancienne VIA.
 - RP2040 : `oric` et les `oric_diag*` avec la VIA en RAM (`VIA6522_HOT`) ; `oric_diag_mos`

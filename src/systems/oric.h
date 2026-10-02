@@ -1179,6 +1179,17 @@ bool oric_load_snapshot(oric_t* sys, uint32_t version, oric_t* src) {
     chips_audio_callback_snapshot_onload(&im.audio_callback, &sys->audio_callback);
     // m6502_snapshot_onload(&im.cpu, &sys->cpu);
     ay38910psg_snapshot_onload(&im.psg, &sys->psg);
+#ifdef ORIC_VIA6522
+    // VIA callbacks (keyboard on port B) and their user data stay those of the running
+    // machine: the saved ones are addresses of another run (ASLR on PC, other firmware)
+    im.via.porta_read = sys->via.porta_read;
+    im.via.porta_write = sys->via.porta_write;
+    im.via.portb_read = sys->via.portb_read;
+    im.via.portb_write = sys->via.portb_write;
+    im.via.userdata = sys->via.userdata;
+    im.via.irq_callback = sys->via.irq_callback;
+    im.via.irq_userdata = sys->via.irq_userdata;
+#endif
     // The tape stays that of the running machine (read callback, file being written)
     im.tape = sys->tape;
     im.tape_rec = sys->tape_rec;
