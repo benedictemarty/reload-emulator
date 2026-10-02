@@ -50,7 +50,7 @@ add_executable(apple2e_diag
 )
 target_compile_options(apple2e_diag PRIVATE -Wall)
 target_compile_definitions(apple2e_diag PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
-	NEO_FATFS_FILES=1 APPLE_DIAG=1)
+	NEO_FATFS_FILES=1 APPLE_DIAG=1 PRODOS_HDD_COUNT_READS=diag_hdd_reads)
 target_link_libraries(apple2e_diag pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
 pico_add_extra_outputs(apple2e_diag)
 pico_enable_stdio_usb(apple2e_diag 0)

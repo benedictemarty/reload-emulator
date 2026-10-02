@@ -146,9 +146,20 @@ void wdc65C02cpu_init() {
     gpio_put(_RESET_PIN, 1);
 }
 
+// The W65C02S takes RESB into account only if it stays low for 2 clock cycles or more:
+// with this bus the clock moves only in wdc65C02cpu_tick, so cycles are given here
+// (data bus not driven: OE3 high). With the PIO bus the clock pin belongs to the PIO and
+// these writes do nothing. Before: RESB low 1 ms without clock, a reset after start-up
+// was ignored (Apple IIe, cold restart on a late USB drive, 2026-10-02)
 void wdc65C02cpu_reset() {
+    gpio_put(_OE3_PIN, 1);
     gpio_put(_RESET_PIN, 0);
-    sleep_us(1000);
+    for (int i = 0; i < 8; i++) {
+        gpio_put(_CLOCK_PIN, 0);
+        sleep_us(1);
+        gpio_put(_CLOCK_PIN, 1);
+        sleep_us(1);
+    }
     gpio_put(_RESET_PIN, 1);
 }
 

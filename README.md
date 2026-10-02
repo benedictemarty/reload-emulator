@@ -167,7 +167,7 @@ uint32_t apple2_po_image_sizes[] = {
 };
 
 char* apple2_msc_images[] = {
-    "Total Replay v5.2.hdv",
+    "Total Replay v6.1.hdv",
 };
 
 ```

@@ -391,15 +391,39 @@ extern const neo_storage_ops_t neo_storage_fatfs_ops;   // neo_storage_fatfs.c (
 extern bool msc_inquiry_complete;
 extern void msc_poll(void);
 
-// Waits at most 3 s for the USB key: without a key (or without the image), the
+// Waits for the USB key (APPLE_MSC_WAIT_US): without a key (or without the image), the
 // slot 7 ROM finds no disk and the Autostart ROM goes on to BASIC
+// USB drive at power-on: the drive tried on the board was ready 3.2 s after start-up (the
+// former 3 s wait missed it: slot 7 found no disk, BASIC). 6 s, twice that; without a
+// drive the machine goes to BASIC after them
+#ifndef APPLE_MSC_WAIT_US
+#define APPLE_MSC_WAIT_US 6000000
+#endif
 void wait_for_msc_ready(void) {
     uint32_t start = time_us_32();
-    while (!msc_inquiry_complete && time_us_32() - start < 3000000) {
+    while (!msc_inquiry_complete && time_us_32() - start < APPLE_MSC_WAIT_US) {
         sleep_us(16666);
         tuh_task();
         msc_poll();   // Mounts the volume outside tuh_task
     }
+}
+
+// USB drive mounted after the boot wait, or pulled out: msc_poll mounts it outside
+// tuh_task, and the hard disk image is inserted (to boot it: PR#7). Restarting the machine
+// cold there did not boot slot 7 on the IIe (2026-10-02, cause not found): not done
+static void usb_disk_service(void) {
+    static bool inserted_late;
+    msc_poll();
+    prodos_hdd_t *hdd = &state.apple2.hdc.hdd[0];
+    if (!state.apple2.hdc.valid || CHIPS_ARRAY_SIZE(apple2_msc_images) == 0) return;
+    if (!msc_inquiry_complete) {
+        if (prodos_hdd_is_disk_inserted(hdd)) prodos_hdd_remove_disk(hdd);   // Drive pulled out
+        inserted_late = false;
+        return;
+    }
+    if (prodos_hdd_is_disk_inserted(hdd) || inserted_late) return;
+    inserted_late = true;   // One attempt per mounting
+    prodos_hdd_insert_disk_file(hdd, apple2_msc_images[0]);
 }
 
 // The emulation loop, with apple2_tick inlined, runs from RAM too
@@ -445,6 +469,7 @@ int main() {
 
         apple2_screen_update(&state.apple2);
         tuh_task();
+        usb_disk_service();
 
         uint32_t end_time_in_micros = time_us_32();
         uint32_t execution_time = end_time_in_micros - start_time_in_micros;

@@ -186,7 +186,8 @@ def envoyer(fichiers):
             tcl.append(f"write_memory 0x{s['diag_file_name']:08x} 8 {{{octets}}}")
             tcl.append(f"mww 0x{cmd:08x} 1 ; attendre")
             for i in range(0, len(data), CHUNK):
-                bloc = os.path.join(d, f"{nom}.{i // CHUNK}")
+                # Nom de bloc sans le nom du fichier : ses espaces couperaient load_image (Tcl)
+                bloc = os.path.join(d, f"bloc{len(tcl)}_{i // CHUNK}")
                 open(bloc, "wb").write(data[i:i + CHUNK])
                 tcl.append(f"load_image {bloc} 0x{s['diag_file_buf']:08x} bin")
                 tcl.append(f"mww 0x{length:08x} {len(data[i:i + CHUNK])} ; mww 0x{cmd:08x} 2 ; attendre")
@@ -194,7 +195,9 @@ def envoyer(fichiers):
         tcl.append(f"mww 0x{cmd:08x} 4 ; attendre ; echo \"clé relue\"")
         script = os.path.join(d, "envoyer.tcl")
         open(script, "w").write("\n".join(tcl) + "\n")
-        args = [OPENOCD, "-f", "interface/cmsis-dap.cfg", "-f", "target/rp2040.cfg", "-c", "adapter speed 4000",
+        # Vitesse de la sonde : NEO_SWD_KHZ (4000 par défaut) ; plus bas si la liaison décroche
+        vitesse = os.environ.get("NEO_SWD_KHZ", "4000")
+        args = [OPENOCD, "-f", "interface/cmsis-dap.cfg", "-f", "target/rp2040.cfg", "-c", f"adapter speed {vitesse}",
                 "-c", "init", "-f", script, "-c", "shutdown"]
         r = subprocess.run(args, capture_output=True, text=True, timeout=1800)
         journal = r.stdout + r.stderr

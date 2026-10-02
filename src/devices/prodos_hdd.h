@@ -150,6 +150,9 @@ uint8_t prodos_hdd_read_block(prodos_hdd_t* sys, uint16_t buffer, uint32_t block
     CHIPS_ASSERT(sys && sys->valid);
     if (!sys->image_loaded) return PRODOS_HDD_ERR_NODEV;
     if (block >= sys->image_blocks) return PRODOS_HDD_ERR_IO;
+#ifdef PRODOS_HDD_COUNT_READS
+    PRODOS_HDD_COUNT_READS++;   // Bench: blocks read (APPLE_DIAG)
+#endif
     if (sys->image_type == PRODOS_HDD_IMAGE_TYPE_FILE) {
         // Through a 512-byte buffer: the Apple RAM buffer may cross a memory page
         uint8_t buf[PRODOS_HDD_BYTES_PER_BLOCK];

@@ -63,6 +63,9 @@
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/apple2_fdc_rom.h"
+#ifdef APPLE_DIAG
+volatile unsigned diag_hdd_reads;   // Counted by prodos_hdd.h (PRODOS_HDD_COUNT_READS)
+#endif
 #define NEO_STORAGE_IMPL
 #include "devices/neo_storage.h"   // Hard disk image on the USB drive (FatFs driver of the socle)
 #include "devices/prodos_hdd.h"
@@ -392,6 +395,8 @@ static inline void __not_in_flash_func(render_scanline)(const uint32_t *pixbuf, 
 volatile uint16_t diag_keyq[256];
 volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames, diag_exec_us, diag_exec_max;
 volatile uint32_t diag_late_total, diag_late_frames, core1_frames;
+// Hard disk: insertion after a late mount (0 none, 1 done, 2 failed), its blocks; blocks read
+volatile uint32_t diag_hdd_insert, diag_hdd_blocks, diag_msc_ready_ms;   // + time of the drive mounting after power-on
 static uint32_t diag_late_prev;
 static inline void __not_in_flash_func(diag_late_sample)(void) {
     const uint32_t late = dvi0.late_scanline_ctr;
@@ -465,11 +470,17 @@ extern const neo_storage_ops_t neo_storage_fatfs_ops;   // neo_storage_fatfs.c (
 extern bool msc_inquiry_complete;
 extern void msc_poll(void);
 
-// Waits at most 3 s for the USB key: without a key (or without the image), the
+// Waits for the USB key (APPLE_MSC_WAIT_US): without a key (or without the image), the
 // slot 7 ROM finds no disk and the Autostart ROM goes on to BASIC
+// USB drive at power-on: the drive tried on the board was ready 3.2 s after start-up (the
+// former 3 s wait missed it: slot 7 found no disk, BASIC). 6 s, twice that; without a
+// drive the machine goes to BASIC after them
+#ifndef APPLE_MSC_WAIT_US
+#define APPLE_MSC_WAIT_US 6000000
+#endif
 void wait_for_msc_ready(void) {
     uint32_t start = time_us_32();
-    while (!msc_inquiry_complete && time_us_32() - start < 3000000) {
+    while (!msc_inquiry_complete && time_us_32() - start < APPLE_MSC_WAIT_US) {
         sleep_us(16666);
         tuh_task();
         msc_poll();   // Mounts the volume outside tuh_task
@@ -495,6 +506,33 @@ static void diag_key_service(void) {
     }
 }
 #endif
+
+// USB drive mounted after the boot wait, or pulled out: msc_poll mounts it outside
+// tuh_task, and the hard disk image is inserted (to boot it: PR#7). Restarting the machine
+// cold there did not boot slot 7 on the board (2026-10-02, cause not found): not done
+static void usb_disk_service(void) {
+    static bool inserted_late;
+    msc_poll();
+    prodos_hdd_t *hdd = &state.apple2e.hdc.hdd[0];
+    if (!state.apple2e.hdc.valid || CHIPS_ARRAY_SIZE(apple2_msc_images) == 0) return;
+    if (!msc_inquiry_complete) {
+        if (prodos_hdd_is_disk_inserted(hdd)) prodos_hdd_remove_disk(hdd);   // Drive pulled out
+        inserted_late = false;
+        return;
+    }
+    if (prodos_hdd_is_disk_inserted(hdd) || inserted_late) return;
+    inserted_late = true;   // One attempt per mounting
+#ifdef APPLE_DIAG
+    diag_msc_ready_ms = to_ms_since_boot(get_absolute_time());
+#endif
+    const bool ok = prodos_hdd_insert_disk_file(hdd, apple2_msc_images[0]);
+#ifdef APPLE_DIAG
+    diag_hdd_insert = ok ? 1 : 2;
+    diag_hdd_blocks = prodos_hdd_get_blocks(hdd);
+#else
+    (void)ok;
+#endif
+}
 
 // The emulation loop, with apple2e_tick inlined, runs from RAM too
 static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
@@ -539,6 +577,7 @@ int main() {
 
         apple2e_screen_update(&state.apple2e);
         tuh_task();
+        usb_disk_service();
 #ifdef APPLE_DIAG
         diag_key_service();
 #endif
