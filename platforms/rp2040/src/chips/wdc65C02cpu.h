@@ -151,6 +151,7 @@ void wdc65C02cpu_init() {
 // (data bus not driven: OE3 high). With the PIO bus the clock pin belongs to the PIO and
 // these writes do nothing. Before: RESB low 1 ms without clock, a reset after start-up
 // was ignored (Apple IIe, cold restart on a late USB drive, 2026-10-02)
+// The RESET line reaches the 65C02 only with the wire GPIO 26 → bus pin 40 (README, Hardware)
 void wdc65C02cpu_reset() {
     gpio_put(_OE3_PIN, 1);
     gpio_put(_RESET_PIN, 0);

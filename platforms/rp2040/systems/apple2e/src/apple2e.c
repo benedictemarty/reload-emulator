@@ -137,7 +137,15 @@ void app_init(void) {
     apple2e_init(&state.apple2e, &desc);
 }
 
-#ifdef OLIMEX_NEO6502
+#if defined(OLIMEX_NEO6502) && defined(APPLE_VIDEO_640)
+// Standard 640x480 at 60 Hz (CEA / VESA: 800 x 525 in all, 25.2 MHz pixel, both syncs
+// negative), TMDS bit clock 252 MHz: for capture cards that reject 800x480 (MacroSilicon
+// MS2109); the 560x384 picture fits, 40 columns on each side. System clock 252 MHz
+#define FRAME_WIDTH  640
+#define FRAME_HEIGHT 480
+#define VREG_VSEL    VREG_VOLTAGE_1_20
+#define DVI_TIMING   dvi_timing_640x480p_60hz
+#elif defined(OLIMEX_NEO6502)
 // TMDS bit clock 295.2 MHz, DVDD 1.2V: the 800x480 mode of the Oric and BBC builds,
 // accepted by bmarty's screen (800x600 at 400 MHz / 1.3V before, never tried on the
 // board); the 560x384 picture fits

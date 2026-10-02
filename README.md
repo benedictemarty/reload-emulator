@@ -112,9 +112,15 @@ tests (data outside the tree, see [docs/CPU-TESTS.md](docs/CPU-TESTS.md), French
 ### Apple on the Neo6502
 
 The ProDOS hard disk image named in `src/images/apple2_images.h` is opened on the
-USB drive; without the drive (3 s at start-up) or the image, the Autostart ROM goes on
-to BASIC. Pause returns to the Neo6502 firmware (multi-boot, `NEO_SLOT_APPLE2`,
+USB drive; without the drive (6 s at start-up) or the image, the Autostart ROM goes on
+to BASIC. A drive plugged in later is mounted and its image inserted (boot it with
+`PR#7`). Pause returns to the Neo6502 firmware (multi-boot, `NEO_SLOT_APPLE2`,
 `NEO_SLOT_APPLE2E`).
+
+Video of the Apple //e: 800x480 at 59.5 Hz (295.2 MHz, `apple2e`), not a CEA/VESA mode;
+`apple2e_640` outputs the standard 640x480 at 60 Hz (252 MHz) for capture cards that
+reject 800x480 (MacroSilicon MS2109). At 252 MHz the emulation is expected to run behind
+real time (estimated from the 295 MHz load, not measured on the board).
 
 ## Building firmware
 Original firmware is not distributed with emulator sources. Please, make sure you have the proper license to use and build the headers from your own binaries.
