@@ -67,8 +67,8 @@
 #else
 #include "chips/mos6502cpu.h"
 #endif
-#ifdef ORIC_VIA6522
-#include "chips/via6522.h"   // Trial of the common VIA (Neo6502Vic20)
+#ifndef ORIC_MOS6522VIA
+#include "chips/via6522.h"   // Common VIA of the socle (default; ORIC_MOS6522VIA: the former one)
 #else
 #include "chips/mos6522via.h"
 #endif

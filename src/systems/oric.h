@@ -22,8 +22,8 @@
 //
 // - chips/chips_common.h
 // - chips/wdc65C02cpu.h | chips/mos6502cpu.h
-// - chips/mos6522via.h, or chips/via6522.h with ORIC_VIA6522 (the VIA of Neo6502Vic20,
-//   61/61 VICE tests; trial of the common VIA, docs/FUSION-ORIC-TELESTRAT.md step 9)
+// - chips/via6522.h (common VIA of the socle, 61/61 VICE tests), or chips/mos6522via.h
+//   with ORIC_MOS6522VIA (docs/FUSION-ORIC-TELESTRAT.md step 9)
 // - chips/ay38910psg.h
 // - chips/kbd.h
 // - chips/mem.h
@@ -86,7 +86,7 @@ extern "C" {
 
 // Bump snapshot version when oric_t memory layout changes
 #define ORIC_KEY_SHIFT 0x1E1   // SHIFT alone (benches), see _oric_init_key_map
-#define ORIC_SNAPSHOT_VERSION (4)   // 2: sample_rate, sample_acc (audio clock); 3: sample_rate_q8; 4: tape_rec.length_unknown
+#define ORIC_SNAPSHOT_VERSION (5)   // 2: sample_rate, sample_acc (audio clock); 3: sample_rate_q8; 4: tape_rec.length_unknown; 5: via6522
 
 #define ORIC_FREQUENCY     (1000000)  // 1 MHz
 #define ORIC_MAX_TAPE_SIZE (1 << 16)  // Max size of tape file in bytes
@@ -142,6 +142,13 @@ typedef struct {
         chips_range_t jasmin_rom;     // Jasmin ROM (2 KB), optional
     } roms;
 } oric_desc_t;
+
+// VIA: the common VIA of the socle (chips/via6522.h, default since 2026-10-02), or the
+// former mos6522via with ORIC_MOS6522VIA (its 4-cycle step gives T1 a period of N+8
+// instead of N+2: docs/FUSION-ORIC-TELESTRAT.md)
+#if !defined(ORIC_MOS6522VIA) && !defined(ORIC_VIA6522)
+#define ORIC_VIA6522 1
+#endif
 
 // Oric emulator state
 typedef struct {
@@ -210,7 +217,7 @@ typedef struct {
 
 } oric_t;
 
-/*-- VIA access: mos6522via (default) or via6522 (ORIC_VIA6522) ----------------
+/*-- VIA access: via6522 (default) or mos6522via (ORIC_MOS6522VIA) ---------------
  * Every use of the VIA by the Oric goes through these functions: registers, the
  * port B outputs (keyboard line, printer STROBE, tape motor), PB7 (CSAVE), port A
  * (PSG bus, printer data), CA2/CB2 (PSG BC1/BDIR), CA1 (printer ACK), CB1 (tape

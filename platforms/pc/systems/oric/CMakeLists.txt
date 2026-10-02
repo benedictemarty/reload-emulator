@@ -8,9 +8,9 @@ endif()
 #=== EXECUTABLE: oric
 
 if(CMAKE_SYSTEM_NAME STREQUAL Windows)
-    add_executable(oric WIN32 ./src/oric.c)
+    add_executable(oric WIN32 ./src/oric.c ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/chips/via6522.c)
 else()
-    add_executable(oric ./src/oric.c)
+    add_executable(oric ./src/oric.c ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/chips/via6522.c)
 endif()
 
 target_link_libraries(oric platform)
@@ -34,7 +34,7 @@ endif()
 
 #=== EXECUTABLE: oric_headless (tests, no window)
 
-add_executable(oric_headless ./src/oric_headless.c)
+add_executable(oric_headless ./src/oric_headless.c ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/chips/via6522.c)
 target_include_directories(oric_headless PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
 if (MSVC)
     target_compile_options(oric_headless PUBLIC /W3)
@@ -42,21 +42,21 @@ else()
     target_compile_options(oric_headless PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 
-#=== EXECUTABLE: oric_headless_via6522 (trial of the common VIA: the VIA of Neo6502Vic20)
+#=== EXECUTABLE: oric_headless_mos (former VIA mos6522via, for comparison)
 
-add_executable(oric_headless_via6522 ./src/oric_headless.c ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/chips/via6522.c)
-target_include_directories(oric_headless_via6522 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
-target_compile_definitions(oric_headless_via6522 PRIVATE ORIC_VIA6522=1)
+add_executable(oric_headless_mos ./src/oric_headless.c)
+target_include_directories(oric_headless_mos PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+target_compile_definitions(oric_headless_mos PRIVATE ORIC_MOS6522VIA=1)
 if (NOT MSVC)
-    target_compile_options(oric_headless_via6522 PUBLIC -Wall -Wextra -Wsign-compare)
+    target_compile_options(oric_headless_mos PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
-add_test(NAME oric_integration_via6522
-         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/run_integration.sh $<TARGET_FILE:oric_headless_via6522>)
-set_tests_properties(oric_integration_via6522 PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME oric_integration_mos
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/run_integration.sh $<TARGET_FILE:oric_headless_mos>)
+set_tests_properties(oric_integration_mos PROPERTIES SKIP_RETURN_CODE 77)
 
 #=== EXECUTABLE: oric_devices_test (unit tests of the disk and tape devices, no ROM needed)
 
-add_executable(oric_devices_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/test_oric_devices.c)
+add_executable(oric_devices_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/test_oric_devices.c ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/chips/via6522.c)
 target_include_directories(oric_devices_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 if (NOT MSVC)
     target_compile_options(oric_devices_test PUBLIC -Wall -Wextra -Wsign-compare)

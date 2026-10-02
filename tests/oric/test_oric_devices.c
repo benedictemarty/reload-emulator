@@ -56,7 +56,10 @@ static uint8_t* oric_nib_images[1];
 #else
 #include "chips/w65c02cpu.h"    // W65C02, as on the Neo6502 board (default)
 #endif
-#include "chips/mos6522via.h"
+#include "chips/mos6522via.h"   // Tested on its own below (IER release)
+#ifndef ORIC_MOS6522VIA
+#include "chips/via6522.h"
+#endif
 #include "chips/ay38910psg.h"
 #include "chips/kbd.h"
 #include "chips/mem.h"
@@ -970,7 +973,7 @@ static void test_oric_interfaces(void) {
     CHECK((bus_read(0x0314) & 0x80) == 0x80);
     // Other addresses of page 3 reach the VIA
     bus_write(0x0303, 0x5F);   // DDRA
-    CHECK(sys.via.pa.ddr == 0x5F);
+    CHECK(_oric_via_read(&sys, 3) == 0x5F);
 
     // Jasmin
     CHECK(oric_set_fdc(&sys, ORIC_FDC_JASMIN));

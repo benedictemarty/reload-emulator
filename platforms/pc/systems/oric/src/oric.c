@@ -47,7 +47,11 @@
 #else
 #include "chips/w65c02cpu.h"    // W65C02, as on the Neo6502 board (default)
 #endif
+#ifndef ORIC_MOS6522VIA
+#include "chips/via6522.h"   // Common VIA of the socle (default; ORIC_MOS6522VIA: the former one)
+#else
 #include "chips/mos6522via.h"
+#endif
 #include "chips/ay38910psg.h"
 #include "chips/beeper.h"
 #include "chips/kbd.h"

@@ -79,8 +79,8 @@ static uint8_t* oric_nib_images[1];
 #else
 #include "chips/w65c02cpu.h"    // W65C02, as on the Neo6502 board (default)
 #endif
-#ifdef ORIC_VIA6522
-#include "chips/via6522.h"   // Trial of the common VIA (Neo6502Vic20)
+#ifndef ORIC_MOS6522VIA
+#include "chips/via6522.h"   // Common VIA of the socle (default; ORIC_MOS6522VIA: the former one)
 #else
 #include "chips/mos6522via.h"
 #endif
