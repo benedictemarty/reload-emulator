@@ -105,7 +105,7 @@ Trinity). Budget : ≈ 31 µs par ligne en 800 × 480.
 | oui | **Pas assez d'avance** : sans répétition verticale, 3 tampons TMDS ne laissent qu'une ligne d'avance (Tangerine) | `DVI_N_TMDS_BUFFERS=6` (Tangerine) ; avec `DVI_VERTICAL_REPEAT=2`, 3 suffisent |
 | oui | **Verrous partagés** : `next_striped_spin_lock_num()` avec FatFs et TinyUSB (reload, Trinity) | `spin_lock_claim_unused(true)` (règle 2) |
 | non | **Source changée pendant l'encodage** : le rouge est encodé en dernier depuis un tampon de ligne que le rappel réécrit déjà (Trinity T-53 : bleu et vert justes, rouge faux) | au moins 4 tampons de ligne ; ne jamais réécrire un tampon avant que ses trois canaux soient encodés |
-| non | **Encodeur à palette** sans équilibrage DC : traits sur les grands aplats, selon l'écran (reload, Oric `PAPER 4`) | 3 plans de 1 bit `tmds_encode_1bpp` (règle 1) ; Apple IIe : RGB 2-2-2 équilibré (fait) ; II+ : à faire |
+| non | **Encodeur à palette** sans équilibrage DC : traits sur les grands aplats, selon l'écran (reload, Oric `PAPER 4`) | 3 plans de 1 bit `tmds_encode_1bpp` (règle 1) ; Apple IIe et II+ : RGB 2-2-2 équilibré (II+ non essayé sur la carte) |
 | non | **Mémoire vidéo fausse** (hypothèse à écarter) : chez Trinity, `VRAMCHK` (T-55) a montré que la mémoire vidéo restait saine pendant les traits ; le débordement des tableaux MSC (T-54) expliquait des plantages, pas les traits | vérifier la mémoire vidéo avant et après une rafale : `VRAMCHK.NEO` pour les firmwares à l'API Neo6502, sinon vidage de la mémoire vidéo par la sonde (`dump_image`) |
 
 **Réglages vidéo des ports (relevés dans les sources le 2026-10-01)** et traits vus par
@@ -178,8 +178,8 @@ et 0 trait pendant la rafale, photo à l'appui.
 Trinity : réglé en septembre (T-53, T-58), **traits revenus** (signalés par bmarty le
 2026-10-01, après les versions 0.16.64 et 0.16.65 ; cause non établie). Oric : plans +
 `PROC1`, à revérifier sous rafale FatFs. BBC : plans + `PROC1` **et** DMA, à mesurer. Apple II
-/ IIe : IIe en RGB 2-2-2 équilibré + `PROC1`, 0 ligne en retard sur la carte (2026-10-02) ; II+
-encore à l'encodeur à palette (même défaut de capture probable, non essayé). Telestrat, NES, Vic20 :
+/ IIe : RGB 2-2-2 équilibré + `PROC1` (IIe : 0 ligne en retard sur la carte, 2026-10-02 ; II+ :
+porté, compilé, pas encore essayé sur la carte). Telestrat, NES, Vic20 :
 à relever par chaque projet.
 
 ## 4. Validation commune

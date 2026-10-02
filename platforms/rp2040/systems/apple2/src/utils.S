@@ -77,3 +77,60 @@ decl_func copy_tmdsbuf
 .endr
 
 	pop {r2-r7, pc}
+
+// DC balanced line encoding (apple2.c, encode_line; same as Apple IIe): two pixels a word per TMDS channel.
+// r0: Apple frame buffer row, one byte = two pixels (palette index of the first pixel in
+//     the high nibble, as apple2_render_scanline orders them)
+// r1: output word of channel 0 (blue); green at r1 + r3, red at r1 + 2 * r3
+// r2: number of pixel pairs (bytes); r3: channel stride in bytes
+// apple_sym_even / apple_sym_odd: 16 colours x {blue, green, red, pad} words, the odd
+// symbols already shifted left by 10
+decl_func apple_encode_pairs
+	push {r4-r7, lr}
+	mov r4, r8
+	mov r5, r9
+	mov r6, r10
+	mov r7, r11
+	push {r4-r7}
+	add r2, r0              // End of the row
+	mov r10, r3             // Green offset
+	lsls r3, #1
+	mov r11, r3             // Red offset
+	ldr r4, =apple_sym_even
+	mov r8, r4
+	ldr r4, =apple_sym_odd
+	mov r9, r4
+	b 2f
+1:
+	ldrb r3, [r0]
+	adds r0, #1
+	lsrs r4, r3, #4         // Even (first) pixel: high nibble
+	lsls r4, #4             // 16 bytes a colour
+	add r4, r8
+	lsls r5, r3, #28        // Odd pixel: low nibble
+	lsrs r5, #24
+	add r5, r9
+	ldr r6, [r4, #0]
+	ldr r7, [r5, #0]
+	orrs r6, r7
+	str r6, [r1, #0]
+	ldr r6, [r4, #4]
+	ldr r7, [r5, #4]
+	orrs r6, r7
+	mov r3, r10
+	str r6, [r1, r3]
+	ldr r6, [r4, #8]
+	ldr r7, [r5, #8]
+	orrs r6, r7
+	mov r3, r11
+	str r6, [r1, r3]
+	adds r1, #4
+2:
+	cmp r0, r2
+	bne 1b
+	pop {r4-r7}
+	mov r8, r4
+	mov r9, r5
+	mov r10, r6
+	mov r11, r7
+	pop {r4-r7, pc}
