@@ -8,6 +8,7 @@ add_executable(apple2e
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_storage_fatfs.c   # socle: USB drive volume of neo_storage
 )
 
 target_compile_options(apple2e PRIVATE -Wall)
@@ -16,6 +17,7 @@ target_compile_definitions(apple2e PRIVATE
     PICO_HEAP_SIZE=0x5800   # dvi_init: 3 TMDS buffers + newlib malloc rounding (~21.8 KB measured); link fails if RAM runs short
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_sock_cfg
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
+	NEO_FATFS_FILES=1   # One file open: the ProDOS hard disk image
 	# DVI_DEFAULT_SERIAL_CONFIG=olimex_rp2040pc_cfg
 	# DVI_DEFAULT_SERIAL_CONFIG=pico_zero_cfg
 )

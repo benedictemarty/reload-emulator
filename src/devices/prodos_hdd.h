@@ -1,11 +1,17 @@
 #pragma once
 
+// prodos_hdd.h — ProDOS hard disk drive (block device behind prodos_hdc.h)
+//
+// Image file through neo_storage (devices/neo_storage.h, include before this one with
+// NEO_STORAGE_IMPL in one file): the USB drive on the board (FatFs driver of the
+// socle), a directory on PC (POSIX driver), or the network with a "net:" path (TNFS).
+// An image that cannot be opened for writing is opened read-only (write-protected).
+// Or an image in memory (internal flash), always write-protected.
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <unistd.h>
-#include <fcntl.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,12 +26,12 @@ extern "C" {
 #define PRODOS_HDD_ERR_WPROT (0x2B)
 
 #define PRODOS_HDD_IMAGE_TYPE_INTERNAL (0)
-#define PRODOS_HDD_IMAGE_TYPE_MSC      (1)
+#define PRODOS_HDD_IMAGE_TYPE_FILE     (1)
 
 // ProDOS hard disk drive state
 typedef struct {
     bool valid;
-    FILE* file;
+    neo_file_t file;
     uint8_t* po_image;
     uint8_t image_type;
     uint32_t image_blocks;
@@ -44,13 +50,13 @@ void prodos_hdd_discard(prodos_hdd_t* sys);
 // Reset the hard disk drive
 void prodos_hdd_reset(prodos_hdd_t* sys);
 
-// Insert a new disk file (USB flash drive)
-bool prodos_hdd_insert_disk_msc(prodos_hdd_t* sys, const char* file_name);
+// Insert a disk image file (neo_storage path: "NAME.hdv" on the USB drive, "net:/NAME.hdv")
+bool prodos_hdd_insert_disk_file(prodos_hdd_t* sys, const char* path);
 
-// Insert a new disk file (internal flash)
+// Insert a disk image in memory (internal flash)
 bool prodos_hdd_insert_disk_internal(prodos_hdd_t* sys, uint8_t* po_image, uint32_t po_image_size);
 
-// Remove the disk file
+// Remove the disk
 void prodos_hdd_remove_disk(prodos_hdd_t* sys);
 
 // Return true if the disk is currently inserted
@@ -87,45 +93,47 @@ void prodos_hdd_init(prodos_hdd_t* sys) {
 
 void prodos_hdd_discard(prodos_hdd_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
+    prodos_hdd_remove_disk(sys);
     sys->valid = false;
 }
 
 void prodos_hdd_reset(prodos_hdd_t* sys) { CHIPS_ASSERT(sys && sys->valid); }
 
-bool prodos_hdd_insert_disk_msc(prodos_hdd_t* sys, const char* file_name) {
+bool prodos_hdd_insert_disk_file(prodos_hdd_t* sys, const char* path) {
     CHIPS_ASSERT(sys && sys->valid);
-    sys->file = fopen(file_name, "r+b");
-    if (!sys->file) {
-        printf("Error opening file %s\r\n", file_name);
-        return false;
+    prodos_hdd_remove_disk(sys);
+    bool ro = false;
+    if (!neo_file_open_path(&sys->file, path, NEO_READ | NEO_WRITE)) {
+        if (!neo_file_open_path(&sys->file, path, NEO_READ)) {
+            printf("ProDOS: cannot open %s\r\n", path);
+            return false;
+        }
+        ro = true;   // Read-only file or volume
     }
-    sys->image_type = PRODOS_HDD_IMAGE_TYPE_MSC;
-    fseek(sys->file, 0, SEEK_END);
-    sys->image_blocks = ftell(sys->file) / PRODOS_HDD_BYTES_PER_BLOCK;
-    fseek(sys->file, 0, SEEK_SET);
+    sys->image_type = PRODOS_HDD_IMAGE_TYPE_FILE;
+    sys->image_blocks = sys->file.size / PRODOS_HDD_BYTES_PER_BLOCK;
     sys->image_loaded = true;
-    sys->write_protected = false;
-
+    sys->write_protected = ro;
     return true;
 }
 
 bool prodos_hdd_insert_disk_internal(prodos_hdd_t* sys, uint8_t* po_image, uint32_t po_image_size) {
     CHIPS_ASSERT(sys && sys->valid);
+    prodos_hdd_remove_disk(sys);
     sys->po_image = po_image;
     sys->image_type = PRODOS_HDD_IMAGE_TYPE_INTERNAL;
     sys->image_blocks = po_image_size / PRODOS_HDD_BYTES_PER_BLOCK;
     sys->image_loaded = true;
     sys->write_protected = true;
-
     return true;
 }
 
 void prodos_hdd_remove_disk(prodos_hdd_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
-    if (sys->image_type == PRODOS_HDD_IMAGE_TYPE_MSC) {
-        fclose(sys->file);
-    }
+    if (sys->image_type == PRODOS_HDD_IMAGE_TYPE_FILE) neo_file_close(&sys->file);
+    sys->image_type = PRODOS_HDD_IMAGE_TYPE_INTERNAL;
     sys->image_loaded = false;
+    sys->image_blocks = 0;
 }
 
 bool prodos_hdd_is_disk_inserted(prodos_hdd_t* sys) {
@@ -140,52 +148,33 @@ uint32_t prodos_hdd_get_blocks(prodos_hdd_t* sys) {
 
 uint8_t prodos_hdd_read_block(prodos_hdd_t* sys, uint16_t buffer, uint32_t block, mem_t* mem) {
     CHIPS_ASSERT(sys && sys->valid);
-    if (block >= sys->image_blocks) {
-        return PRODOS_HDD_ERR_IO;
-    }
-
-    if (sys->image_type == PRODOS_HDD_IMAGE_TYPE_MSC) {
-        // USB flash drive
-        uint8_t* buf = mem_writeptr(mem, buffer);
-        if (fseek(sys->file, block * PRODOS_HDD_BYTES_PER_BLOCK, SEEK_SET) != 0) {
-            printf("Error reading from file\r\n");
+    if (!sys->image_loaded) return PRODOS_HDD_ERR_NODEV;
+    if (block >= sys->image_blocks) return PRODOS_HDD_ERR_IO;
+    if (sys->image_type == PRODOS_HDD_IMAGE_TYPE_FILE) {
+        // Through a 512-byte buffer: the Apple RAM buffer may cross a memory page
+        uint8_t buf[PRODOS_HDD_BYTES_PER_BLOCK];
+        if (!neo_file_read(&sys->file, block * PRODOS_HDD_BYTES_PER_BLOCK, buf, PRODOS_HDD_BYTES_PER_BLOCK)) {
+            printf("ProDOS: read error, block %u\r\n", (unsigned)block);
             return PRODOS_HDD_ERR_IO;
         }
-        if (fread(buf, 1, PRODOS_HDD_BYTES_PER_BLOCK, sys->file) != PRODOS_HDD_BYTES_PER_BLOCK) {
-            printf("Error reading from file\r\n");
-            return PRODOS_HDD_ERR_IO;
-        }
+        mem_write_range(mem, buffer, buf, PRODOS_HDD_BYTES_PER_BLOCK);
     } else {
-        // Internal flash
         mem_write_range(mem, buffer, sys->po_image + block * PRODOS_HDD_BYTES_PER_BLOCK, PRODOS_HDD_BYTES_PER_BLOCK);
     }
-
     return PRODOS_HDD_ERR_OK;
 }
 
 uint8_t prodos_hdd_write_block(prodos_hdd_t* sys, uint16_t buffer, uint32_t block, mem_t* mem) {
-    printf("prodos_hdd_write_block\r\n");
     CHIPS_ASSERT(sys && sys->valid);
-    if (block >= sys->image_blocks) {
+    if (!sys->image_loaded) return PRODOS_HDD_ERR_NODEV;
+    if (block >= sys->image_blocks) return PRODOS_HDD_ERR_IO;
+    if (sys->write_protected) return PRODOS_HDD_ERR_WPROT;
+    uint8_t buf[PRODOS_HDD_BYTES_PER_BLOCK];
+    for (int i = 0; i < PRODOS_HDD_BYTES_PER_BLOCK; i++) buf[i] = mem_rd(mem, (uint16_t)(buffer + i));
+    if (!neo_file_write(&sys->file, block * PRODOS_HDD_BYTES_PER_BLOCK, buf, PRODOS_HDD_BYTES_PER_BLOCK)) {
+        printf("ProDOS: write error, block %u\r\n", (unsigned)block);
         return PRODOS_HDD_ERR_IO;
     }
-    if (sys->write_protected) {
-        return PRODOS_HDD_ERR_WPROT;
-    }
-
-    if (sys->image_type == PRODOS_HDD_IMAGE_TYPE_MSC) {
-        // USB flash drive
-        if (fseek(sys->file, block * PRODOS_HDD_BYTES_PER_BLOCK, SEEK_SET) != 0) {
-            printf("Error writing to file\r\n");
-            return PRODOS_HDD_ERR_IO;
-        }
-        if (fwrite(mem_readptr(mem, buffer), 1, PRODOS_HDD_BYTES_PER_BLOCK, sys->file) != PRODOS_HDD_BYTES_PER_BLOCK) {
-            printf("Error writing to file\r\n");
-            return PRODOS_HDD_ERR_IO;
-        }
-        fflush(sys->file);
-    }
-
     return PRODOS_HDD_ERR_OK;
 }
 

@@ -63,7 +63,9 @@
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/apple2_fdc_rom.h"
-#include "devices/prodos_hdd_msc.h"
+#define NEO_STORAGE_IMPL
+#include "devices/neo_storage.h"   // Hard disk image on the USB drive (FatFs driver of the socle)
+#include "devices/prodos_hdd.h"
 #include "devices/prodos_hdc.h"
 #include "devices/prodos_hdc_rom.h"
 #include "systems/apple2e.h"
@@ -430,6 +432,7 @@ void __not_in_flash_func(core1_main()) {
     __builtin_unreachable();
 }
 
+extern const neo_storage_ops_t neo_storage_fatfs_ops;   // neo_storage_fatfs.c (socle)
 extern bool msc_inquiry_complete;
 extern void msc_poll(void);
 
@@ -474,6 +477,7 @@ int main() {
     hw_set_bits(&bus_ctrl_hw->priority, BUSCTRL_BUS_PRIORITY_PROC1_BITS);
     multicore_launch_core1(core1_main);
 
+    neo_storage_set(NEO_VOL_USB, "Clé USB", &neo_storage_fatfs_ops, "");
     wait_for_msc_ready();
 
     app_init();

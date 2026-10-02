@@ -26,6 +26,8 @@
 
 #define RGBA8(b, g, r) (0xFF000000 | (r << 16) | (g << 8) | (b))
 
+#include <stdbool.h>
+#include <stdint.h>   // Before the ROM and image headers (uint8_t)
 #include <stdlib.h>
 
 #include "roms/apple2e_roms.h"
@@ -41,6 +43,9 @@
 #include "devices/disk2_fdd.h"
 #include "devices/disk2_fdc.h"
 #include "devices/apple2_fdc_rom.h"
+#define NEO_STORAGE_IMPL
+#include "devices/neo_storage.h"
+#include "../../../neo_storage_posix.h"   // Hard disk image: path as given (current directory)
 #include "devices/prodos_hdd.h"
 #include "devices/prodos_hdc.h"
 #include "devices/prodos_hdc_rom.h"
@@ -158,6 +163,7 @@ void app_init(void) {
     });
 
     apple2e_desc_t desc = apple2e_desc();
+    neo_storage_set(NEO_VOL_USB, "Fichiers", &neo_storage_posix_ops, "");
     apple2e_init(&state.apple2e, &desc);
     gfx_init(&(gfx_desc_t){
         .disable_speaker_icon = sargs_exists("disable-speaker-icon"),

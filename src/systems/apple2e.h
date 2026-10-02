@@ -30,6 +30,7 @@
 // - devices/disk2_fdd.h
 // - devices/disk2_fdc.h
 // - devices/apple2_fdc_rom.h
+// - devices/neo_storage.h (image of the hard disk: USB drive, PC directory, net:)
 // - devices/prodos_hdd.h
 // - devices/prodos_hdc.h
 // - devices/prodos_hdc_rom.h
@@ -330,7 +331,7 @@ void apple2e_init(apple2e_t *sys, const apple2e_desc_t *desc) {
             }
         } else {
             if (CHIPS_ARRAY_SIZE(apple2_msc_images) > 0) {
-                prodos_hdd_insert_disk_msc(&sys->hdc.hdd[0], apple2_msc_images[0]);
+                prodos_hdd_insert_disk_file(&sys->hdc.hdd[0], apple2_msc_images[0]);
             }
         }
     }
