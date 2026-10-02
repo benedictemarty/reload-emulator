@@ -162,14 +162,18 @@ void app_init(void) {
 #define DVI_TIMING   dvi_timing_800x600p_60hz
 #endif  // OLIMEX_NEO6502
 
+#ifdef APPLE_TMDS_PALETTE
 uint32_t __not_in_flash() tmds_palette[PALETTE_SIZE * 6];
+#endif
 uint32_t __not_in_flash() empty_tmdsbuf[3 * FRAME_WIDTH / DVI_SYMBOLS_PER_WORD];
 
-uint8_t __not_in_flash() scanbuf[FRAME_WIDTH];
+uint8_t __not_in_flash() __attribute__((aligned(4))) scanbuf[FRAME_WIDTH];
 
 struct dvi_inst dvi0;
 
+#ifdef APPLE_TMDS_PALETTE
 void tmds_palette_init() { tmds_setup_palette24_symbols(apple2e_palette, tmds_palette, PALETTE_SIZE); }
+#endif
 
 void kbd_raw_key_down(int code) {
     if (code == (NEO_MULTIBOOT_RETURN_KEY | 0x100)) neo_multiboot_return();   // Pause: back to the Neo6502 firmware
@@ -403,6 +407,7 @@ static inline void __not_in_flash_func(render_scanline)(const uint32_t *pixbuf, 
 volatile uint16_t diag_keyq[256];
 volatile uint32_t diag_keyq_head, diag_keyq_tail, diag_frames, diag_exec_us, diag_exec_max;
 volatile uint32_t diag_late_total, diag_late_frames, core1_frames;
+volatile uint32_t diag_enc_us_max, diag_line_us_max, diag_enc_us_sum, diag_enc_n;   // Core 1: encoding of a line, whole line (render + encoding)
 // Hard disk: insertion after a late mount (0 none, 1 done, 2 failed), its blocks; blocks read
 volatile uint32_t diag_hdd_insert, diag_hdd_blocks, diag_msc_ready_ms;   // + time of the drive mounting after power-on
 static uint32_t diag_late_prev;
@@ -421,6 +426,53 @@ static inline void __not_in_flash_func(diag_late_sample)(void) {
 
 #define APPLE2E_EMPTY_LINES   ((FRAME_HEIGHT - APPLE2E_SCREEN_HEIGHT * 2) / 4)
 #define APPLE2E_EMPTY_COLUMNS ((FRAME_WIDTH - APPLE2E_SCREEN_WIDTH) / 2)
+
+#ifndef APPLE_TMDS_PALETTE
+// Line encoding: 2 levels per TMDS channel (RGB 2-2-2) with the symbols of PicoDVI's
+// tmds_encode_2bpp, DC balanced by construction (even pixels imbalance -4, odd +4). The
+// palette encoder of PicoDVI (tmds_encode_palette_data, kept with -DAPPLE_TMDS_PALETTE)
+// drifts: on a black line it alternates 0x100 / 0x3FF, +2 a pair, +800 a line, never
+// brought back to 0; monitors accept it, a MacroSilicon MS2109 capture card stays black
+// (measured 2026-10-02). Two pixels a word: even symbol | odd symbol << 10
+#define APPLE_TMDS_BLACK 0x7F103u   // Level 0, even then odd
+static const uint16_t tmds2_even[4] = {0x103, 0x130, 0x230, 0x203};
+static const uint16_t tmds2_odd[4] = {0x1FC, 0x1CF, 0x2CF, 0x2FC};
+// [channel 0 blue, 1 green, 2 red][palette index]
+// In scratch Y and the encoder in scratch X: memory banks of their own, out of the main
+// RAM that core 0 hammers (in main RAM, encoding a line took up to 74 us: late lines)
+// [palette index][blue, green, red, pad]: 16 bytes a colour (utils.S, apple_encode_pairs)
+uint32_t __scratch_y("apple_sym") apple_sym_even[PALETTE_SIZE][4];
+uint32_t __scratch_y("apple_sym") apple_sym_odd[PALETTE_SIZE][4];
+extern void apple_encode_pairs(const uint8_t *pix, uint32_t *out, uint32_t pairs, uint32_t stride);
+static void rgb222_init(void) {
+    for (int i = 0; i < PALETTE_SIZE; i++) {
+        const uint32_t c = apple2e_palette[i];
+        const uint32_t level[3] = {(c >> 6) & 3, (c >> 14) & 3, (c >> 22) & 3};   // Blue, green, red
+        for (int ch = 0; ch < 3; ch++) {
+            apple_sym_even[i][ch] = tmds2_even[level[ch]];
+            apple_sym_odd[i][ch] = (uint32_t)tmds2_odd[level[ch]] << 10;
+        }
+    }
+}
+// row: the Apple frame buffer row (280 bytes, two pixels a byte), read directly (no
+// render_scanline pass); the borders are black
+static void __scratch_x("encode_line") __attribute__((noinline)) encode_line(uint32_t *tmdsbuf, const uint8_t *row) {
+    const int words = FRAME_WIDTH / 2, first = APPLE2E_EMPTY_COLUMNS / 2, last = first + APPLE2E_SCREEN_WIDTH / 2;
+    uint32_t *b = tmdsbuf, *g = tmdsbuf + words, *r = tmdsbuf + 2 * words;
+    for (int k = 0; k < first; k++) b[k] = g[k] = r[k] = APPLE_TMDS_BLACK;
+    for (int k = last; k < words; k++) b[k] = g[k] = r[k] = APPLE_TMDS_BLACK;
+    apple_encode_pairs(row, b + first, last - first, words * 4);
+}
+// Line y of the Apple picture into a TMDS buffer
+#define RENDER_LINE(buf, y) encode_line((buf), &state.apple2e.fb[(y) * 280])
+#else
+#define RENDER_LINE(buf, y)                                                                                   \
+    do {                                                                                                      \
+        render_scanline((const uint32_t *)(&state.apple2e.fb[(y) * 280]),                                     \
+                        (uint32_t *)(&scanbuf[APPLE2E_EMPTY_COLUMNS]), 280);                                  \
+        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, (buf), FRAME_WIDTH, PALETTE_BITS); \
+    } while (0)
+#endif
 
 static inline void __not_in_flash_func(render_empty_scanlines)() {
     for (int y = 0; y < APPLE2E_EMPTY_LINES; y += 2) {
@@ -441,16 +493,25 @@ static inline void __not_in_flash_func(render_frame)() {
     for (int y = 0; y < APPLE2E_SCREEN_HEIGHT; y += 2) {
         uint32_t *tmdsbuf;
         queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
-        render_scanline((const uint32_t *)(&state.apple2e.fb[y * 280]), (uint32_t *)(&scanbuf[APPLE2E_EMPTY_COLUMNS]),
-                        280);
-        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
+#ifdef APPLE_DIAG
+        const uint32_t t0 = time_us_32();
+#endif
+#ifdef APPLE_DIAG
+        const uint32_t t1 = t0;
+#endif
+        RENDER_LINE(tmdsbuf, y);
+#ifdef APPLE_DIAG
+        const uint32_t t2 = time_us_32();
+        if (t2 - t1 > diag_enc_us_max) diag_enc_us_max = t2 - t1;
+        diag_enc_us_sum += t2 - t1;
+        diag_enc_n++;
+        if (t2 - t0 > diag_line_us_max) diag_line_us_max = t2 - t0;
+#endif
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
         DIAG_LATE_SAMPLE();
 
         queue_remove_blocking_u32(&dvi0.q_tmds_free, &tmdsbuf);
-        render_scanline((const uint32_t *)(&state.apple2e.fb[(y + 1) * 280]),
-                        (uint32_t *)(&scanbuf[APPLE2E_EMPTY_COLUMNS]), 280);
-        tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
+        RENDER_LINE(tmdsbuf, y + 1);
         queue_add_blocking_u32(&dvi0.q_tmds_valid, &tmdsbuf);
         DIAG_LATE_SAMPLE();
     }
@@ -565,8 +626,18 @@ int main() {
     // then waits with its IRQs masked: late lines, red dashes; docs/STRATEGIE-NEO6502.md)
     dvi_init(&dvi0, spin_lock_claim_unused(true), spin_lock_claim_unused(true));
 
+#ifdef APPLE_TMDS_PALETTE
     tmds_palette_init();
+#endif
+#ifndef APPLE_TMDS_PALETTE
+    rgb222_init();
+    {   // Black line: all of it border
+        const int words = FRAME_WIDTH / 2;
+        for (int k = 0; k < 3 * words; k++) empty_tmdsbuf[k] = APPLE_TMDS_BLACK;
+    }
+#else
     tmds_encode_palette_data((const uint32_t *)scanbuf, tmds_palette, empty_tmdsbuf, FRAME_WIDTH, PALETTE_BITS);
+#endif
 
     printf("Core 1 start\n");
     hw_set_bits(&bus_ctrl_hw->priority, BUSCTRL_BUS_PRIORITY_PROC1_BITS);

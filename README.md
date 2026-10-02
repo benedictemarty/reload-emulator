@@ -117,10 +117,11 @@ to BASIC. A drive plugged in later is mounted and its image inserted (boot it wi
 `PR#7`). Pause returns to the Neo6502 firmware (multi-boot, `NEO_SLOT_APPLE2`,
 `NEO_SLOT_APPLE2E`).
 
-Video of the Apple //e: 800x480 at 59.5 Hz (295.2 MHz, `apple2e`), not a CEA/VESA mode;
-`apple2e_640` outputs the standard 640x480 at 60 Hz (252 MHz) for capture cards that
-reject 800x480 (MacroSilicon MS2109). At 252 MHz the emulation is expected to run behind
-real time (estimated from the 295 MHz load, not measured on the board).
+Video of the Apple //e: 800x480 at 59.5 Hz (295.2 MHz, `apple2e`), or the standard
+640x480 at 60 Hz (252 MHz, `apple2e_640`). Pixels are encoded as RGB 2-2-2 with DC
+balanced TMDS symbols (the palette encoder of PicoDVI drifts and a MacroSilicon MS2109
+capture card showed a black screen); both modes are captured by the MS2109. At 252 MHz the
+emulation holds real time on the Total Replay title (16.0 ms a 16.7 ms frame).
 
 ## Building firmware
 Original firmware is not distributed with emulator sources. Please, make sure you have the proper license to use and build the headers from your own binaries.

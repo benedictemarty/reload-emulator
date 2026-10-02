@@ -91,3 +91,18 @@ target_link_libraries(apple2e_diag_640 pico_stdlib pico_multicore pico_util libd
 pico_add_extra_outputs(apple2e_diag_640)
 pico_enable_stdio_usb(apple2e_diag_640 0)
 pico_enable_stdio_uart(apple2e_diag_640 1)
+
+# Bench: the former palette encoder of PicoDVI, for comparison (capture card black)
+add_executable(apple2e_diag_pal
+	${CMAKE_CURRENT_SOURCE_DIR}/src/apple2e.c
+	${CMAKE_CURRENT_SOURCE_DIR}/src/utils.S
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/hid_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/msc_app.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio.c
+	${CMAKE_CURRENT_SOURCE_DIR}/../../src/neo_storage_fatfs.c
+)
+target_compile_options(apple2e_diag_pal PRIVATE -Wall)
+target_compile_definitions(apple2e_diag_pal PRIVATE PICO_HEAP_SIZE=0x5800 DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
+	NEO_FATFS_FILES=1 APPLE_DIAG=1 PRODOS_HDD_COUNT_READS=diag_hdd_reads APPLE_TMDS_PALETTE=1)
+target_link_libraries(apple2e_diag_pal pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs)
+pico_add_extra_outputs(apple2e_diag_pal)
