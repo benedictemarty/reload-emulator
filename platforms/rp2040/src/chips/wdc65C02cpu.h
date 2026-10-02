@@ -42,7 +42,13 @@ typedef struct {
 #define MOS6502CPU_GET_ADDR(c)       wdc65C02cpu_get_addr()
 #define MOS6502CPU_GET_DATA(c)       wdc65C02cpu_get_data()
 #define MOS6502CPU_SET_DATA(c, data) wdc65C02cpu_set_data(data)
-#define MOS6502CPU_SET_IRQ(c, state) wdc65C02cpu_set_irq(state)
+// IRQ pin written only when the level changes: systems call it at every step (Telestrat:
+// every 4 cycles), and a GPIO write each time costs (Neo6502TeleStrat, 2026-10-02)
+#define MOS6502CPU_SET_IRQ(c, state)                                            \
+    do {                                                                        \
+        const bool _wdc_irq = (state);                                          \
+        if (_wdc_irq != wdc65C02cpu_irq_level) wdc65C02cpu_set_irq(_wdc_irq);   \
+    } while (0)
 #define MOS6502CPU_SET_NMI(c, state) wdc65C02cpu_set_nmi(state)
 // True during an opcode fetch cycle (not available from the real CPU: no SYNC pin on the board)
 #define MOS6502CPU_SYNC(c)           (false)
@@ -64,6 +70,8 @@ uint8_t wdc65C02cpu_get_data();
 void wdc65C02cpu_set_data(uint8_t data);
 
 void wdc65C02cpu_set_irq(bool state);
+// Level last written by wdc65C02cpu_set_irq (true = asserted)
+extern bool wdc65C02cpu_irq_level;
 
 // Drive the NMI pin level (true = asserted); no-op on boards without an NMI pin
 void wdc65C02cpu_set_nmi(bool state);
@@ -141,9 +149,8 @@ void wdc65C02cpu_init() {
     gpio_put(_NMI_PIN, 1);
 #endif  // OLIMEX_NEO6502
 
-    gpio_put(_RESET_PIN, 0);
-    sleep_us(1000);
-    gpio_put(_RESET_PIN, 1);
+    wdc65C02cpu_irq_level = false;
+    wdc65C02cpu_reset();   // Clocked reset (RESB low over clock cycles), as at every reset
 }
 
 // The W65C02S takes RESB into account only if it stays low for 2 clock cycles or more:
@@ -259,7 +266,12 @@ WDC65C02_HOT void wdc65C02cpu_set_data(uint8_t data) {
     // printf("set data: %02x\n", data);
 }
 
-WDC65C02_HOT void wdc65C02cpu_set_irq(bool state) { gpio_put(_IRQ_PIN, state ? 0 : 1); }
+bool wdc65C02cpu_irq_level;
+
+WDC65C02_HOT void wdc65C02cpu_set_irq(bool state) {
+    wdc65C02cpu_irq_level = state;
+    gpio_put(_IRQ_PIN, state ? 0 : 1);
+}
 
 WDC65C02_HOT void wdc65C02cpu_set_nmi(bool state) {
 #ifdef OLIMEX_NEO6502
