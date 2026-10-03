@@ -557,6 +557,29 @@ void wait_for_msc_ready(void) {
 }
 
 #ifdef APPLE_DIAG
+// USB drive stress test (bench) : writing N to diag_stress_go over SWD reads the first N blocks
+// of the hard disk image from block diag_stress_first, 32 a frame, while the emulation runs ; FNV-1a 32 of the bytes read
+// (to compare with the same sum over the file on the PC), reads failed, duration
+volatile uint32_t diag_stress_first, diag_stress_go, diag_stress_done, diag_stress_fnv = 2166136261u, diag_stress_fail, diag_stress_ms;
+static uint32_t diag_stress_start;
+static void diag_stress_service(void) {
+    prodos_hdd_t *hdd = &state.apple2e.hdc.hdd[0];
+    if (!diag_stress_go || diag_stress_done >= diag_stress_go || !prodos_hdd_is_disk_inserted(hdd)) return;
+    if (diag_stress_done == 0) diag_stress_start = to_ms_since_boot(get_absolute_time());
+    uint8_t buf[PRODOS_HDD_BYTES_PER_BLOCK];
+    for (int n = 0; n < 32 && diag_stress_done < diag_stress_go; n++) {
+        if (neo_file_read(&hdd->file, (diag_stress_first + diag_stress_done) * PRODOS_HDD_BYTES_PER_BLOCK, buf, sizeof(buf))) {
+            uint32_t h = diag_stress_fnv;
+            for (int i = 0; i < PRODOS_HDD_BYTES_PER_BLOCK; i++) h = (h ^ buf[i]) * 16777619u;
+            diag_stress_fnv = h;
+        } else {
+            diag_stress_fail++;
+        }
+        diag_stress_done++;
+    }
+    diag_stress_ms = to_ms_since_boot(get_absolute_time()) - diag_stress_start;
+}
+
 static void diag_key_service(void) {
     static int phase, timer, key;
     diag_frames++;
@@ -659,6 +682,7 @@ int main() {
         usb_disk_service();
 #ifdef APPLE_DIAG
         diag_key_service();
+        diag_stress_service();
 #endif
 
         uint32_t end_time_in_micros = time_us_32();
