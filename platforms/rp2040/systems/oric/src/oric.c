@@ -934,25 +934,8 @@ static void panel_action(oric_menu_action_t a) {
 
 // Keys while the panel is open (codes of hid_app.c: ASCII, or HID usage | 0x100)
 static bool panel_key(int code) {
-    int key;
-    switch (code) {
-        case 0x152: key = OSD_KEY_UP; break;
-        case 0x151: key = OSD_KEY_DOWN; break;
-        case 0x150: key = OSD_KEY_LEFT; break;
-        case 0x14F: key = OSD_KEY_RIGHT; break;
-        case 0x0D: key = OSD_KEY_ENTER; break;
-        case 0x1B: key = OSD_KEY_ESC; break;
-        case 0x7F:
-        case 0x08: key = OSD_KEY_DEL; break;
-        case 0x14B: key = OSD_KEY_PGUP; break;
-        case 0x14E: key = OSD_KEY_PGDN; break;
-        case 0x14A: key = OSD_KEY_HOME; break;
-        case 0x14D: key = OSD_KEY_END; break;
-        default:
-            if (code <= ' ' || code >= 0x7F) return false;
-            key = code;
-            break;
-    }
+    const int key = osd_key_from_hid(code);   // osd/osd_browser.h (socle)
+    if (key < 0) return false;
     panel_action(oric_menu_key(&menu, key));
     return true;
 }

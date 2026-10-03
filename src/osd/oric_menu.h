@@ -37,6 +37,7 @@
 
 #include "osd/osd.h"
 #include "osd/osd_panel.h"   // Style commun des panneaux (socle)
+#include "osd/osd_browser.h"   // Sélecteur commun (socle)
 #include "devices/hid_media.h"   // HID_VOLUME_MAX
 
 #ifndef ORIC_MENU_FILES
@@ -50,11 +51,7 @@ enum { ORIC_FILE_DSK = 0, ORIC_FILE_TAP = 1 };
 
 enum { ORIC_PAGE_MAIN = 0, ORIC_PAGE_BROWSE };
 
-// Touches du menu (en plus des caractères imprimables, pour le saut)
-enum {
-    OSD_KEY_UP = 0x100, OSD_KEY_DOWN, OSD_KEY_LEFT, OSD_KEY_RIGHT, OSD_KEY_ENTER, OSD_KEY_ESC, OSD_KEY_DEL,
-    OSD_KEY_PGUP, OSD_KEY_PGDN, OSD_KEY_HOME, OSD_KEY_END,
-};
+// Touches du menu : OSD_KEY_* et osd_key_from_hid (osd/osd_browser.h)
 
 enum {
     ORIC_ACT_NONE = 0,
@@ -122,10 +119,8 @@ typedef struct {
     int page;
     int cursor;
     int browse_target;   // Élément qui a ouvert le sélecteur
-    int browse_cursor;   // Lecteurs et cassette : 0 = « éjecter », puis la liste
-    int browse_scroll;
+    osd_browser_t browse;   // Lecteurs et cassette : ligne 0 = « éjecter », puis la liste
     int browse_list[ORIC_MENU_FILES];
-    int browse_count;
 } oric_menu_t;
 
 static inline void oric_menu_init(oric_menu_t* m) {
@@ -148,11 +143,6 @@ static inline bool oric_menu_dsk_drives(const oric_menu_t* m) { return m->fdc ==
 
 #define ORIC_BROWSE_VISIBLE 16
 
-// Les sélecteurs de l'interface et des profils n'ont pas de ligne « éjecter »
-static inline int _oric_browse_first(const oric_menu_t* m) {
-    return (m->browse_target == ORIC_ITEM_FDC || m->browse_target == ORIC_ITEM_PROFILE) ? 0 : 1;
-}
-
 static inline const char* _oric_entry_name(const oric_menu_t* m, int entry) {
     if (m->browse_target == ORIC_ITEM_FDC) return oric_menu_fdc_names[entry];
     if (m->browse_target == ORIC_ITEM_PROFILE) return m->profile[entry];
@@ -160,39 +150,36 @@ static inline const char* _oric_entry_name(const oric_menu_t* m, int entry) {
 }
 
 static inline void _oric_open_browser(oric_menu_t* m, int item) {
-    m->browse_count = 0;
+    int count = 0, cursor = 0;
     if (item == ORIC_ITEM_FDC) {
-        for (int k = 0; k < ORIC_MENU_FDCS; k++) m->browse_list[m->browse_count++] = k;
-        m->browse_cursor = m->fdc;
+        for (int k = 0; k < ORIC_MENU_FDCS; k++) m->browse_list[count++] = k;
+        cursor = m->fdc;
     } else if (item == ORIC_ITEM_PROFILE) {
-        for (int k = 0; k < ORIC_MENU_PROFILES && m->profile[k]; k++) m->browse_list[m->browse_count++] = k;
-        m->browse_cursor = m->profile_cur >= 0 && m->profile_cur < m->browse_count ? m->profile_cur : 0;
+        for (int k = 0; k < ORIC_MENU_PROFILES && m->profile[k]; k++) m->browse_list[count++] = k;
+        cursor = m->profile_cur >= 0 && m->profile_cur < count ? m->profile_cur : 0;
     } else {
         const uint8_t kind = item == ORIC_ITEM_TAPE ? ORIC_FILE_TAP : ORIC_FILE_DSK;
-        for (int i = 0; i < m->nfiles && m->browse_count < ORIC_MENU_FILES; i++) {
-            if (m->files[i].kind == kind) m->browse_list[m->browse_count++] = i;
+        for (int i = 0; i < m->nfiles && count < ORIC_MENU_FILES; i++) {
+            if (m->files[i].kind == kind) m->browse_list[count++] = i;
         }
-        m->browse_cursor = 0;
         // Curseur sur l'image ou la cassette en place
         const char* cur = item == ORIC_ITEM_TAPE ? m->tape : m->drive[item - ORIC_ITEM_DRIVE0];
-        for (int k = 0; k < m->browse_count; k++) {
-            if (cur[0] && !strcmp(m->files[m->browse_list[k]].name, cur)) m->browse_cursor = k + 1;
+        for (int k = 0; k < count; k++) {
+            if (cur[0] && !strcmp(m->files[m->browse_list[k]].name, cur)) cursor = k + 1;
         }
     }
     m->browse_target = item;
-    m->browse_scroll = 0;
+    // Les sélecteurs de l'interface et des profils n'ont pas de ligne « éjecter »
+    osd_browser_open(&m->browse, count, (item == ORIC_ITEM_FDC || item == ORIC_ITEM_PROFILE) ? 0 : 1, cursor,
+                     ORIC_BROWSE_VISIBLE);
     m->page = ORIC_PAGE_BROWSE;
 }
 
-static inline void _oric_browse_clamp(oric_menu_t* m) {
-    const int n = m->browse_count + _oric_browse_first(m);
-    if (m->browse_cursor < 0) m->browse_cursor = 0;
-    if (m->browse_cursor >= n) m->browse_cursor = n - 1;
-    if (m->browse_cursor < m->browse_scroll) m->browse_scroll = m->browse_cursor;
-    if (m->browse_cursor >= m->browse_scroll + ORIC_BROWSE_VISIBLE) m->browse_scroll = m->browse_cursor - ORIC_BROWSE_VISIBLE + 1;
+// Nom d'une entrée du sélecteur (saut à une lettre)
+static inline const char* _oric_browse_name(void* user, int k) {
+    const oric_menu_t* m = (const oric_menu_t*)user;
+    return _oric_entry_name(m, m->browse_list[k]);
 }
-
-static inline int _oric_upper(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 
 static inline void oric_menu_message(oric_menu_t* m, bool error, const char* text) {
     snprintf(m->message, sizeof(m->message), "%s", text);
@@ -202,75 +189,51 @@ static inline void oric_menu_message(oric_menu_t* m, bool error, const char* tex
 static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
     oric_menu_action_t a = {ORIC_ACT_NONE, 0, -1};
     if (m->page == ORIC_PAGE_BROWSE) {
-        const int first = _oric_browse_first(m);
-        const int n = m->browse_count + first;
-        switch (key) {
-            case OSD_KEY_UP: m->browse_cursor = n ? (m->browse_cursor + n - 1) % n : 0; break;
-            case OSD_KEY_DOWN: m->browse_cursor = n ? (m->browse_cursor + 1) % n : 0; break;
-            case OSD_KEY_PGUP: m->browse_cursor -= ORIC_BROWSE_VISIBLE; break;
-            case OSD_KEY_PGDN: m->browse_cursor += ORIC_BROWSE_VISIBLE; break;
-            case OSD_KEY_HOME: m->browse_cursor = 0; break;
-            case OSD_KEY_END: m->browse_cursor = n - 1; break;
-            case OSD_KEY_ESC:
-            case OSD_KEY_LEFT: m->page = ORIC_PAGE_MAIN; break;
-            case OSD_KEY_ENTER: {
-                const int item = m->browse_target;
-                m->page = ORIC_PAGE_MAIN;
-                if (item == ORIC_ITEM_PROFILE) {
-                    if (m->browse_count > 0) {
-                        a.type = ORIC_ACT_PROFILE;
-                        a.file = m->browse_list[m->browse_cursor];
-                    }
-                    break;
-                }
-                if (item == ORIC_ITEM_FDC) {
-                    const int t = m->browse_list[m->browse_cursor];
-                    if (!m->fdc_available[t]) {
-                        char msg[96];
-                        snprintf(msg, sizeof(msg), "%s : ROM absente", oric_menu_fdc_names[t]);
-                        oric_menu_message(m, true, msg);
-                    } else {
-                        a.type = ORIC_ACT_SET_FDC;
-                        a.file = t;
-                    }
-                    break;
-                }
-                const bool none = m->browse_cursor == 0;
-                const int file = none ? -1 : m->browse_list[m->browse_cursor - 1];
-                if (_oric_item_is_drive(item)) {
-                    a.target = item - ORIC_ITEM_DRIVE0;
-                    if (!none) {
-                        // Une image n'est que dans un lecteur à la fois
-                        for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
-                            if (d != a.target && !strcmp(m->drive[d], m->files[file].name)) {
-                                char msg[96];
-                                snprintf(msg, sizeof(msg), "%.48s est déjà dans le lecteur %c", m->files[file].name, 'A' + d);
-                                oric_menu_message(m, true, msg);
-                                return a;
-                            }
-                        }
-                    }
-                    a.type = none ? ORIC_ACT_EJECT : ORIC_ACT_INSERT;
-                } else {
-                    a.type = none ? ORIC_ACT_TAPE_EJECT : ORIC_ACT_TAPE_INSERT;
-                }
-                a.file = file;
-                break;
+        const int r = osd_browser_key(&m->browse, key, _oric_browse_name, m);
+        if (r == OSD_BROWSER_BACK) m->page = ORIC_PAGE_MAIN;
+        if (r != OSD_BROWSER_PICK) return a;
+        const int item = m->browse_target;
+        const int entry = osd_browser_entry(&m->browse);
+        m->page = ORIC_PAGE_MAIN;
+        if (item == ORIC_ITEM_PROFILE) {
+            if (m->browse.count > 0) {
+                a.type = ORIC_ACT_PROFILE;
+                a.file = m->browse_list[entry];
             }
-            default:
-                // Saut à l'élément suivant qui commence par la lettre tapée
-                if (key > ' ' && key < 0x100 && m->browse_count > 0) {
-                    for (int k = 1; k <= m->browse_count; k++) {
-                        const int idx = (m->browse_cursor - first + k) % m->browse_count;
-                        if (_oric_upper((uint8_t)_oric_entry_name(m, m->browse_list[idx])[0]) == _oric_upper(key)) {
-                            m->browse_cursor = idx + first;
-                            break;
-                        }
+            return a;
+        }
+        if (item == ORIC_ITEM_FDC) {
+            const int t = m->browse_list[entry];
+            if (!m->fdc_available[t]) {
+                char msg[96];
+                snprintf(msg, sizeof(msg), "%s : ROM absente", oric_menu_fdc_names[t]);
+                oric_menu_message(m, true, msg);
+            } else {
+                a.type = ORIC_ACT_SET_FDC;
+                a.file = t;
+            }
+            return a;
+        }
+        const bool none = entry < 0;
+        const int file = none ? -1 : m->browse_list[entry];
+        if (_oric_item_is_drive(item)) {
+            a.target = item - ORIC_ITEM_DRIVE0;
+            if (!none) {
+                // Une image n'est que dans un lecteur à la fois
+                for (int d = 0; d < ORIC_MENU_DRIVES; d++) {
+                    if (d != a.target && !strcmp(m->drive[d], m->files[file].name)) {
+                        char msg[96];
+                        snprintf(msg, sizeof(msg), "%.48s est déjà dans le lecteur %c", m->files[file].name, 'A' + d);
+                        oric_menu_message(m, true, msg);
+                        return a;
                     }
                 }
-                break;
+            }
+            a.type = none ? ORIC_ACT_EJECT : ORIC_ACT_INSERT;
+        } else {
+            a.type = none ? ORIC_ACT_TAPE_EJECT : ORIC_ACT_TAPE_INSERT;
         }
-        _oric_browse_clamp(m);
+        a.file = file;
         return a;
     }
     int c = m->cursor;
@@ -475,13 +438,13 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
     else if (fdc) snprintf(buf, sizeof(buf), "Interface disque (la machine redémarre)");
     else if (tape) snprintf(buf, sizeof(buf), "Cassette (la même : rembobinée)");
     else snprintf(buf, sizeof(buf), "Disquette pour le lecteur %c", 'A' + item - ORIC_ITEM_DRIVE0);
-    const int first = _oric_browse_first(m);
+    const int first = m->browse.first;
     const int top = R + 5, left = C + 12, width = 76, height = ORIC_BROWSE_VISIBLE + 4;
     osd_panel_popup(s, top, left, height, width, tape ? OSD_TAPE_L : prof ? OSD_CART_L : OSD_FLOP_L, buf);
-    const int n = m->browse_count + first;
-    for (int k = 0; k < ORIC_BROWSE_VISIBLE && m->browse_scroll + k < n; k++) {
-        const int idx = m->browse_scroll + k, row = top + 2 + k;
-        const bool sel = idx == m->browse_cursor;
+    const int n = osd_browser_rows(&m->browse);
+    for (int k = 0; k < ORIC_BROWSE_VISIBLE && m->browse.scroll + k < n; k++) {
+        const int idx = m->browse.scroll + k, row = top + 2 + k;
+        const bool sel = idx == m->browse.cursor;
         uint8_t base, dim;
         osd_panel_popup_row(s, row, left, width, sel, &base, &dim);
         if (idx < first) {
@@ -516,11 +479,11 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
             osd_puts(s, row, left + width - 18, tag, sel ? OSD_PANEL_POPUP_SEL_ERR : OSD_PANEL_POPUP_ACC, -1);
         }
     }
-    if (!fdc && !prof && m->browse_count == 0) {
+    if (!fdc && !prof && m->browse.count == 0) {
         osd_puts(s, top + 4, left + 4, tape ? "Aucune cassette .tap sur la clé" : "Aucune image .dsk sur la clé",
                  OSD_PANEL_POPUP_ERR, -1);
     }
-    osd_panel_scrollbar(s, top + 2, left + width - 2, ORIC_BROWSE_VISIBLE, m->browse_scroll, n);
+    osd_browser_scrollbar(s, &m->browse, top + 2, left + width - 2);
 }
 
 // Bandeau du volume (touches multimédia du clavier), à la place de celui de la

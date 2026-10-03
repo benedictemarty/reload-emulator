@@ -171,14 +171,14 @@ static void test_navigation(const char* dir) {
 
     // Drive A: selector with the .dsk files only, row 0 = eject
     oric_menu_key(&menu, OSD_KEY_ENTER);
-    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse_count == 3);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse.count == 3);
     oric_menu_draw(&menu, &surf);
     CHECK(screen_contains("Disquette pour le lecteur A"));
     CHECK(screen_contains("ZORGONS.DSK") && !screen_contains("GAME.TAP"));
     write_ppm(dir, "oric_menu_disk.ppm");
     // Jump to the initial typed, then insert
     oric_menu_key(&menu, 'z');
-    CHECK(menu.browse_cursor == 3);
+    CHECK(menu.browse.cursor == 3);
     oric_menu_action_t a = oric_menu_key(&menu, OSD_KEY_ENTER);
     CHECK(a.type == ORIC_ACT_INSERT && a.target == 0 && a.file == 3 && menu.page == ORIC_PAGE_MAIN);
     snprintf(menu.drive[0], sizeof(menu.drive[0]), "ZORGONS.DSK");
@@ -205,7 +205,7 @@ static void test_navigation(const char* dir) {
     oric_menu_key(&menu, OSD_KEY_RIGHT);
     CHECK(menu.cursor == ORIC_ITEM_TAPE);
     oric_menu_key(&menu, OSD_KEY_ENTER);
-    CHECK(menu.browse_count == 2 && menu.browse_cursor == 2);
+    CHECK(menu.browse.count == 2 && menu.browse.cursor == 2);
     oric_menu_draw(&menu, &surf);
     CHECK(screen_contains("Cassette (la m\xEA" "me : rembobin\xE9" "e)"));   // Latin-1 cells
     CHECK(screen_contains("GAME.TAP"));
@@ -218,7 +218,7 @@ static void test_navigation(const char* dir) {
 
     // Interface: the list of the 4, a missing ROM is refused
     oric_menu_key(&menu, OSD_KEY_ENTER);
-    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse_count == 4 && menu.browse_cursor == 2);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse.count == 4 && menu.browse.cursor == 2);
     oric_menu_draw(&menu, &surf);
     CHECK(screen_contains("ROM absente"));
     write_ppm(dir, "oric_menu_fdc.ppm");
@@ -254,9 +254,9 @@ static void test_navigation(const char* dir) {
     menu.cursor = ORIC_ITEM_DRIVE0;
     oric_menu_key(&menu, OSD_KEY_ENTER);
     oric_menu_key(&menu, OSD_KEY_END);
-    CHECK(menu.browse_cursor == menu.browse_count && menu.browse_scroll == menu.browse_cursor - ORIC_BROWSE_VISIBLE + 1);
+    CHECK(menu.browse.cursor == menu.browse.count && menu.browse.scroll == menu.browse.cursor - ORIC_BROWSE_VISIBLE + 1);
     oric_menu_key(&menu, OSD_KEY_PGUP);
-    CHECK(menu.browse_cursor >= menu.browse_scroll && menu.browse_cursor < menu.browse_scroll + ORIC_BROWSE_VISIBLE);
+    CHECK(menu.browse.cursor >= menu.browse.scroll && menu.browse.cursor < menu.browse.scroll + ORIC_BROWSE_VISIBLE);
     oric_menu_draw(&menu, &surf);
     write_ppm(dir, "oric_menu_scroll.ppm");
 }
@@ -376,7 +376,7 @@ static void test_profiles(const char* dir) {
     oric_menu_draw(&menu, &surf);
     CHECK(screen_contains("Profil") && screen_contains("utilisateur"));
     oric_menu_open_profiles(&menu);
-    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse_count == 3 && menu.browse_cursor == 0);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse.count == 3 && menu.browse.cursor == 0);
     oric_menu_draw(&menu, &surf);
     CHECK(screen_contains("Nova 64") && screen_contains("Atmos + Microdisc"));
     write_ppm(dir, "oric_menu_profils.ppm");
@@ -391,7 +391,7 @@ static void test_profiles(const char* dir) {
     oric_menu_key(&menu, OSD_KEY_DOWN);
     CHECK(menu.cursor == ORIC_ITEM_PROFILE);
     oric_menu_key(&menu, OSD_KEY_ENTER);
-    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse_cursor == 2);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse.cursor == 2);
     oric_menu_key(&menu, OSD_KEY_ESC);
     CHECK(menu.page == ORIC_PAGE_MAIN);
     oric_menu_key(&menu, OSD_KEY_LEFT);
