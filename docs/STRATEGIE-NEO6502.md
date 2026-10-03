@@ -61,6 +61,14 @@ le dit dans un ADR.
    noire (mesuré le 2026-10-02). Apple IIe : RGB 2-2-2 avec les symboles équilibrés de
    `tmds_encode_2bpp` (boucle en assembleur `apple_encode_pairs`, 38 µs par ligne contre 55 avec
    la palette ; image capturée, 0 ligne en retard).
+1 bis. **USB (clé)** : TinyUSB 0.21.0 s'arrête (`panic("Data Seq Error")`) quand une erreur de
+   séquence de données survient pendant une lecture de la clé, clavier sur le même hub (Apple
+   IIe : 1 démarrage sur 4 ; tinyusb #3964, #3533, ouverts). reload applique
+   `platforms/rp2040/patches/tinyusb-data-seq.sh` à son sous-module (transfert en échec au lieu
+   du panic, commande MSC en échec) et `msc_app.c` fait la reprise Bulk-Only puis réessaie
+   (socle-2026-10-01-28). Un projet avec sa propre copie de TinyUSB garde l'ancien
+   comportement : y appliquer le même script (argument : dossier de TinyUSB). Non encore
+   essayé sur la carte.
 2. **Vidéo** : `dvi_init(&dvi0, spin_lock_claim_unused(true), spin_lock_claim_unused(true))`,
    jamais `next_striped_spin_lock_num()` (verrous partagés avec FatFs et TinyUSB).
 3. **Vidéo** : PicoDVI répète chaque tampon (`DVI_VERTICAL_REPEAT` = 2) : un tampon
