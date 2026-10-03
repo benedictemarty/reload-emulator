@@ -284,7 +284,9 @@ void apple2e_init(apple2e_t *sys, const apple2e_desc_t *desc) {
 
     CHIPS_ASSERT(desc->roms.rom.ptr && (desc->roms.rom.size == 0x4000));
     CHIPS_ASSERT(desc->roms.character_rom.ptr && (desc->roms.character_rom.size == 0x1000));
-    CHIPS_ASSERT(desc->roms.keyboard_rom.ptr && (desc->roms.keyboard_rom.size == 0x800));
+    // Keyboard ROM (341-0132-d): optional, not read by the emulation (keys come as ASCII);
+    // the local header may hold it empty
+    CHIPS_ASSERT(desc->roms.keyboard_rom.size == 0 || (desc->roms.keyboard_rom.ptr && desc->roms.keyboard_rom.size == 0x800));
     CHIPS_ASSERT(desc->roms.fdc_rom.ptr && (desc->roms.fdc_rom.size == 0x100));
     CHIPS_ASSERT(desc->roms.hdc_rom.ptr && (desc->roms.hdc_rom.size == 0x100));
     sys->rom = desc->roms.rom.ptr;

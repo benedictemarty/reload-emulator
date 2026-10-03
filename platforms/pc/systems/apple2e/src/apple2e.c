@@ -21,8 +21,8 @@
 #define CHIPS_IMPL
 #define MEM_PAGE_SHIFT (9U)
 
-#define __in_flash()
-#define __not_in_flash()
+#define __in_flash(...)       // RP2040 placement attributes of the ROM headers: none on PC
+#define __not_in_flash(...)
 
 #define RGBA8(b, g, r) (0xFF000000 | (r << 16) | (g << 8) | (b))
 
@@ -30,7 +30,7 @@
 #include <stdint.h>   // Before the ROM and image headers (uint8_t)
 #include <stdlib.h>
 
-#include "roms/apple2e_roms.h"
+#include "roms/apple2ee_roms.h"   // Enhanced //e, as the Neo6502 firmware
 #include "images/apple2_images.h"
 
 #include "chips/chips_common.h"
