@@ -262,6 +262,21 @@ static void panel_refresh(void);
 static volatile uint16_t panel_keys[16];
 static volatile uint8_t panel_keys_head, panel_keys_tail;
 static volatile int16_t sys_key_pending = -1;   // F2-F9, F11, F12 waiting for sys_key_service
+// Shifted character (« : », « * »…) : SHIFT pressed at once, the key one emulated frame later
+// (shifted_key_service) : pressed in the same instant, the ROM's keyboard scan could read
+// the key without SHIFT (« : » typed, « ; » on screen, seen on the board 2026-10-03), as
+// oric_headless does
+static volatile int16_t shifted_pending = -1;
+#define ORIC_SHIFT_BIT (1u << (KBD_MAX_COLUMNS + KBD_MAX_LINES))
+static inline bool oric_key_shifted(int code) {
+    return code >= 0 && code < KBD_MAX_KEYS && code != ORIC_KEY_SHIFT && (state.oric.kbd.key_masks[code] & ORIC_SHIFT_BIT);
+}
+static void shifted_key_service(void) {
+    const int code = shifted_pending;
+    if (code < 0) return;
+    shifted_pending = -1;
+    kbd_key_down(&state.oric.kbd, code);
+}
 
 void kbd_raw_key_down(int code) {
     if (code == (NEO_MULTIBOOT_RETURN_KEY | 0x100)) neo_multiboot_return();  // Pause (code HID | 0x100 : pas d'ASCII) : retour au firmware Neo6502
@@ -290,6 +305,12 @@ void kbd_raw_key_down(int code) {
         // neo_cdc_serial.c), i.e. in the middle of an emulated cycle: a reset there would
         // cut the 6502 and the WD1793 halfway
         sys_key_pending = (int16_t)code;
+        return;
+    }
+    if (oric_key_shifted(code)) {
+        if (shifted_pending >= 0) kbd_key_down(&state.oric.kbd, shifted_pending);   // The previous one now
+        kbd_key_down(&state.oric.kbd, ORIC_KEY_SHIFT);
+        shifted_pending = (int16_t)code;
         return;
     }
     kbd_key_down(&state.oric.kbd, code);
@@ -345,7 +366,9 @@ void kbd_raw_key_up(int code) {
             code = toupper(code);
         }
     }
+    if (code == shifted_pending) shifted_pending = -1;   // Released before it went down
     kbd_key_up(&state.oric.kbd, code);
+    if (oric_key_shifted(code)) kbd_key_up(&state.oric.kbd, ORIC_KEY_SHIFT);
 }
 
 void gamepad_state_update(uint8_t index, uint8_t hat_state, uint32_t button_state) {}
@@ -1112,6 +1135,7 @@ int main() {
 
         uint32_t num_ticks = panel_open ? 0 : 19968;   // Paused while the control panel is open
         run_ticks(num_ticks);
+        shifted_key_service();   // After a frame with SHIFT alone
 #ifdef ORIC_DIAG
         if (num_ticks) {
             uint32_t tick_us = time_us_32() - start_time_in_micros;
