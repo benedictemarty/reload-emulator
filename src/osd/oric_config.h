@@ -40,54 +40,23 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "osd/osd_cfgfile.h"   // Fichier de configuration commun (socle)
+
 #define ORIC_CONFIG_FILE "ORIC.CFG"
 
 static const char* const oric_config_fdc_keys[4] = {"aucune", "pravetz", "microdisc", "jasmin"};
 
 // Valeur de la clé `key` sur la ligne (« a », « fdc »…), ou NULL
-static inline const char* oric_config_value(const char* line, const char* key) {
-    size_t n = strlen(key);
-    if (strncmp(line, key, n) != 0 || line[n] != '=') return NULL;
-    return line + n + 1;
-}
+static inline const char* oric_config_value(const char* line, const char* key) { return osd_cfg_value(line, key); }
 
 // Interface disque d'une valeur « fdc= » (0-3), -1 si inconnue
-static inline int oric_config_fdc(const char* v) {
-    for (int i = 0; i < 4; i++) {
-        size_t n = strlen(oric_config_fdc_keys[i]);
-        if (strncmp(v, oric_config_fdc_keys[i], n) == 0 && (v[n] == 0 || v[n] == '\r' || v[n] == '\n' || v[n] == ' ')) {
-            return i;
-        }
-    }
-    return -1;
-}
+static inline int oric_config_fdc(const char* v) { return osd_cfg_choice(v, oric_config_fdc_keys, 4); }
 
 // Copie la valeur (jusqu'à la fin de ligne, espaces de fin retirés)
-static inline void oric_config_copy(char* dst, size_t size, const char* v) {
-    size_t n = 0;
-    while (v[n] && v[n] != '\r' && v[n] != '\n') n++;
-    while (n > 0 && v[n - 1] == ' ') n--;
-    if (n >= size) n = size - 1;
-    memcpy(dst, v, n);
-    dst[n] = 0;
-}
-
-static inline bool _oric_config_ours(const char* line) {
-    static const char* const keys[7] = {"fdc", "a", "b", "c", "d", "tape", "volume"};
-    for (int i = 0; i < 7; i++) {
-        if (oric_config_value(line, keys[i])) return true;
-    }
-    return false;
-}
+static inline void oric_config_copy(char* dst, size_t size, const char* v) { osd_cfg_copy(dst, size, v); }
 
 // Volume d'une valeur « volume= » (0 à max), -1 si invalide
-static inline int oric_config_volume(const char* v, int max) {
-    int n = 0, digits = 0;
-    while (v[digits] >= '0' && v[digits] <= '9' && digits < 3) n = n * 10 + (v[digits++] - '0');
-    const char e = v[digits];
-    if (!digits || (e && e != '\r' && e != '\n' && e != ' ') || n > max) return -1;
-    return n;
-}
+static inline int oric_config_volume(const char* v, int max) { return osd_cfg_int(v, max); }
 
 // Nouveau contenu de ORIC.CFG : les lignes de `old` (peut être NULL) qui ne
 // sont pas à nous, puis nos réglages (lecteurs et cassette vides : omis ;
@@ -95,31 +64,17 @@ static inline int oric_config_volume(const char* v, int max) {
 // à out_size - 1.
 static inline size_t oric_config_merge(const char* old, int fdc, const char* const drives[4], const char* tape, int volume,
                                        char* out, size_t out_size) {
-    size_t len = 0;
-    out[0] = 0;
-#define _ORIC_CFG_PUT(...)                                                                  \
-    do {                                                                                    \
-        if (len + 1 < out_size) {                                                           \
-            int w = snprintf(out + len, out_size - len, __VA_ARGS__);                       \
-            if (w > 0) len += (size_t)w < out_size - len ? (size_t)w : out_size - len - 1; \
-        }                                                                                   \
-    } while (0)
-    for (const char* p = old; p && *p;) {
-        const char* e = p;
-        while (*e && *e != '\n') e++;
-        if (!_oric_config_ours(p)) {
-            _ORIC_CFG_PUT("%.*s\n", (int)(e - p > 0 && e[-1] == '\r' ? e - p - 1 : e - p), p);
-        }
-        p = *e ? e + 1 : e;
-    }
-    if (fdc >= 0 && fdc < 4) _ORIC_CFG_PUT("fdc=%s\n", oric_config_fdc_keys[fdc]);
+    static const char* const ours[7] = {"fdc", "a", "b", "c", "d", "tape", "volume"};
+    osd_cfg_writer_t w;
+    osd_cfg_writer_init(&w, out, out_size);
+    osd_cfg_keep(&w, old, ours, 7);
+    if (fdc >= 0 && fdc < 4) osd_cfg_put(&w, "fdc=%s\n", oric_config_fdc_keys[fdc]);
     for (int d = 0; d < 4; d++) {
-        if (drives[d] && drives[d][0]) _ORIC_CFG_PUT("%c=%s\n", 'a' + d, drives[d]);
+        if (drives[d] && drives[d][0]) osd_cfg_put(&w, "%c=%s\n", 'a' + d, drives[d]);
     }
-    if (tape && tape[0]) _ORIC_CFG_PUT("tape=%s\n", tape);
-    if (volume >= 0) _ORIC_CFG_PUT("volume=%d\n", volume);
-#undef _ORIC_CFG_PUT
-    return len;
+    if (tape && tape[0]) osd_cfg_put(&w, "tape=%s\n", tape);
+    if (volume >= 0) osd_cfg_put(&w, "volume=%d\n", volume);
+    return w.len;
 }
 
 /*-- Profils ------------------------------------------------------------------*/
@@ -137,18 +92,7 @@ typedef struct {
 } oric_profile_t;
 
 // Copie jusqu'au séparateur `;` ou à la fin de ligne, espaces de bord retirés
-static inline const char* _oric_config_field(const char* v, char* dst, size_t size) {
-    while (*v == ' ') v++;
-    size_t n = 0;
-    while (v[n] && v[n] != ';' && v[n] != '\r' && v[n] != '\n') n++;
-    size_t m = n;
-    while (m > 0 && v[m - 1] == ' ') m--;
-    if (m >= size) m = size - 1;
-    memcpy(dst, v, m);
-    dst[m] = 0;
-    return v[n] == ';' ? v + n + 1 : NULL;
-}
-
+static inline const char* _oric_config_field(const char* v, char* dst, size_t size) { return osd_cfg_field(v, dst, size); }
 // Valeur d'une ligne « profil= » -> profil ; false sans libellé
 static inline bool oric_config_profile(const char* v, oric_profile_t* p) {
     memset(p, 0, sizeof(*p));
