@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include "tusb.h"
+#include "host/hcd.h"   // hcd_edpt_clear_stall (Bulk-Only reset recovery)
 #include "pico/time.h"
 #include "ff.h"
 #include "diskio.h"
@@ -153,30 +154,84 @@ DSTATUS disk_initialize(BYTE pdrv) {
     return 0;
 }
 
-DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
-    if (pdrv >= MSC_SLOTS || !msc_slot_addr[pdrv]) return RES_PARERR;
-    uint8_t const dev_addr = msc_slot_addr[pdrv];
-    uint8_t const lun = 0;
-    msc_volume_busy[pdrv] = true;
-    msc_io_status[pdrv] = 0xFF;
-    if (!tuh_msc_read10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
-        msc_volume_busy[pdrv] = false;
-        return RES_ERROR;
+/*-- Bulk-Only reset recovery (BOT 1.0, 5.3.4) ----------------------------------
+ * A transfer failed (TinyUSB : data PID out of sequence, patches/tinyusb-data-seq.sh) or
+ * timed out : the drive may still be in the middle of the command. Command aborted, Bulk-
+ * Only Mass Storage Reset, CLEAR_FEATURE(ENDPOINT_HALT) on both bulk endpoints (data toggles
+ * back to DATA0 on both sides), then the read or write is tried again */
+// Needs the TinyUSB patch (tuh_msc_bot_info, tuh_msc_abort, hcd_edpt_clear_stall) : with an
+// unpatched TinyUSB (another project's copy), a single try as before
+#ifdef TUH_MSC_NEO6502_RECOVERY
+#define MSC_IO_TRIES 3
+#else
+#define MSC_IO_TRIES 1
+#endif
+volatile uint32_t msc_recoveries, msc_io_errors;   // Counters (bench over SWD)
+
+#ifdef TUH_MSC_NEO6502_RECOVERY
+
+static volatile bool msc_ctrl_done;
+static void msc_ctrl_cb(tuh_xfer_t *xfer) { (void)xfer; msc_ctrl_done = true; }
+
+static bool msc_ctrl(uint8_t daddr, uint8_t bm_request_type, uint8_t request, uint16_t value, uint16_t index) {
+    static tusb_control_request_t req;   // Read by TinyUSB until the transfer completes
+    req.bmRequestType = bm_request_type;
+    req.bRequest = request;
+    req.wValue = value;
+    req.wIndex = index;
+    req.wLength = 0;
+    tuh_xfer_t xfer = {.daddr = daddr, .ep_addr = 0, .setup = &req, .buffer = NULL, .complete_cb = msc_ctrl_cb, .user_data = 0};
+    msc_ctrl_done = false;
+    if (!tuh_control_xfer(&xfer)) return false;
+    const uint32_t start = time_us_32();
+    while (!msc_ctrl_done) {
+        tuh_task();
+        if (time_us_32() - start > MSC_IO_TIMEOUT_US) return false;
     }
-    return wait_for_disk_io(pdrv) ? RES_OK : RES_ERROR;
+    return true;
 }
 
-DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
+static void msc_reset_recovery(uint8_t daddr) {
+    uint8_t itf, ep_in, ep_out;
+    if (!tuh_msc_bot_info(daddr, &itf, &ep_in, &ep_out)) return;
+    msc_recoveries++;
+    tuh_msc_abort(daddr);
+    msc_ctrl(daddr, 0x21, 0xFF, 0, itf);      // Class request : Bulk-Only Mass Storage Reset
+    msc_ctrl(daddr, 0x02, 0x01, 0, ep_in);    // CLEAR_FEATURE(ENDPOINT_HALT), bulk IN
+    hcd_edpt_clear_stall(0, daddr, ep_in);
+    msc_ctrl(daddr, 0x02, 0x01, 0, ep_out);   // CLEAR_FEATURE(ENDPOINT_HALT), bulk OUT
+    hcd_edpt_clear_stall(0, daddr, ep_out);
+}
+#else
+static void msc_reset_recovery(uint8_t daddr) { (void)daddr; }
+#endif
+
+static DRESULT disk_rw(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count, bool write) {
     if (pdrv >= MSC_SLOTS || !msc_slot_addr[pdrv]) return RES_PARERR;
     uint8_t const dev_addr = msc_slot_addr[pdrv];
     uint8_t const lun = 0;
-    msc_volume_busy[pdrv] = true;
-    msc_io_status[pdrv] = 0xFF;
-    if (!tuh_msc_write10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)) {
-        msc_volume_busy[pdrv] = false;
-        return RES_ERROR;
+    for (int tries = 0; tries < MSC_IO_TRIES; tries++) {
+        if (tries) msc_reset_recovery(dev_addr);
+        if (!tuh_msc_mounted(dev_addr)) return RES_NOTRDY;   // Pulled out
+        msc_volume_busy[pdrv] = true;
+        msc_io_status[pdrv] = 0xFF;
+        const bool started = write ? tuh_msc_write10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0)
+                                   : tuh_msc_read10(dev_addr, lun, buff, sector, (uint16_t)count, disk_io_complete, 0);
+        if (!started) {
+            msc_volume_busy[pdrv] = false;
+            msc_io_errors++;
+            continue;
+        }
+        if (wait_for_disk_io(pdrv)) return RES_OK;
+        msc_io_errors++;
     }
-    return wait_for_disk_io(pdrv) ? RES_OK : RES_ERROR;
+    return RES_ERROR;
+}
+
+DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) { return disk_rw(pdrv, buff, sector, count, false); }
+
+DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
+    return disk_rw(pdrv, (BYTE *)buff, sector, count, true);
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
