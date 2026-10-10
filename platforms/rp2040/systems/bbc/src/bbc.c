@@ -363,6 +363,7 @@ static void boot_disc(void) {
 #define OSD_FONT_SECTION __attribute__((section(".time_critical.osd_font")))
 #define BBC_MENU_FILES 40   // USB_MAX_FILES + the flash images (RAM: the tables above)
 #include "osd/bbc_menu.h"
+#include "osd/bbc_config.h"
 
 static bbc_menu_t menu;
 static osd_surface_t __not_in_flash() osd_surface;
@@ -419,6 +420,82 @@ static void menu_toggle(void) {
     menu_open = true;
 }
 
+/*-- BBC.CFG (src/osd/bbc_config.h) --------------------------------------------*/
+// No buffer of its own (RAM): the file is read into the panel surface, unused while the
+// panel is closed, and rewritten through the captured BBC lines, unused while the panel
+// is open (emulation paused, core 1 draws the panel).
+#define CONFIG_TEXT_MAX 1536
+_Static_assert(sizeof(osd_surface) > CONFIG_TEXT_MAX, "BBC.CFG: read buffer");
+_Static_assert(sizeof(state.bbc.lines) > 2 * CONFIG_TEXT_MAX, "BBC.CFG: rewrite buffers");
+
+static int ascii_lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+
+static bool same_name(const char* a, const char* b) {
+    while (*a && ascii_lower(*a) == ascii_lower(*b)) a++, b++;
+    return !*a && !*b;
+}
+
+// Image of a name of BBC.CFG (USB file, or "@Name" for a flash image), -1 if unknown
+static int config_find_image(const char* name) {
+    if (name[0] == BBC_CONFIG_FLASH) {
+        for (int i = usb_num_files; i < num_images(); i++) {
+            if (same_name(image_name(i), name + 1)) return i;
+        }
+        return -1;
+    }
+    for (int i = 0; i < usb_num_files; i++) {
+        if (same_name(usb_files[i], name)) return i;
+    }
+    return -1;
+}
+
+// Applies BBC.CFG of the USB drive (panel closed); false if there is none
+static bool config_apply(void) {
+    char* text = (char*)&osd_surface;
+    uint32_t n = 0;
+    if (!neo_file_load(NEO_VOL_USB, BBC_CONFIG_FILE, (uint8_t*)text, CONFIG_TEXT_MAX - 1, &n, false)) return false;
+    text[n] = 0;
+    bbc_config_t c;
+    bbc_config_parse(text, &c, HID_VOLUME_MAX);
+    if (c.volume >= 0) audio_set_volume((uint8_t)c.volume, false);
+    if (c.autoboot >= 0) menu.autoboot = c.autoboot;
+    bool boot = false;
+    for (int d = 0; d < 2; d++) {
+        if (!c.drive_set[d]) continue;
+        if (!c.drive[d][0]) {
+            eject_drive(d);
+            continue;
+        }
+        const int i = config_find_image(c.drive[d]);
+        if (i >= 0 && insert_image(d, i)) {
+            boot |= d == 0;
+        } else {
+            printf("BBC.CFG: no image %s\n", c.drive[d]);
+        }
+    }
+    if (boot && menu.autoboot) boot_disc();
+    printf("BBC.CFG applied\n");
+    return true;
+}
+
+static void config_save(void) {
+    char* old = (char*)state.bbc.lines;
+    char* out = old + CONFIG_TEXT_MAX;
+    uint32_t n = 0;
+    if (!neo_file_load(NEO_VOL_USB, BBC_CONFIG_FILE, (uint8_t*)old, CONFIG_TEXT_MAX - 1, &n, false)) n = 0;
+    old[n] = 0;
+    char names[2][BBC_CONFIG_NAME_LEN + 1];
+    for (int d = 0; d < 2; d++) {
+        const int i = drive_image[d];
+        snprintf(names[d], sizeof(names[d]), "%s%.39s", i >= usb_num_files ? "@" : "", i >= 0 ? image_name(i) : "");
+    }
+    const char* drives[2] = {names[0], names[1]};
+    const size_t len = bbc_config_merge(old, drives, menu.autoboot, audio_volume_level(), out, CONFIG_TEXT_MAX);
+    const bool ok = usb_scanned && neo_file_save(NEO_VOL_USB, BBC_CONFIG_FILE, (const uint8_t*)out, (uint32_t)len);
+    memset(state.bbc.lines, 0, sizeof(state.bbc.lines));   // Blank until the emulation captures them again
+    bbc_menu_message(&menu, !ok, ok ? "Configuration enregistrée dans BBC.CFG" : "BBC.CFG : écriture impossible (clé USB ?)");
+}
+
 void hid_raw_key_down(uint8_t keycode);
 void hid_raw_key_up(uint8_t keycode);
 
@@ -453,7 +530,7 @@ static void menu_action(bbc_menu_action_t a) {
             boot_disc();
             return;
         case BBC_ACT_SAVE:
-            bbc_menu_message(&menu, true, "BBC.CFG : pas encore disponible");
+            config_save();
             break;
         case BBC_ACT_RESUME:
             menu_close();
@@ -501,9 +578,10 @@ static void menu_key(uint8_t keycode) {
     if (key >= 0) menu_action(bbc_menu_key(&menu, key));
 }
 
-// Called every frame: once the USB drive is mounted, list its images and insert the first one
+// Called every frame: once the USB drive is mounted, list its images, then apply BBC.CFG
+// or else insert the first one (panel closed: BBC.CFG is read into its surface)
 static void usb_poll(void) {
-    if (usb_scanned || !msc_inquiry_complete) return;
+    if (usb_scanned || !msc_inquiry_complete || menu_open) return;
     usb_scanned = true;
     // Flash images in the drives: same images, new indices after the USB files
     int flash[2];
@@ -512,7 +590,7 @@ static void usb_poll(void) {
     for (int d = 0; d < 2; d++) {
         if (flash[d] >= 0) drive_image[d] = usb_num_files + flash[d];
     }
-    if (usb_num_files > 0) {
+    if (!config_apply() && usb_num_files > 0) {
         insert_image(0, 0);
     }
 }

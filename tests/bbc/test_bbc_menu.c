@@ -1,8 +1,8 @@
 // test_bbc_menu.c
 //
 // Tests of the BBC control panel (src/osd/bbc_menu.h): navigation, disc
-// selector, actions, drawing, and the OSD line shown by each BBC line buffer
-// at 800x480.
+// selector, actions, drawing, the OSD line shown by each BBC line buffer at
+// 800x480, and BBC.CFG (src/osd/bbc_config.h).
 //
 //   bbc_menu_test [preview-dir]   with a directory: also writes PPM previews
 //                                 of the main page and of the selector
@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "osd/bbc_menu.h"
+#include "osd/bbc_config.h"
 
 static int tests_run, tests_failed;
 
@@ -235,6 +236,36 @@ static void test_osd_lines(void) {
     CHECK(bbc_menu_osd_line(0) == 0 && bbc_menu_osd_line(255) == OSD_LINES - 1);
 }
 
+static void test_config(void) {
+    bbc_config_t c;
+    // Absent keys
+    bbc_config_parse("", &c, 8);
+    CHECK(!c.drive_set[0] && !c.drive_set[1] && c.autoboot == -1 && c.volume == -1);
+    // Values, CRLF, comments and unknown keys
+    bbc_config_parse("# mes jeux\r\nlecteur0=ELITE.SSD  \r\nlecteur1=@Battlezone\r\ninsertion=inserer\r\nvolume=5\r\nautre=1\r\n", &c,
+                     8);
+    CHECK(!strcmp(c.drive[0], "ELITE.SSD") && !strcmp(c.drive[1], "@Battlezone"));
+    CHECK(c.drive_set[0] && c.drive_set[1] && c.autoboot == 0 && c.volume == 5);
+    bbc_config_parse("lecteur1=\ninsertion=demarrer\nvolume=12\n", &c, 8);
+    CHECK(!c.drive_set[0] && c.drive_set[1] && c.drive[1][0] == 0 && c.autoboot == 1 && c.volume == -1);
+    bbc_config_parse("insertion=peut-etre\n", &c, 8);
+    CHECK(c.autoboot == -1);
+    // Rewrite: other lines kept, ours replaced, read back the same
+    static char out[512];
+    const char* drives[2] = {"REPTON.SSD", ""};
+    size_t n = bbc_config_merge("# mes jeux\r\nlecteur0=ELITE.SSD\r\nautre=1\r\nvolume=2\r\n", drives, true, 7, out, sizeof(out));
+    CHECK(n == strlen(out));
+    CHECK(!strcmp(out, "# mes jeux\nautre=1\nlecteur0=REPTON.SSD\nlecteur1=\ninsertion=demarrer\nvolume=7\n"));
+    bbc_config_parse(out, &c, 8);
+    CHECK(!strcmp(c.drive[0], "REPTON.SSD") && c.drive_set[1] && !c.drive[1][0] && c.autoboot == 1 && c.volume == 7);
+    // New file: a header comment
+    n = bbc_config_merge(NULL, drives, false, 8, out, sizeof(out));
+    CHECK(out[0] == '#' && strstr(out, "insertion=inserer\n") && strstr(out, "volume=8\n"));
+    // Small buffer: truncated, still terminated
+    n = bbc_config_merge(NULL, drives, false, 8, out, 16);
+    CHECK(n == 15 && out[15] == 0);
+}
+
 int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : NULL;
     test_main_page(dir);
@@ -242,6 +273,7 @@ int main(int argc, char** argv) {
     test_selector(dir);
     test_empty();
     test_osd_lines();
+    test_config();
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
 }
