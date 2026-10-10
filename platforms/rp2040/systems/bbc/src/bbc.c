@@ -10,9 +10,10 @@
 // flash (src/images/bbc_images.h, read-only);
 // F11 = disc menu (USB files first, then flash images); Pause = Neo6502 firmware.
 // Core 1: DVI 800x480 (or 960x544) @ 60 Hz, BBC 640x256 centred, lines
-//         doubled by PicoDVI: 800x480 at 345 MHz (default, stretched blanking)
-//         or 295.2 MHz (-DBBC_VIDEO_480) crops 8 lines top and bottom;
-//         960x544 at 372 MHz (-DBBC_VIDEO_544) shows the 256 lines.
+//         doubled by PicoDVI: 800x480 at 345 MHz (default,
+//         stretched blanking) or 295.2 MHz (-DBBC_VIDEO_480) shows the last
+//         line of each 8-line row once, so that the 256 lines fit;
+//         960x544 at 372 MHz (-DBBC_VIDEO_544) doubles all of them.
 //         Each line is split into 3 bit planes and encoded by the 1 bpp TMDS
 //         encoder (the BBC colours are 0x00/0xFF per channel).
 //
@@ -450,13 +451,12 @@ void app_init(void) {
 }
 
 #if defined(BBC_VIDEO_480)
-// TMDS bit clock 295.2 MHz, DVDD 1.2V (Neo6502 timing shared with the Oric build):
-// 240 of the 256 BBC lines fit, 8 are cropped at the top and at the bottom
+// TMDS bit clock 295.2 MHz, DVDD 1.2V (Neo6502 timing shared with the Oric build)
 #define FRAME_WIDTH  800
 #define FRAME_HEIGHT 480
 #define VREG_VSEL    VREG_VOLTAGE_1_20
 #define DVI_TIMING   dvi_timing_800x480p_60hz
-#define BBC_DISPLAY_TOP 8
+#define BBC_DISPLAY_TOP 0
 #elif defined(BBC_VIDEO_544)
 // TMDS bit clock (and system clock) 372 MHz, DVDD 1.3V (reload-emulator's
 // setting for the other RP2040 boards): the 256 BBC lines fit (8 blank lines
@@ -474,7 +474,7 @@ void app_init(void) {
 #define FRAME_HEIGHT 480
 #define VREG_VSEL    VREG_VOLTAGE_1_30
 #define DVI_TIMING   dvi_timing_800x480p_60hz_372
-#define BBC_DISPLAY_TOP 8
+#define BBC_DISPLAY_TOP 0
 #else
 // Default: the 800x480 mode of the Neo6502 builds (same line and frame rates,
 // same 800 active pixels and 480 lines) at 345 MHz instead of 295.2, the
@@ -486,11 +486,17 @@ void app_init(void) {
 #define FRAME_HEIGHT 480
 #define VREG_VSEL    VREG_VOLTAGE_1_25
 #define DVI_TIMING   dvi_timing_800x480p_60hz_345
-#define BBC_DISPLAY_TOP 8
+#define BBC_DISPLAY_TOP 0
 #endif
-// First BBC line shown (lines BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP + FRAME_HEIGHT / 2 - 1,
-// one TMDS buffer each: PicoDVI shows every buffer on two output lines, DVI_VERTICAL_REPEAT = 2)
+// BBC lines shown: BBC_DISPLAY_TOP .. BBC_DISPLAY_TOP + BBC_DISPLAY_LINES - 1, one TMDS buffer
+// each, shown by PicoDVI on two output lines, except at 800x480 where 256 lines need 512
+// output lines: the last line of every 8-line character row is shown once (dvi/dvi_line_repeat.h)
+#if FRAME_HEIGHT >= 2 * BBC_SCREEN_HEIGHT
 #define BBC_DISPLAY_LINES (FRAME_HEIGHT / 2)
+#else
+#define BBC_DISPLAY_LINES BBC_SCREEN_HEIGHT
+_Static_assert(2 * BBC_SCREEN_HEIGHT - BBC_SCREEN_HEIGHT / 8 == FRAME_HEIGHT, "800x480: 256 BBC lines in 480 output lines");
+#endif
 #define BBC_EMPTY_COLUMNS ((FRAME_WIDTH - BBC_SCREEN_WIDTH) / 2)
 
 // The 8 BBC colours only use 0x00/0xFF per channel: each TMDS lane is a 1 bpp
@@ -751,9 +757,9 @@ static void __not_in_flash_func(diag_draw)(int row) {
 // Line renderer state of core 1 (byte -> pixels table of the last palette)
 static bbc_lut_t __not_in_flash() core1_lut;
 
-// One TMDS buffer per BBC line: PicoDVI shows each buffer on two output lines
-// (DVI_VERTICAL_REPEAT = 2), so a line must be ready every two output lines
-// (2 x 29.7 us at 960x544, 2 x 31.7 us at 800x480)
+// One TMDS buffer per BBC line, shown on two output lines (one for the last line of a
+// character row at 800x480): a line must be ready every two output lines (2 x 29.7 us at
+// 960x544, 2 x 33.6 us at 800x480), the queued buffers absorbing the shorter ones
 static inline void __not_in_flash_func(render_frame)() {
     for (int y = 0; y < BBC_DISPLAY_LINES; y++) {
         int src_line = BBC_DISPLAY_TOP + y;

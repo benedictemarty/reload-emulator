@@ -12,10 +12,12 @@ target_compile_definitions(bbc PRIVATE
     NEO_FATFS_FILES=2       # neo_storage: one disc image open at a time (the default 6 costs ~2.7 KB)
     PICO_MEM_IN_RAM=1       # memset/memcpy of the SDK in RAM: bbc_render_line (core 1) calls them per line
     PICO_DIVIDER_IN_RAM=1   # same for the divisions (tools/core1_flash.py): no wait for the flash on core 1
-    PICO_HEAP_SIZE=0x5800   # dvi_init: 3 TMDS buffers + newlib malloc rounding (~21.8 KB measured); link fails if RAM runs short
+    PICO_HEAP_SIZE=0x6C00   # dvi_init: 4 TMDS buffers + newlib malloc rounding (~21.8 KB measured with 3, +4.8 KB per buffer); link fails if RAM runs short
+	DVI_N_TMDS_BUFFERS=4    # one more than PicoDVI: core 1 gets ahead before the lines shown once (dvi/dvi_line_repeat.h)
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 )
 
+target_include_directories(bbc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dvi)   # dvi_line_repeat.h (PicoDVI)
 target_link_libraries(bbc
 	pico_stdlib
 	pico_multicore
@@ -47,10 +49,12 @@ target_compile_definitions(bbc_diag PRIVATE
     NEO_FATFS_FILES=2       # neo_storage: one disc image open at a time (the default 6 costs ~2.7 KB)
     PICO_MEM_IN_RAM=1       # memset/memcpy of the SDK in RAM: bbc_render_line (core 1) calls them per line
     PICO_DIVIDER_IN_RAM=1   # same for the divisions (tools/core1_flash.py): no wait for the flash on core 1
-    PICO_HEAP_SIZE=0x5800   # dvi_init: 3 TMDS buffers + newlib malloc rounding (~21.8 KB measured); link fails if RAM runs short
+    PICO_HEAP_SIZE=0x6C00   # dvi_init: 4 TMDS buffers + newlib malloc rounding (~21.8 KB measured with 3, +4.8 KB per buffer); link fails if RAM runs short
+	DVI_N_TMDS_BUFFERS=4    # one more than PicoDVI: core 1 gets ahead before the lines shown once (dvi/dvi_line_repeat.h)
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 	BBC_DIAG=1
 )
+target_include_directories(bbc_diag PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dvi)   # dvi_line_repeat.h (PicoDVI)
 target_link_libraries(bbc_diag pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs hardware_pio)
 pico_generate_pio_header(bbc_diag ${CMAKE_CURRENT_SOURCE_DIR}/../../src/chips/bus6502.pio)
 pico_add_extra_outputs(bbc_diag)
@@ -71,11 +75,13 @@ target_compile_definitions(bbc_master PRIVATE
     NEO_FATFS_FILES=2       # neo_storage: one disc image open at a time (the default 6 costs ~2.7 KB)
     PICO_MEM_IN_RAM=1       # memset/memcpy of the SDK in RAM: bbc_render_line (core 1) calls them per line
     PICO_DIVIDER_IN_RAM=1   # same for the divisions (tools/core1_flash.py): no wait for the flash on core 1
-    PICO_HEAP_SIZE=0x5800   # dvi_init: 3 TMDS buffers + newlib malloc rounding (~21.8 KB measured); link fails if RAM runs short
+    PICO_HEAP_SIZE=0x6C00   # dvi_init: 4 TMDS buffers + newlib malloc rounding (~21.8 KB measured with 3, +4.8 KB per buffer); link fails if RAM runs short
+	DVI_N_TMDS_BUFFERS=4    # one more than PicoDVI: core 1 gets ahead before the lines shown once (dvi/dvi_line_repeat.h)
 	DVI_DEFAULT_SERIAL_CONFIG=olimex_neo6502_cfg
 	BBC_MASTER=1
 	BBC_ROMS_IN_FLASH=1
 )
+target_include_directories(bbc_master PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dvi)   # dvi_line_repeat.h (PicoDVI)
 target_link_libraries(bbc_master pico_stdlib pico_multicore pico_util libdvi tinyusb_host fatfs hardware_pio)
 pico_generate_pio_header(bbc_master ${CMAKE_CURRENT_SOURCE_DIR}/../../src/chips/bus6502.pio)
 pico_add_extra_outputs(bbc_master)

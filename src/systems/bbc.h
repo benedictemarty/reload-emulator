@@ -71,6 +71,7 @@ extern "C" {
 
 #define BBC_SCREEN_WIDTH      640
 #define BBC_SCREEN_HEIGHT     256
+#define BBC_VSYNC_TO_DISPLAY  32    // Lines from the start of the vsync to the first displayed row (MOS modes)
 #define BBC_FRAMEBUFFER_SIZE  ((BBC_SCREEN_WIDTH / 2) * BBC_SCREEN_HEIGHT)  // 4 bits per pixel
 
 #define BBC_PALETTE_BITS 3
@@ -251,7 +252,8 @@ typedef struct {
     uint16_t ma_row_start;     // Memory address at the start of the current character row
     uint8_t vsync_count;       // Remaining vsync scanlines (0 = no vsync)
     bool field;                // Interlace field (odd/even)
-    int display_y;             // Output scanline (0 = first displayed row)
+    int display_y;             // Output scanline (0 = first displayed row), counted from the vsync like a monitor
+    bool vsync_seen;           // A vsync started during the current CRTC frame
     bool frame_done;           // Set at the end of each vsync
     uint32_t field_count;      // Fields since power-up (teletext flash: 48 on / 16 off)
 
@@ -1163,7 +1165,9 @@ static BBC_HOT void _bbc_crtc_new_frame(bbc_t* sys) {
     sys->in_adjust = false;
     sys->ma_row_start = (uint16_t)(((sys->crtc_reg[CRTC_R12_START_H] << 8) | sys->crtc_reg[CRTC_R13_START_L]) & 0x3FFF);
     sys->ma = sys->ma_row_start;
-    sys->display_y = 0;
+    // Without a vsync (R7 beyond R4), the output restarts with the CRTC frame
+    if (!sys->vsync_seen) sys->display_y = 0;
+    sys->vsync_seen = false;
 }
 
 static BBC_HOT void _bbc_crtc_tick(bbc_t* sys) {
@@ -1222,6 +1226,10 @@ static BBC_HOT void _bbc_crtc_tick(bbc_t* sys) {
                 uint8_t width = (r[CRTC_R3_SYNC_WIDTH] >> 4) & 0x0F;
                 sys->vsync_count = width ? width : 16;
                 sys->vsync = true;
+                // The monitor places the picture relative to the vsync: with the standard
+                // MOS modes (MODE 0-6: R7 = 35 of 39 rows of 8 lines) the first row comes 32 lines later
+                sys->display_y = -BBC_VSYNC_TO_DISPLAY;
+                sys->vsync_seen = true;
             }
             if (sys->vcc > r[CRTC_R4_VTOTAL]) {
                 if (r[CRTC_R5_VADJUST]) {

@@ -46,6 +46,13 @@ execute_process(COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/patches/picodvi-dbg-tcr.s
 if (NOT picodvi_patch_rc EQUAL 0)
 	message(FATAL_ERROR "PicoDVI : échec de patches/picodvi-dbg-tcr.sh")
 endif()
+# PicoDVI : nombre de lignes de sortie par tampon choisi par l'application (dvi_line_repeat.h),
+# sans effet pour les machines qui n'en fournissent pas (patches/picodvi-line-repeat.sh, idempotent)
+execute_process(COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/patches/picodvi-line-repeat.sh ${CMAKE_CURRENT_SOURCE_DIR}/lib/PicoDVI
+                RESULT_VARIABLE picodvi_repeat_rc)
+if (NOT picodvi_repeat_rc EQUAL 0)
+	message(FATAL_ERROR "PicoDVI : échec de patches/picodvi-line-repeat.sh")
+endif()
 # TinyUSB (sous-module) : erreur de séquence de données de l'hôte RP2040 sans panic(),
 # reprise Bulk-Only de la clé (patches/tinyusb-data-seq.sh, idempotent)
 execute_process(COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/patches/tinyusb-data-seq.sh ${CMAKE_CURRENT_SOURCE_DIR}/lib/tinyusb
