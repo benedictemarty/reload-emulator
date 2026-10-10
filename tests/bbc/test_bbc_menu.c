@@ -115,7 +115,7 @@ static void test_main_page(const char* dir) {
     CHECK(screen_contains("Disques"));
     CHECK(screen_contains("Spellbinder"));
     CHECK(screen_contains("3 images .ssd / .dsd"));
-    CHECK(screen_contains("2 images int"));   // Cells are Latin-1: compare the ASCII part
+    CHECK(screen_contains("2 images en flash"));
     CHECK(screen_contains("Reprendre"));
     CHECK(screen_contains("F11 : ce menu"));
     // The cursor starts on Reprendre: Entrée and Échap resume
@@ -139,6 +139,7 @@ static void test_navigation(void) {
     CHECK(menu.cursor == BBC_ITEM_DRIVE0);
     bbc_menu_key(&menu, OSD_KEY_UP);
     CHECK(menu.cursor == BBC_ITEM_RESUME);   // Wraps round
+    bbc_menu_key(&menu, OSD_KEY_DOWN);
     bbc_menu_key(&menu, OSD_KEY_DOWN);
     bbc_menu_key(&menu, OSD_KEY_DOWN);
     bbc_menu_key(&menu, OSD_KEY_DOWN);
@@ -202,6 +203,38 @@ static void test_selector(const char* dir) {
     bbc_menu_key(&menu, OSD_KEY_HOME);
     a = bbc_menu_key(&menu, OSD_KEY_ENTER);
     CHECK(a.type == BBC_ACT_EJECT && a.target == 0);
+}
+
+static void test_states(const char* dir) {
+    setup();
+    static const char* const names[3] = {"BBC0001.STA", "BBC0002.STA", "BBC0003.STA"};
+    for (int i = 0; i < 3; i++) menu.states[menu.nstates++] = names[i];
+    bbc_menu_key(&menu, OSD_KEY_HOME);
+    bbc_menu_key(&menu, OSD_KEY_DOWN);
+    bbc_menu_key(&menu, OSD_KEY_DOWN);
+    CHECK(menu.cursor == BBC_ITEM_STATE);
+    bbc_menu_draw(&menu, &surf);
+    write_ppm(dir, "bbc_menu_states_main.ppm");
+    CHECK(screen_contains("3 sur la cl"));
+    bbc_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(menu.page == BBC_PAGE_BROWSE && menu.browse.cursor == 0);
+    bbc_menu_draw(&menu, &surf);
+    write_ppm(dir, "bbc_menu_states.ppm");
+    CHECK(screen_contains("Nouvel instantan"));
+    CHECK(screen_contains("BBC0002.STA"));
+    // « Nouvel instantané »: save
+    bbc_menu_action_t a = bbc_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(a.type == BBC_ACT_STATE_SAVE && menu.page == BBC_PAGE_MAIN);
+    // A file: load
+    bbc_menu_key(&menu, OSD_KEY_ENTER);
+    bbc_menu_key(&menu, OSD_KEY_DOWN);
+    bbc_menu_key(&menu, OSD_KEY_DOWN);
+    a = bbc_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(a.type == BBC_ACT_STATE_LOAD && a.file == 1);
+    // Without a USB drive: refused with a message
+    menu.usb_present = false;
+    a = bbc_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(a.type == BBC_ACT_NONE && menu.page == BBC_PAGE_MAIN && menu.message_error);
 }
 
 static void test_empty(void) {
@@ -271,6 +304,7 @@ int main(int argc, char** argv) {
     test_main_page(dir);
     test_navigation();
     test_selector(dir);
+    test_states(dir);
     test_empty();
     test_osd_lines();
     test_config();

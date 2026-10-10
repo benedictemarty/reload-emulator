@@ -4,7 +4,8 @@
 // Telestrat (projet Neo6502TeleStrat) et du panneau de l'Oric (oric_menu.h)
 //
 // Page principale : lecteurs 0 et 1 (image, origine clé USB ou flash, écriture),
-// clé USB, images en flash, démarrage à l'insertion (SHIFT+BREAK), volume,
+// clé USB et images en flash, instantanés (enregistrer, reprendre : fichiers .STA de
+// la clé), démarrage à l'insertion (SHIFT+BREAK), volume,
 // boutons BREAK / Démarrer le disque / Enregistrer la configuration / Reprendre.
 // Entrée sur un lecteur : sélecteur des images (clé USB puis flash) avec
 // défilement et saut à l'initiale tapée ; Suppr éjecte. La plate-forme remplit
@@ -45,6 +46,9 @@
 #endif
 #define BBC_MENU_NAME_LEN 40
 #define BBC_MENU_DRIVES   2
+#ifndef BBC_MENU_STATES
+#define BBC_MENU_STATES 32   // Instantanés listés
+#endif
 
 // Origine d'une image
 enum { BBC_SRC_USB = 0, BBC_SRC_FLASH = 1 };
@@ -61,6 +65,8 @@ enum {
     BBC_ACT_RESUME,
     BBC_ACT_VOLUME,     // volume et muted du menu modifiés
     BBC_ACT_AUTOBOOT,   // autoboot du menu modifié
+    BBC_ACT_STATE_SAVE,   // Nouvel instantané sur la clé
+    BBC_ACT_STATE_LOAD,   // file = index dans states[]
 };
 
 typedef struct {
@@ -77,13 +83,14 @@ typedef struct {
 
 // Éléments de la page principale
 #define BBC_ITEM_DRIVE0   0   // 0-1 : lecteurs 0 et 1
-#define BBC_ITEM_AUTOBOOT 2
-#define BBC_ITEM_VOLUME   3
-#define BBC_ITEM_BREAK    4
-#define BBC_ITEM_BOOT     5
-#define BBC_ITEM_SAVE     6
-#define BBC_ITEM_RESUME   7
-#define BBC_ITEMS         8
+#define BBC_ITEM_STATE    2
+#define BBC_ITEM_AUTOBOOT 3
+#define BBC_ITEM_VOLUME   4
+#define BBC_ITEM_BREAK    5
+#define BBC_ITEM_BOOT     6
+#define BBC_ITEM_SAVE     7
+#define BBC_ITEM_RESUME   8
+#define BBC_ITEMS         9
 
 typedef struct {
     // --- Rempli par la plate-forme ---
@@ -94,6 +101,8 @@ typedef struct {
     char usb_label[BBC_MENU_NAME_LEN];
     bbc_menu_file_t files[BBC_MENU_FILES];
     int nfiles;
+    const char* states[BBC_MENU_STATES];   // Instantanés de la clé (noms gardés par la plate-forme)
+    int nstates;
     bool autoboot;   // Insertion dans le lecteur 0 : SHIFT+BREAK
     int volume;      // 0 à HID_VOLUME_MAX
     bool muted;
@@ -104,8 +113,8 @@ typedef struct {
     // --- Navigation ---
     int page;
     int cursor;
-    int browse_target;   // Lecteur qui a ouvert le sélecteur
-    osd_browser_t browse;   // Ligne 0 = « éjecter », puis la liste
+    int browse_target;   // Lecteur (0-1) ou BBC_ITEM_STATE qui a ouvert le sélecteur
+    osd_browser_t browse;   // Ligne 0 = « éjecter » (ou « nouvel instantané »), puis la liste
 } bbc_menu_t;
 
 static inline void bbc_menu_init(bbc_menu_t* m) {
@@ -137,10 +146,16 @@ static inline void _bbc_open_browser(bbc_menu_t* m, int drive) {
     m->page = BBC_PAGE_BROWSE;
 }
 
+static inline void _bbc_open_states(bbc_menu_t* m) {
+    m->browse_target = BBC_ITEM_STATE;
+    osd_browser_open(&m->browse, m->nstates, 1, 0, BBC_BROWSE_VISIBLE);
+    m->page = BBC_PAGE_BROWSE;
+}
+
 // Nom d'une entrée du sélecteur (saut à une lettre)
 static inline const char* _bbc_browse_name(void* user, int k) {
     const bbc_menu_t* m = (const bbc_menu_t*)user;
-    return m->files[k].name;
+    return m->browse_target == BBC_ITEM_STATE ? m->states[k] : m->files[k].name;
 }
 
 static inline bbc_menu_action_t bbc_menu_key(bbc_menu_t* m, int key) {
@@ -151,6 +166,11 @@ static inline bbc_menu_action_t bbc_menu_key(bbc_menu_t* m, int key) {
         if (r != OSD_BROWSER_PICK) return a;
         const int entry = osd_browser_entry(&m->browse);
         m->page = BBC_PAGE_MAIN;
+        if (m->browse_target == BBC_ITEM_STATE) {
+            a.type = entry < 0 ? BBC_ACT_STATE_SAVE : BBC_ACT_STATE_LOAD;
+            a.file = entry;
+            return a;
+        }
         a.target = m->browse_target;
         if (entry < 0) {
             if (m->drive[a.target][0]) a.type = BBC_ACT_EJECT;
@@ -203,6 +223,9 @@ static inline bbc_menu_action_t bbc_menu_key(bbc_menu_t* m, int key) {
         case OSD_KEY_ENTER:
             if (c < BBC_MENU_DRIVES) {
                 _bbc_open_browser(m, c);
+            } else if (c == BBC_ITEM_STATE) {
+                if (m->usb_present) _bbc_open_states(m);
+                else bbc_menu_message(m, true, "Instantanés : pas de clé USB");
             } else if (c == BBC_ITEM_AUTOBOOT) {
                 m->autoboot = !m->autoboot;
                 a.type = BBC_ACT_AUTOBOOT;
@@ -266,7 +289,7 @@ static inline void bbc_menu_draw(const bbc_menu_t* m, osd_surface_t* s) {
         if (m->files[i].src == BBC_SRC_FLASH) nflash++;
         else nusb++;
     }
-    osd_panel_box(s, R + 5, C + 51, 4, 47, OSD_USB_L, "Clé USB");
+    osd_panel_box(s, R + 5, C + 51, 5, 47, OSD_USB_L, "Clé USB et flash");
     if (m->usb_present) {
         osd_puts(s, R + 6, C + 54, m->usb_label[0] ? m->usb_label : "Clé montée", OSD_PANEL, 42);
         snprintf(buf, sizeof(buf), "%d image%s .ssd / .dsd", nusb, nusb > 1 ? "s" : "");
@@ -275,9 +298,18 @@ static inline void bbc_menu_draw(const bbc_menu_t* m, osd_surface_t* s) {
         osd_puts(s, R + 6, C + 54, "Aucune clé", OSD_PANEL, -1);
         osd_puts(s, R + 7, C + 54, "Clé FAT : .ssd et .dsd à la racine", OSD_PANEL_DIM, -1);
     }
-    osd_panel_box(s, R + 10, C + 51, 3, 47, OSD_CART_L, "Images en flash");
-    snprintf(buf, sizeof(buf), "%d image%s intégrée%s au firmware", nflash, nflash > 1 ? "s" : "", nflash > 1 ? "s" : "");
-    osd_puts(s, R + 11, C + 54, nflash ? buf : "aucune", OSD_PANEL_DIM, -1);
+    snprintf(buf, sizeof(buf), "%d image%s en flash (firmware)", nflash, nflash > 1 ? "s" : "");
+    osd_puts(s, R + 8, C + 54, buf, OSD_PANEL_DIM, -1);
+
+    // Instantanés
+    osd_panel_box(s, R + 10, C + 51, 3, 47, OSD_CART_L, "Instantanés");
+    {
+        const bool sel = main_page && m->cursor == BBC_ITEM_STATE;
+        osd_panel_item_bar(s, R + 11, C + 52, 45, sel);
+        osd_puts(s, R + 11, C + 54, "Enregistrer, reprendre", osd_panel_acc(sel), -1);
+        snprintf(buf, sizeof(buf), "%d sur la clé", m->nstates);
+        osd_puts(s, R + 11, C + 78, m->usb_present ? buf : "pas de clé", osd_panel_dim(sel), -1);
+    }
 
     // Démarrage
     osd_panel_box(s, R + 13, C + 2, 3, 96, 0, "Démarrage");
@@ -325,7 +357,7 @@ static inline void bbc_menu_draw(const bbc_menu_t* m, osd_surface_t* s) {
     // Pied : aide des touches
     const char* const help_main[4][2] = {{" Flèches ", "choisir"}, {" Entrée ", "ouvrir, valider"}, {" Suppr ", "éjecter"},
                                          {" Échap ", "reprendre"}};
-    const char* const help_browse[4][2] = {{" Flèches ", "choisir"}, {" Entrée ", "insérer"}, {" Lettre ", "aller à"},
+    const char* const help_browse[4][2] = {{" Flèches ", "choisir"}, {" Entrée ", "valider"}, {" Lettre ", "aller à"},
                                            {" Échap ", "retour"}};
     osd_panel_footer(s, R + 28, C + 2, main_page ? help_main : help_browse, 4, C + 85, "F11 : ce menu");
 
@@ -333,11 +365,27 @@ static inline void bbc_menu_draw(const bbc_menu_t* m, osd_surface_t* s) {
 
     // Sélecteur, par-dessus
     const int drive = m->browse_target;
-    snprintf(buf, sizeof(buf), "Disque pour le lecteur %d", drive);
     const int first = m->browse.first;
     const int top = R + 5, left = C + 12, width = 76, height = BBC_BROWSE_VISIBLE + 4;
-    osd_panel_popup(s, top, left, height, width, OSD_FLOP_L, buf);
     const int n = osd_browser_rows(&m->browse);
+    if (drive == BBC_ITEM_STATE) {
+        osd_panel_popup(s, top, left, height, width, OSD_CART_L, "Instantanés (la machine entière, sans les disques)");
+        for (int k = 0; k < BBC_BROWSE_VISIBLE && m->browse.scroll + k < n; k++) {
+            const int idx = m->browse.scroll + k, row = top + 2 + k;
+            uint8_t base, dim;
+            osd_panel_popup_row(s, row, left, width, idx == m->browse.cursor, &base, &dim);
+            if (idx < first) {
+                osd_puts(s, row, left + 4, "Nouvel instantané (enregistrer)", base, -1);
+                continue;
+            }
+            osd_puts(s, row, left + 4, m->states[idx - first], base, 40);
+            osd_puts(s, row, left + 46, "reprendre", dim, -1);
+        }
+        osd_browser_scrollbar(s, &m->browse, top + 2, left + width - 2);
+        return;
+    }
+    snprintf(buf, sizeof(buf), "Disque pour le lecteur %d", drive);
+    osd_panel_popup(s, top, left, height, width, OSD_FLOP_L, buf);
     for (int k = 0; k < BBC_BROWSE_VISIBLE && m->browse.scroll + k < n; k++) {
         const int idx = m->browse.scroll + k, row = top + 2 + k;
         const bool sel = idx == m->browse.cursor;

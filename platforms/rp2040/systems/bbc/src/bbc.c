@@ -9,7 +9,7 @@
 // demand through FatFs, writes go back to the file) or images compiled in
 // flash (src/images/bbc_images.h, read-only);
 // F11 = control panel (drives 0 and 1: USB files, then flash images; BREAK,
-// SHIFT+BREAK, volume; src/osd/bbc_menu.h); Pause = Neo6502 firmware.
+// SHIFT+BREAK, volume, snapshots BBCnnnn.STA; src/osd/bbc_menu.h); Pause = Neo6502 firmware.
 // Core 1: DVI 800x480 (or 960x544) @ 60 Hz, BBC 640x256 centred, lines
 //         doubled by PicoDVI: 800x480 at 345 MHz (default,
 //         stretched blanking) or 295.2 MHz (-DBBC_VIDEO_480) shows the last
@@ -121,6 +121,7 @@ volatile uint32_t prof_cycles[8], prof_calls[8];
 #endif
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
+#include "systems/bbc_state.h"
 
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
@@ -362,6 +363,7 @@ static void boot_disc(void) {
 // Font in RAM: in flash, core 1 waited for it while core 0 redrew the panel (red lines)
 #define OSD_FONT_SECTION __attribute__((section(".time_critical.osd_font")))
 #define BBC_MENU_FILES 40   // USB_MAX_FILES + the flash images (RAM: the tables above)
+#define BBC_MENU_STATES 16  // Snapshots listed by the panel
 #include "osd/bbc_menu.h"
 #include "osd/bbc_config.h"
 
@@ -369,6 +371,8 @@ static bbc_menu_t menu;
 static osd_surface_t __not_in_flash() osd_surface;
 static volatile uint32_t core1_frames;   // Frames drawn by core 1
 static volatile bool menu_open;
+
+static void state_scan(bool names);
 
 // State of the machine -> menu
 static void menu_fill(void) {
@@ -415,6 +419,7 @@ static void menu_toggle(void) {
     }
     menu.page = BBC_PAGE_MAIN;
     menu.message[0] = 0;
+    state_scan(false);   // Count of the main page (the names: when the selector opens)
     menu_fill();
     menu_refresh();
     menu_open = true;
@@ -496,6 +501,120 @@ static void config_save(void) {
     bbc_menu_message(&menu, !ok, ok ? "Configuration enregistrée dans BBC.CFG" : "BBC.CFG : écriture impossible (clé USB ?)");
 }
 
+/*-- Snapshots BBCnnnn.STA (systems/bbc_state.h) ------------------------------*/
+// Taken and resumed from the panel (emulation paused). The names of the selector live in
+// the captured BBC lines, unused while the panel is open, after the BBC.CFG buffers.
+#define STATE_NAMES_OFFSET 4096
+_Static_assert(sizeof(state.bbc.lines) >= STATE_NAMES_OFFSET + BBC_MENU_STATES * 13, "snapshot names");
+static int state_count, state_last;   // Snapshots on the drive, highest number
+static bool state_keep_names;
+
+static char (*state_names(void))[13] { return (char (*)[13])((uint8_t*)state.bbc.lines + STATE_NAMES_OFFSET); }
+
+static bool state_scan_entry(const neo_dirent_t* e, void* user) {
+    (void)user;
+    const char* n = e->name;
+    if (e->dir || strlen(n) != 11 || ascii_lower(n[0]) != 'b' || ascii_lower(n[1]) != 'b' || ascii_lower(n[2]) != 'c' ||
+        !has_ext(n, ".sta")) {
+        return true;
+    }
+    int num = 0;
+    for (int i = 3; i < 7; i++) {
+        if (n[i] < '0' || n[i] > '9') return true;
+        num = num * 10 + (n[i] - '0');
+    }
+    if (num > state_last) state_last = num;
+    if (state_count < BBC_MENU_STATES) {
+        if (state_keep_names) {
+            strcpy(state_names()[state_count], n);
+            menu.states[state_count] = state_names()[state_count];
+        }
+        state_count++;
+    }
+    return true;
+}
+
+// Snapshots of the USB drive: count (and names, only while the panel is open)
+static void state_scan(bool names) {
+    state_count = state_last = 0;
+    state_keep_names = names;
+    if (usb_scanned) neo_storage_list(NEO_VOL_USB, "/", state_scan_entry, 0);
+    menu.nstates = state_count;
+}
+
+typedef struct {
+    neo_file_t f;
+    uint32_t offset;
+} state_io_t;
+static state_io_t state_io;   // File of the snapshot being written or read
+
+static bool state_write(void* ctx, const void* data, uint32_t len) {
+    state_io_t* io = (state_io_t*)ctx;
+    const bool ok = neo_file_write(&io->f, io->offset, (const uint8_t*)data, len);
+    io->offset += len;
+    return ok;
+}
+
+static bool state_read(void* ctx, void* data, uint32_t len) {
+    state_io_t* io = (state_io_t*)ctx;
+    const bool ok = neo_file_read(&io->f, io->offset, (uint8_t*)data, len);
+    io->offset += len;
+    return ok;
+}
+
+static void state_save(void) {
+    char name[16], msg[96];
+    state_scan(false);
+    snprintf(name, sizeof(name), "BBC%04d.STA", (state_last + 1) % 10000);
+    state_io_t* const iop = &state_io;
+    memset(iop, 0, sizeof(*iop));
+    if (!neo_file_open_path(&iop->f, name, NEO_WRITE | NEO_CREATE)) {
+        bbc_menu_message(&menu, true, "Instantané : écriture impossible (clé USB ?)");
+        return;
+    }
+    const bool ok = bbc_state_save(&state.bbc, state_write, iop);
+    neo_file_close(&iop->f);
+    if (!ok) {
+        neo_file_remove(NEO_VOL_USB, name);   // No half-written snapshot
+        bbc_menu_message(&menu, true, state.bbc.fdc.state != WD1770_IDLE ? "Instantané refusé : accès disque en cours"
+                                                                         : "Instantané : échec de l'écriture");
+    } else {
+        snprintf(msg, sizeof(msg), "Instantané %s enregistré (%u Ko)", name, (unsigned)(iop->offset + 1023) / 1024);
+        bbc_menu_message(&menu, false, msg);
+    }
+    memset(state.bbc.lines, 0, sizeof(state.bbc.lines));   // Lines captured during the capture
+    state_scan(false);
+}
+
+// Resumes snapshot `index` of the selector; true: the panel can close
+static bool state_load(int index) {
+    char name[16];
+    snprintf(name, sizeof(name), "%s", menu.states[index]);
+    state_io_t* const iop = &state_io;
+    memset(iop, 0, sizeof(*iop));
+    if (!neo_file_open_path(&iop->f, name, NEO_READ)) {
+        bbc_menu_message(&menu, true, "Instantané : lecture impossible");
+        return false;
+    }
+    const bool header = bbc_state_check(state_read, iop);
+    iop->offset = 0;
+    const bool ok = header && bbc_state_load(&state.bbc, state_read, iop);
+    neo_file_close(&iop->f);
+    memset(state.bbc.lines, 0, sizeof(state.bbc.lines));
+    if (!header) {
+        bbc_menu_message(&menu, true, "Pas un instantané de ce BBC (version ou modèle)");
+        return false;
+    }
+    if (!ok) {
+        // Part of the machine already replaced: start again
+        bbc_reset(&state.bbc);
+        bbc_menu_message(&menu, true, "Instantané illisible : machine redémarrée");
+        return false;
+    }
+    printf("Snapshot %s resumed\n", name);
+    return true;
+}
+
 void hid_raw_key_down(uint8_t keycode);
 void hid_raw_key_up(uint8_t keycode);
 
@@ -538,6 +657,15 @@ static void menu_action(bbc_menu_action_t a) {
         case BBC_ACT_VOLUME:
             audio_set_volume((uint8_t)menu.volume, menu.muted);
             break;
+        case BBC_ACT_STATE_SAVE:
+            state_save();
+            break;
+        case BBC_ACT_STATE_LOAD:
+            if (state_load(a.file)) {
+                menu_close();
+                return;
+            }
+            break;
         default:
             break;
     }
@@ -575,7 +703,10 @@ static void menu_key(uint8_t keycode) {
         return;
     }
     const int key = osd_key_from_hid(menu_key_code(keycode));
-    if (key >= 0) menu_action(bbc_menu_key(&menu, key));
+    if (key < 0) return;
+    // Snapshot selector about to open: its names (in the captured lines, unused now)
+    if (key == OSD_KEY_ENTER && menu.page == BBC_PAGE_MAIN && menu.cursor == BBC_ITEM_STATE) state_scan(true);
+    menu_action(bbc_menu_key(&menu, key));
 }
 
 // Called every frame: once the USB drive is mounted, list its images, then apply BBC.CFG
