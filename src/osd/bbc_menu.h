@@ -70,7 +70,7 @@ typedef struct {
 } bbc_menu_action_t;
 
 typedef struct {
-    char name[BBC_MENU_NAME_LEN];
+    const char* name;   // Kept by the platform (no copy: RAM of the RP2040)
     uint32_t size;
     uint8_t src;   // BBC_SRC_*
 } bbc_menu_file_t;

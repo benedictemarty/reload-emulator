@@ -64,7 +64,7 @@ static bool screen_contains(const char* text) {
 
 static void add_file(const char* name, uint32_t size, uint8_t src) {
     bbc_menu_file_t* f = &menu.files[menu.nfiles++];
-    snprintf(f->name, sizeof(f->name), "%s", name);
+    f->name = name;   // String literals: kept
     f->size = size;
     f->src = src;
 }

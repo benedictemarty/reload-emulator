@@ -78,8 +78,10 @@
 // Byte -> pixels tables built 16 entries per line (~5 us; a whole table
 // costs ~90 us in the 1 bpp modes, the core 1 budget is 67 us per line)
 #define BBC_LUT_PROGRESSIVE 16
-// 8 cached tables: title screens often use several palettes per frame
-#define BBC_LUT_SLOTS 8
+// 10 cached tables: title screens often use several palettes per frame (Battlezone:
+// 9 in a cycle; with 8 tables, least recently used out, every palette missed its table
+// and most lines were drawn pixel by pixel, up to ~100 us: red lines in bursts)
+#define BBC_LUT_SLOTS 10
 #ifdef BBC_DIAG
 volatile uint32_t diag_lut_builds;
 #define BBC_LUT_BUILD_HOOK() (diag_lut_builds++)
@@ -357,7 +359,9 @@ static void boot_disc(void) {
 // streaks on the Neo6502 HDMI link (Oric, bmarty's screen, 2026-09-30)
 #define OSD_NO_DITHER 1
 #define OSD_HOT          __attribute__((section(".time_critical.osd")))
+// Font in RAM: in flash, core 1 waited for it while core 0 redrew the panel (red lines)
 #define OSD_FONT_SECTION __attribute__((section(".time_critical.osd_font")))
+#define BBC_MENU_FILES 40   // USB_MAX_FILES + the flash images (RAM: the tables above)
 #include "osd/bbc_menu.h"
 
 static bbc_menu_t menu;
@@ -370,7 +374,7 @@ static void menu_fill(void) {
     menu.nfiles = 0;
     for (int i = 0; i < num_images() && menu.nfiles < BBC_MENU_FILES; i++) {
         bbc_menu_file_t* f = &menu.files[menu.nfiles++];
-        snprintf(f->name, sizeof(f->name), "%.39s", image_name(i));
+        f->name = image_name(i);
         if (i < usb_num_files) {
             f->size = usb_sizes[i];
             f->src = BBC_SRC_USB;
