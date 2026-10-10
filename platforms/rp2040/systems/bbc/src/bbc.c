@@ -8,7 +8,8 @@
 // Discs: .ssd/.dsd files in the root of a USB drive (FAT, sectors read on
 // demand through FatFs, writes go back to the file) or images compiled in
 // flash (src/images/bbc_images.h, read-only);
-// F11 = disc menu (USB files first, then flash images); Pause = Neo6502 firmware.
+// F11 = control panel (drives 0 and 1: USB files, then flash images; BREAK,
+// SHIFT+BREAK, volume; src/osd/bbc_menu.h); Pause = Neo6502 firmware.
 // Core 1: DVI 800x480 (or 960x544) @ 60 Hz, BBC 640x256 centred, lines
 //         doubled by PicoDVI: 800x480 at 345 MHz (default,
 //         stretched blanking) or 295.2 MHz (-DBBC_VIDEO_480) shows the last
@@ -236,10 +237,13 @@ bbc_desc_t bbc_desc(void) {
 
 #define USB_MAX_FILES 32
 static char usb_files[USB_MAX_FILES][13];   // 8.3 names of .ssd/.dsd files in the root
+static uint32_t usb_sizes[USB_MAX_FILES];
 static int usb_num_files = 0;
 static bool usb_scanned = false;
-static neo_file_t usb_file;   // Disc image of the USB drive (neo_storage, volume NEO_VOL_USB)
-static int current_image = -1;               // 0.. usb files, then flash images
+static neo_file_t usb_file[2];   // Disc image of each drive on the USB drive (neo_storage, volume NEO_VOL_USB)
+// Image of each drive: index in the list of the menu (USB files, then flash images), -1: empty.
+// The USB files are listed once, when the drive is mounted, before any USB image is inserted.
+static int drive_image[2] = {-1, -1};
 
 extern bool msc_inquiry_complete;
 extern void msc_poll(void);
@@ -255,15 +259,13 @@ static bool has_ext(const char* name, const char* ext) {
     return true;
 }
 
-// Sector reader / writer for the WD1770: 256 bytes at `offset` of the open USB file
+// Sector reader / writer for the WD1770: 256 bytes at `offset` of the USB file of a drive (ctx)
 static bool usb_read_sector(void* ctx, uint32_t offset, uint8_t* buf) {
-    (void)ctx;
-    return neo_file_read(&usb_file, offset, buf, 256);
+    return neo_file_read((neo_file_t*)ctx, offset, buf, 256);
 }
 
 static bool usb_write_sector(void* ctx, uint32_t offset, const uint8_t* buf) {
-    (void)ctx;
-    return neo_file_write(&usb_file, offset, buf, 256);   // Durable on return (the driver syncs)
+    return neo_file_write((neo_file_t*)ctx, offset, buf, 256);   // Durable on return (the driver syncs)
 }
 
 static bool usb_scan_entry(const neo_dirent_t* e, void* user) {
@@ -272,6 +274,7 @@ static bool usb_scan_entry(const neo_dirent_t* e, void* user) {
     if (e->dir || strlen(e->name) > 12) return true;
     if (has_ext(e->name, ".ssd") || has_ext(e->name, ".dsd")) {
         strcpy(usb_files[usb_num_files], e->name);
+        usb_sizes[usb_num_files] = e->size;
         usb_num_files++;
     }
     return true;
@@ -285,44 +288,6 @@ static void usb_scan(void) {
 
 static int num_images(void) { return usb_num_files + BBC_NUM_IMAGES; }
 
-// Insert image `index` (read-only) in drive 0: USB file or flash image
-static void insert_image(int index) {
-    if (index < 0 || index >= num_images()) return;
-    neo_file_close(&usb_file);
-    if (index < usb_num_files) {
-        const char* name = usb_files[index];
-        if (!neo_file_open_path(&usb_file, name, NEO_READ | NEO_WRITE)) {
-            printf("USB: cannot open %s\n", name);
-            return;
-        }
-        wd1770_insert_streamed(&state.bbc.fdc, 0, usb_file.size, has_ext(name, ".dsd") ? 2 : 1, usb_read_sector,
-                               usb_write_sector, 0);
-        printf("Disc inserted: %s (%u bytes)\n", name, (unsigned)usb_file.size);
-    } else {
-#ifdef BBC_HAVE_IMAGES
-        const bbc_disc_image_t* im = &bbc_disc_images[index - usb_num_files];
-        bbc_insert_disc(&state.bbc, 0, (uint8_t*)im->data, im->size, im->sides, true);
-        printf("Flash disc %d inserted (%u bytes)\n", index - usb_num_files, (unsigned)im->size);
-#endif
-    }
-    current_image = index;
-}
-
-/*-- Disc menu (F11) -----------------------------------------------------------*/
-// Full-screen list of the disc images (USB drive, then flash), drawn by core 1
-// in place of the BBC picture with the teletext character set (40 x 25).
-// Core 0 builds the text (menu_text/menu_fg/menu_bg), core 1 only draws it.
-#define MENU_ROWS 25
-#define MENU_COLS 40
-#define MENU_LIST_TOP 2
-#define MENU_LIST_ROWS 19
-static volatile bool menu_open;
-static int menu_sel, menu_top;
-static char __not_in_flash() menu_text[MENU_ROWS][MENU_COLS];
-static uint8_t __not_in_flash() menu_fg[MENU_ROWS], menu_bg[MENU_ROWS];
-static uint32_t boot_shift_release;   // emu_frames value at which SHIFT goes up (SHIFT+BREAK)
-static uint32_t emu_frames;
-
 static const char* image_name(int index) {
     if (index < usb_num_files) return usb_files[index];
 #ifdef BBC_HAVE_IMAGES
@@ -333,106 +298,218 @@ static const char* image_name(int index) {
 #endif
 }
 
-static void menu_row(int row, uint8_t fg, uint8_t bg, const char* text) {
-    int i = 0;
-    for (; i < MENU_COLS && text[i]; i++) menu_text[row][i] = text[i];
-    for (; i < MENU_COLS; i++) menu_text[row][i] = ' ';
-    menu_fg[row] = fg;
-    menu_bg[row] = bg;
+static void eject_drive(int drive) {
+    neo_file_close(&usb_file[drive]);
+    wd1770_eject(&state.bbc.fdc, drive);
+    drive_image[drive] = -1;
 }
 
-static void menu_build(void) {
-    char line[64];
-    int n = num_images();
-    menu_row(0, 3, 1, " BBC Micro - disques (F11)");
-    menu_row(1, 7, 0, "");
-    if (menu_sel < menu_top) menu_top = menu_sel;
-    if (menu_sel >= menu_top + MENU_LIST_ROWS) menu_top = menu_sel - MENU_LIST_ROWS + 1;
-    for (int r = 0; r < MENU_LIST_ROWS; r++) {
-        int i = menu_top + r;
-        if (i < n) {
-            snprintf(line, sizeof(line), " %c %-5s %s", i == current_image ? '*' : ' ', i < usb_num_files ? "USB" : "flash",
-                     image_name(i));
-            menu_row(MENU_LIST_TOP + r, i == menu_sel ? 4 : 7, i == menu_sel ? 7 : 4, line);
-        } else {
-            menu_row(MENU_LIST_TOP + r, 7, 4, n == 0 && r == 0 ? " (aucune image)" : "");
+// Insert image `index` in `drive`: USB file (read and write) or flash image (read-only)
+static bool insert_image(int drive, int index) {
+    if (index < 0 || index >= num_images()) return false;
+    eject_drive(drive);
+    if (index < usb_num_files) {
+        const char* name = usb_files[index];
+        if (!neo_file_open_path(&usb_file[drive], name, NEO_READ | NEO_WRITE)) {
+            printf("USB: cannot open %s\n", name);
+            return false;
         }
+        wd1770_insert_streamed(&state.bbc.fdc, drive, usb_file[drive].size, has_ext(name, ".dsd") ? 2 : 1,
+                               usb_read_sector, usb_write_sector, &usb_file[drive]);
+        printf("Drive %d: %s (%u bytes)\n", drive, name, (unsigned)usb_file[drive].size);
+    } else {
+#ifdef BBC_HAVE_IMAGES
+        const bbc_disc_image_t* im = &bbc_disc_images[index - usb_num_files];
+        bbc_insert_disc(&state.bbc, drive, (uint8_t*)im->data, im->size, im->sides, true);
+        printf("Drive %d: flash disc %d (%u bytes)\n", drive, index - usb_num_files, (unsigned)im->size);
+#endif
     }
-    menu_row(21, 7, 0, "");
-    menu_row(22, 6, 0, " Entree : inserer et demarrer");
-    menu_row(23, 6, 0, " Espace : inserer   Echap : fermer");
-    snprintf(line, sizeof(line), " Lecteur 0 : %s", current_image >= 0 ? image_name(current_image) : "vide");
-    menu_row(24, 2, 0, line);
-}
-
-// Keys while the menu is open (HID usage codes); true when consumed
-static bool menu_key(uint8_t keycode) {
-    int n = num_images();
-    switch (keycode) {
-        case HID_KEY_ARROW_UP: if (menu_sel > 0) menu_sel--; break;
-        case HID_KEY_ARROW_DOWN: if (menu_sel < n - 1) menu_sel++; break;
-        case HID_KEY_PAGE_UP: menu_sel = menu_sel > MENU_LIST_ROWS ? menu_sel - MENU_LIST_ROWS : 0; break;
-        case HID_KEY_PAGE_DOWN: menu_sel = menu_sel + MENU_LIST_ROWS < n ? menu_sel + MENU_LIST_ROWS : (n > 0 ? n - 1 : 0); break;
-        case HID_KEY_ENTER:
-        case HID_KEY_KEYPAD_ENTER:
-        case HID_KEY_SPACE:
-            if (n > 0) {
-                insert_image(menu_sel);
-                if (keycode != HID_KEY_SPACE) {
-                    // SHIFT+BREAK: SHIFT held while the MOS restarts (auto-boot from !BOOT)
-                    bbc_key_down(&state.bbc, BBC_KEY_Shift);
-                    bbc_reset(&state.bbc);
-                    boot_shift_release = emu_frames + 50;
-                }
-            }
-            menu_open = false;
-            return true;
-        case HID_KEY_ESCAPE:
-        case HID_KEY_F11:
-            menu_open = false;
-            return true;
-        default: return true;   // Other keys: ignored while the menu is open
-    }
-    menu_build();
+    drive_image[drive] = index;
     return true;
 }
 
+static uint32_t boot_shift_release;   // emu_frames value at which SHIFT goes up (SHIFT+BREAK)
+static uint32_t emu_frames;
+
+// SHIFT+BREAK: SHIFT held while the MOS restarts (auto-boot from !BOOT)
+static void boot_disc(void) {
+    bbc_key_down(&state.bbc, BBC_KEY_Shift);
+    bbc_reset(&state.bbc);
+    boot_shift_release = emu_frames + 50;
+}
+
+/*-- Control panel (F11) -------------------------------------------------------*/
+// Full-screen panel in the style of the Telestrat and Oric ones (src/osd/bbc_menu.h):
+// drives 0 and 1, USB drive, flash images, boot on insertion, volume, BREAK /
+// SHIFT+BREAK / save / resume. The emulation is paused while it is open. Core 1
+// draws the surface (osd_render_line) in place of the BBC picture; core 0 redraws it
+// just after core 1 has finished a frame, during the vertical blanking (one surface
+// of 9 KB: two do not fit in the RAM; at worst the first lines of the banner, drawn
+// ahead by core 1, are those of the previous state).
+#ifdef BBC_VIDEO_544
+#define OSD_COLS 120   // 960 x 544
+#define OSD_ROWS 34
+#else
+#define OSD_COLS 100   // 800 x 480
+#define OSD_ROWS 30
+#endif
+// Plain panel backgrounds: the dithered ones (one pixel out of two) gave red
+// streaks on the Neo6502 HDMI link (Oric, bmarty's screen, 2026-09-30)
+#define OSD_NO_DITHER 1
+#define OSD_HOT          __attribute__((section(".time_critical.osd")))
+#define OSD_FONT_SECTION __attribute__((section(".time_critical.osd_font")))
+#include "osd/bbc_menu.h"
+
+static bbc_menu_t menu;
+static osd_surface_t __not_in_flash() osd_surface;
+static volatile uint32_t core1_frames;   // Frames drawn by core 1
+static volatile bool menu_open;
+
+// State of the machine -> menu
+static void menu_fill(void) {
+    menu.nfiles = 0;
+    for (int i = 0; i < num_images() && menu.nfiles < BBC_MENU_FILES; i++) {
+        bbc_menu_file_t* f = &menu.files[menu.nfiles++];
+        snprintf(f->name, sizeof(f->name), "%.39s", image_name(i));
+        if (i < usb_num_files) {
+            f->size = usb_sizes[i];
+            f->src = BBC_SRC_USB;
+        } else {
+#ifdef BBC_HAVE_IMAGES
+            f->size = bbc_disc_images[i - usb_num_files].size;
+#endif
+            f->src = BBC_SRC_FLASH;
+        }
+    }
+    for (int d = 0; d < BBC_MENU_DRIVES; d++) {
+        const int i = drive_image[d];
+        snprintf(menu.drive[d], sizeof(menu.drive[d]), "%.39s", i >= 0 ? image_name(i) : "");
+        menu.drive_src[d] = i >= usb_num_files ? BBC_SRC_FLASH : BBC_SRC_USB;
+        menu.drive_ro[d] = i >= usb_num_files;
+    }
+    menu.usb_present = usb_scanned;
+    menu.volume = audio_volume_level();
+    menu.muted = audio_volume_muted();
+}
+
+static void menu_refresh(void) {
+    if (menu_open) {
+        // Wait for the end of a frame of core 1 (at most 50 ms)
+        const uint32_t f = core1_frames, t0 = time_us_32();
+        while (core1_frames == f && time_us_32() - t0 < 50000) tight_loop_contents();
+    }
+    bbc_menu_draw(&menu, &osd_surface);
+}
+
+static void menu_close(void) { menu_open = false; }
+
 static void menu_toggle(void) {
     if (menu_open) {
-        menu_open = false;
+        menu_close();
         return;
     }
-    menu_sel = current_image >= 0 ? current_image : 0;
-    menu_top = 0;
-    menu_build();
+    menu.page = BBC_PAGE_MAIN;
+    menu.message[0] = 0;
+    menu_fill();
+    menu_refresh();
     menu_open = true;
 }
 
-// Core 1: draw BBC line y (0..255) of the menu (10 lines per text row)
-static void __not_in_flash_func(menu_draw_line)(int y, uint8_t *planes[3]) {
-    int row = y / 10, raster = y % 10;
-    if (y < 0 || row >= MENU_ROWS) {
-        for (int ch = 0; ch < 3; ch++) _bbc_zero(planes[ch], BBC_SCREEN_WIDTH / 8);
+void hid_raw_key_down(uint8_t keycode);
+void hid_raw_key_up(uint8_t keycode);
+
+static void menu_action(bbc_menu_action_t a) {
+    char msg[96];
+    switch (a.type) {
+        case BBC_ACT_INSERT:
+            if (!insert_image(a.target, a.file)) {
+                bbc_menu_message(&menu, true, "Image illisible");
+                break;
+            }
+            if (a.target == 0 && menu.autoboot) {
+                menu_close();
+                boot_disc();
+                return;
+            }
+            snprintf(msg, sizeof(msg), "%.40s dans le lecteur %d", image_name(a.file), a.target);
+            bbc_menu_message(&menu, false, msg);
+            break;
+        case BBC_ACT_EJECT:
+            eject_drive(a.target);
+            snprintf(msg, sizeof(msg), "Lecteur %d vide", a.target);
+            bbc_menu_message(&menu, false, msg);
+            break;
+        case BBC_ACT_BREAK:
+            menu_close();
+            hid_raw_key_down(HID_KEY_F12);   // BREAK, released after the minimum hold
+            hid_raw_key_up(HID_KEY_F12);
+            return;
+        case BBC_ACT_BOOT:
+            menu_close();
+            boot_disc();
+            return;
+        case BBC_ACT_SAVE:
+            bbc_menu_message(&menu, true, "BBC.CFG : pas encore disponible");
+            break;
+        case BBC_ACT_RESUME:
+            menu_close();
+            return;
+        case BBC_ACT_VOLUME:
+            audio_set_volume((uint8_t)menu.volume, menu.muted);
+            break;
+        default:
+            break;
+    }
+    menu_fill();
+    menu_refresh();
+}
+
+// HID usage of the keyboard -> code of osd_key_from_hid (ASCII, or usage | 0x100)
+static int menu_key_code(uint8_t k) {
+    if (k >= HID_KEY_A && k <= HID_KEY_Z) return 'A' + (k - HID_KEY_A);
+    if (k >= HID_KEY_1 && k <= HID_KEY_9) return '1' + (k - HID_KEY_1);
+    switch (k) {
+        case HID_KEY_0: return '0';
+        case HID_KEY_ENTER:
+        case HID_KEY_KEYPAD_ENTER: return 0x0D;
+        case HID_KEY_ESCAPE: return 0x1B;
+        case HID_KEY_DELETE:
+        case HID_KEY_BACKSPACE: return 0x7F;
+        case HID_KEY_ARROW_UP:
+        case HID_KEY_ARROW_DOWN:
+        case HID_KEY_ARROW_LEFT:
+        case HID_KEY_ARROW_RIGHT:
+        case HID_KEY_PAGE_UP:
+        case HID_KEY_PAGE_DOWN:
+        case HID_KEY_HOME:
+        case HID_KEY_END: return 0x100 | k;
+        default: return -1;
+    }
+}
+
+// Keys while the menu is open (HID usage codes)
+static void menu_key(uint8_t keycode) {
+    if (keycode == HID_KEY_F11) {
+        menu_close();
         return;
     }
-    uint8_t fg = menu_fg[row], bg = menu_bg[row];
-    for (int c = 0; c < MENU_COLS; c++) {
-        uint8_t ch = (uint8_t)menu_text[row][c];
-        uint16_t bits = 0;
-        if (ch > 0x20 && ch < 0x80) {
-            bits = (uint16_t)(state.bbc.tt_glyphs[ch - 0x20][raster * 2] | state.bbc.tt_glyphs[ch - 0x20][raster * 2 + 1]);
-        }
-        _bbc_tt_put(planes, c, bits, fg, bg);
-    }
+    const int key = osd_key_from_hid(menu_key_code(keycode));
+    if (key >= 0) menu_action(bbc_menu_key(&menu, key));
 }
 
 // Called every frame: once the USB drive is mounted, list its images and insert the first one
 static void usb_poll(void) {
     if (usb_scanned || !msc_inquiry_complete) return;
     usb_scanned = true;
+    // Flash images in the drives: same images, new indices after the USB files
+    int flash[2];
+    for (int d = 0; d < 2; d++) flash[d] = drive_image[d] >= 0 ? drive_image[d] - usb_num_files : -1;
     usb_scan();
+    for (int d = 0; d < 2; d++) {
+        if (flash[d] >= 0) drive_image[d] = usb_num_files + flash[d];
+    }
     if (usb_num_files > 0) {
-        insert_image(0);
+        insert_image(0, 0);
     }
 }
 
@@ -446,7 +523,7 @@ void app_init(void) {
     bbc_set_sample_rate_q8(&state.bbc, audio_pwm_rate_q8(22050));   // The rate the PWM really consumes
     bbc_reset(&state.bbc);
 #ifdef BBC_HAVE_IMAGES
-    insert_image(0);   // Flash image until a USB drive shows up
+    insert_image(0, usb_num_files);   // First flash image until a USB drive shows up
 #endif
 }
 
@@ -662,7 +739,7 @@ static void diag_key_service(void) {
         diag_keyq_head++;
         if (key == 0x7E) {
             // Next disc image
-            if (num_images() > 0) insert_image((current_image + 1) % num_images());
+            if (num_images() > 0) insert_image(0, (drive_image[0] + 1) % num_images());
             timer = DIAG_KEY_FRAMES;
             return;
         }
@@ -760,7 +837,28 @@ static bbc_lut_t __not_in_flash() core1_lut;
 // One TMDS buffer per BBC line, shown on two output lines (one for the last line of a
 // character row at 800x480): a line must be ready every two output lines (2 x 29.7 us at
 // 960x544, 2 x 33.6 us at 800x480), the queued buffers absorbing the shorter ones
+// Menu line shown by the buffer of display line y: at 800x480 the BBC lines shown once
+// (dvi/dvi_line_repeat.h) are matched with the menu lines (each on two output lines)
+#if FRAME_HEIGHT >= 2 * BBC_SCREEN_HEIGHT
+#define MENU_LINE(y) (y)
+#else
+#define MENU_LINE(y) bbc_menu_osd_line(y)
+#endif
+
+// The panel draws over the whole width; the BBC picture only rewrites its 640 pixels
+static bool planes_margins_dirty;
+
 static inline void __not_in_flash_func(render_frame)() {
+    const bool show_menu = menu_open;
+    const osd_surface_t *osd = &osd_surface;
+    if (!show_menu && planes_margins_dirty) {
+        for (int ch = 0; ch < 3; ch++) {
+            uint8_t *p = (uint8_t *)planes[ch];
+            memset(p, 0, BBC_EMPTY_COLUMNS / 8);
+            memset(p + (BBC_EMPTY_COLUMNS + BBC_SCREEN_WIDTH) / 8, 0, BBC_EMPTY_COLUMNS / 8);
+        }
+        planes_margins_dirty = false;
+    }
     for (int y = 0; y < BBC_DISPLAY_LINES; y++) {
         int src_line = BBC_DISPLAY_TOP + y;
         uint32_t *tmdsbuf;
@@ -770,8 +868,9 @@ static inline void __not_in_flash_func(render_frame)() {
 #endif
         uint8_t *pp[3] = {(uint8_t *)planes[0] + BBC_EMPTY_COLUMNS / 8, (uint8_t *)planes[1] + BBC_EMPTY_COLUMNS / 8,
                           (uint8_t *)planes[2] + BBC_EMPTY_COLUMNS / 8};
-        if (menu_open) {
-            menu_draw_line(src_line, pp);
+        if (show_menu) {
+            osd_render_line(osd, MENU_LINE(y), planes[0], planes[1], planes[2]);
+            planes_margins_dirty = true;
         } else if (src_line >= 0 && src_line < BBC_SCREEN_HEIGHT) {
             bbc_render_line(&state.bbc, &state.bbc.lines[src_line], &core1_lut, pp);
         } else {
@@ -797,6 +896,7 @@ static inline void __not_in_flash_func(render_frame)() {
         if (dvi0.late_scanline_ctr) diag_late++;
 #endif
     }
+    core1_frames++;
 }
 
 void __not_in_flash_func(core1_main()) {
@@ -892,13 +992,15 @@ int main() {
     while (1) {
         uint32_t start_time_in_micros = time_us_32();
 
+        if (!menu_open) {   // The emulation is paused while the control panel is open
 #ifdef BBC_DIAG
-        uint32_t t_run = time_us_32();
-        run_ticks(num_ticks);
-        diag_run_us += time_us_32() - t_run;
+            uint32_t t_run = time_us_32();
+            run_ticks(num_ticks);
+            diag_run_us += time_us_32() - t_run;
 #else
-        run_ticks(num_ticks);
+            run_ticks(num_ticks);
 #endif
+        }
 
         emu_frames++;
         tuh_task();

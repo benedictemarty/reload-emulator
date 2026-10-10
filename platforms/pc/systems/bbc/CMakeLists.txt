@@ -34,6 +34,15 @@ if (NOT MSVC)
     target_compile_options(bbc_headless_lut PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 
+#=== EXECUTABLE: bbc_menu_test (control panel of the board, src/osd/bbc_menu.h)
+
+add_executable(bbc_menu_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/bbc/test_bbc_menu.c)
+target_include_directories(bbc_menu_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+if (NOT MSVC)
+    target_compile_options(bbc_menu_test PUBLIC -Wall -Wextra -Wsign-compare)
+endif()
+add_test(NAME bbc_menu COMMAND bbc_menu_test)
+
 #=== Integration tests (tests/bbc/test_bbc_pc.py, Python 3 + Pillow): boot, BASIC,
 # screens compared to references, sound, joystick, disc write, Master 128, Tube,
 # bbc_tick4 = bbc_tick, progressive tables = PC rendering (docs/BBC.md)
