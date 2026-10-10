@@ -23,6 +23,10 @@
 //   -0 FILE   insert FILE (.ssd or .dsd) in drive 0
 //   -W FILE   write the (possibly modified) drive 0 image to FILE at the end
 //   -b        hold SHIFT during the first 40 frames (SHIFT+BREAK auto-boot)
+//   -S N:FILE save a snapshot (systems/bbc_state.h) at the start of frame N
+//   -L FILE   resume from a snapshot before the first frame
+//   -K        at the end, capture the CPU registers by the diverted NMI and compare them
+//             with the emulated 65C02 (prints "capture ok" or "capture FAILED")
 //
 // ## zlib/libpng license
 //
@@ -81,6 +85,7 @@
 #endif
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
+#include "systems/bbc_state.h"
 
 static bbc_t bbc;
 
@@ -95,6 +100,46 @@ static void run_frame(void) {
     } else {
         bbc_exec(&bbc, 20000);
     }
+}
+
+/*-- Snapshots (-S, -L, -K) -------------------------------------------------*/
+
+static bool file_write(void* ctx, const void* data, uint32_t len) { return fwrite(data, 1, len, (FILE*)ctx) == len; }
+static bool file_read(void* ctx, void* data, uint32_t len) { return fread(data, 1, len, (FILE*)ctx) == len; }
+
+static bool snapshot_save(const char* path) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return false;
+    bool ok = bbc_state_save(&bbc, file_write, f);
+    return (fclose(f) == 0) && ok;
+}
+
+static bool snapshot_load(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return false;
+    bool ok = bbc_state_load(&bbc, file_read, f);
+    fclose(f);
+    return ok;
+}
+
+// Registers captured through the bus = registers of the emulated 65C02 (after the capture,
+// which leaves them unchanged)
+static bool capture_check(void) {
+#ifndef BBC_CPU_NMOS
+    bbc_regs_t r;
+    if (!bbc_cpu_capture(&bbc, &r)) return false;
+    const w65c02cpu_t* c = &bbc.cpu;
+    const uint8_t p = (uint8_t)(c->cf | c->zf << 1 | c->iflag << 2 | c->df << 3 | c->vf << 6 | c->nf << 7);
+    if (r.a != c->A || r.x != c->X || r.y != c->Y || r.s != c->S || (r.p & 0xCF) != p) return false;
+    // The stub's RTI has just read PCH: the next opcode fetch is at the captured PC
+    for (int i = 0; i < 10; i++) {
+        bbc_tick(&bbc);
+        if (MOS6502CPU_SYNC(&bbc.cpu)) return MOS6502CPU_GET_ADDR(&bbc.cpu) == r.pc;
+    }
+    return false;
+#else
+    return false;
+#endif
 }
 
 /*-- MOS call tracing (US-01: which MOS services a program uses) ------------*/
@@ -294,6 +339,10 @@ int main(int argc, char** argv) {
     int pause_until = 0;
     int hold_frames = 3;
     int held = 0;
+    int save_frame = -1;
+    const char* save_path = NULL;
+    const char* load_path = NULL;
+    bool check_capture = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-f") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-t") && i + 1 < argc) text = argv[++i];
@@ -315,6 +364,11 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "-T") && i + 1 < argc) mos_log_path = argv[++i];
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") && i + 1 < argc) hold_frames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-S") && i + 1 < argc) {
+            save_frame = atoi(argv[++i]);
+            save_path = strchr(argv[i], ':') ? strchr(argv[i], ':') + 1 : NULL;
+        } else if (!strcmp(argv[i], "-L") && i + 1 < argc) load_path = argv[++i];
+        else if (!strcmp(argv[i], "-K")) check_capture = true;
         else {
             fprintf(stderr, "usage: %s [-f frames] [-t text] [-p out.ppm] [-r ram.bin] [-s] [-d] [-0 disc.ssd] [-b] [-1]\n", argv[0]);
             return 2;
@@ -401,6 +455,13 @@ int main(int argc, char** argv) {
     if (boot) {
         bbc_key_down(&bbc, BBC_KEY_SHIFT);
     }
+    if (load_path) {
+        if (!snapshot_load(load_path)) {
+            fprintf(stderr, "%s: snapshot not loaded\n", load_path);
+            return 1;
+        }
+        printf("state loaded\n");
+    }
 
     // Key injection state: each character is held for one frame, released the next
     const char* tp = text;
@@ -408,6 +469,13 @@ int main(int argc, char** argv) {
     bool pending_shift = false;
 
     for (int frame = 0; frame < frames; frame++) {
+        if (save_path && frame == save_frame) {
+            if (!snapshot_save(save_path)) {
+                fprintf(stderr, "%s: snapshot not saved\n", save_path);
+                return 1;
+            }
+            printf("state saved\n");
+        }
         if (boot && frame == 40) {
             bbc_key_up(&bbc, BBC_KEY_SHIFT);
         }
@@ -457,6 +525,7 @@ int main(int argc, char** argv) {
     if (mos_summary) mos_print_summary();
     if (hw_summary) hw_print_summary();
     if (c02_check) c02_print_summary();
+    if (check_capture) printf("capture %s\n", capture_check() ? "ok" : "FAILED");
     if (show) print_mode7();
     if (ppm) write_ppm(ppm);
     if (ram) {
