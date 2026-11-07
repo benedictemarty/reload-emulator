@@ -735,6 +735,10 @@ void app_init(void) {
     bbc_init(&state.bbc, &desc);
     bbc_set_sample_rate_q8(&state.bbc, audio_pwm_rate_q8(22050));   // The rate the PWM really consumes
     bbc_reset(&state.bbc);
+    bbc_menu_init(&menu);
+#ifdef BBC_MASTER
+    menu.model = "Master 128";
+#endif
 #ifdef BBC_HAVE_IMAGES
     insert_image(0, usb_num_files);   // First flash image until a USB drive shows up
 #endif
