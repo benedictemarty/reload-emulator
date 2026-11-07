@@ -710,6 +710,18 @@ static void process_gamepad_report(uint8_t dev_addr, uint8_t instance, uint8_t c
             gamepad->button_state = get_button_state_054C0CDA(report);
             break;
             
+        case 0x054C09CC: // DualShock 4 v2 (USB report 0x01, 64 bytes)
+        case 0x054C05C4: // DualShock 4 v1
+            // Layout from the public DS4 USB format (not measured on the board):
+            // [0]=report ID 0x01, [1..4]=sticks, [5]=D-pad + face buttons, [6]=shoulders.
+            // Same offsets as the 054C:0CDA decoding.
+            if (len < 10 || report[0] != 0x01) {
+                return;
+            }
+            gamepad->hat_state = get_hat_state_054C0CDA(report);
+            gamepad->button_state = get_button_state_054C0CDA(report);
+            break;
+
         case 0x0079181C:
             if (len != 9) {
                 return;
