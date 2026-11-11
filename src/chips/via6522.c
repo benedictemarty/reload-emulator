@@ -216,8 +216,9 @@ void via_init(via6522_t* via) {
 
 void via_reset(via6522_t* via) {
     via_sync(via);
+    const bool was_irq = via->irq_line;
     via->ora = via->orb = 0;
-    via->ira = via->irb = 0xFF;
+    via->ira = 0xFF;
     via->ddra = via->ddrb = 0;
     /* reload (socle) : fiche Rockwell (citée par les testprogs via_defaults) : « A low reset
      * input clears all internal registers to logic 0 (except T1 and T2 latches and counters
@@ -251,13 +252,13 @@ void via_reset(via6522_t* via) {
     via->pa_latched = false;
     via->pb_latched = false;
     via->sr_active = false;
-    via->sr_clk_acc = 0;
     via->sr_count = 0;
     via->sr_delay = 0;
     via->sr_t2_pending = 0;
-    via->pb6_pin = true;   /* PB6 idle high */
     via->pb7_pin = true;   /* Neo6502Vic20 : bascule PB7 à 1 au RESET (VICE t1_pb7 = 0x80 ;
                             * référence viavarious via10-13 du vrai VIC-20) */
+    /* /IRQ released by the reset: tell the consumer, or it keeps the CPU IRQ asserted */
+    if (was_irq && via->irq_callback) via->irq_callback(false, via->irq_userdata);
 }
 
 uint8_t VIA6522_HOT_ACCESS via_read(via6522_t* via, uint8_t reg) {

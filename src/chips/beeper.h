@@ -31,8 +31,6 @@ extern "C" {
 
 // Error-accumulation precision boost
 #define BEEPER_FIXEDPOINT_SCALE (16)
-// DC adjust buffer size
-#define BEEPER_DCADJ_BUFLEN (512)
 
 // Initialization parameters
 typedef struct {
@@ -49,9 +47,6 @@ typedef struct {
     float base_volume;
     float volume;
     float sample;
-    float dcadj_sum;
-    uint32_t dcadj_pos;
-    float dcadj_buf[BEEPER_DCADJ_BUFLEN];
 } beeper_t;
 
 // Initialize beeper instance
@@ -85,9 +80,10 @@ bool beeper_tick(beeper_t* beeper);
 void beeper_init(beeper_t* b, const beeper_desc_t* desc) {
     CHIPS_ASSERT(b && desc);
     CHIPS_ASSERT((desc->tick_hz > 0) && (desc->sound_hz > 0));
+    const int period = (desc->tick_hz * BEEPER_FIXEDPOINT_SCALE) / desc->sound_hz;
     *b = (beeper_t){
-        .period = (desc->tick_hz * BEEPER_FIXEDPOINT_SCALE) / desc->sound_hz,
-        .counter = b->period,
+        .period = period,
+        .counter = period,   // (b->period would be read before the struct is assigned)
         .base_volume = desc->base_volume,
         .volume = 1.0f,
     };
@@ -100,25 +96,11 @@ void beeper_reset(beeper_t* b) {
     b->sample = 0;
 }
 
-// DC adjustment filter from StSound, this moves an "offcenter"
-// signal back to the zero-line (e.g. the volume-level output
-// from the chip simulation which is >0.0 gets converted to
-// a +/- sample value)
-
-static float _beeper_dcadjust(beeper_t* bp, float s) {
-    bp->dcadj_sum -= bp->dcadj_buf[bp->dcadj_pos];
-    bp->dcadj_sum += s;
-    bp->dcadj_buf[bp->dcadj_pos] = s;
-    bp->dcadj_pos = (bp->dcadj_pos + 1) & (BEEPER_DCADJ_BUFLEN - 1);
-    return s - (bp->dcadj_sum / BEEPER_DCADJ_BUFLEN);
-}
-
 CHIPS_HOT bool beeper_tick(beeper_t* bp) {
     // Generate a new sample?
     bp->counter -= BEEPER_FIXEDPOINT_SCALE;
     if (bp->counter <= 0) {
         bp->counter += bp->period;
-        // bp->sample = _beeper_dcadjust(bp, (float)bp->state * bp->volume * bp->base_volume);
         bp->sample = (float)bp->state * bp->volume * bp->base_volume;
         return true;
     }

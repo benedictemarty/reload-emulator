@@ -64,7 +64,6 @@ typedef struct via6522_s {
     uint8_t ora;        /**< Output Register A */
     uint8_t orb;        /**< Output Register B */
     uint8_t ira;        /**< Input Register A */
-    uint8_t irb;        /**< Input Register B */
     uint8_t ddra;       /**< Data Direction Register A */
     uint8_t ddrb;       /**< Data Direction Register B */
 
@@ -126,8 +125,6 @@ typedef struct via6522_s {
     bool     ca2_in;      /**< CA2 input level (PCR input modes 000-011) */
     bool     ca1_pin;     /**< CA1 pin level (edge detection, idle high) */
     bool     sr_active;   /**< a shift sequence is in progress */
-    uint32_t sr_clk_acc;  /**< cycle accumulator for φ2/T2 shift clocking */
-    bool     pb6_pin;     /**< last PB6 level (T2 pulse-count edge detection) */
     bool     pb7_pin;     /**< PB7 output level when driven by Timer 1 (ACR bit7):
                                square-wave (bit6=1, toggles on each T1 underflow) or
                                one-shot (bit6=0, low on T1CH write, high on underflow).
@@ -286,7 +283,7 @@ void via_set_ca2_input(via6522_t* via, bool level);
 void via_trigger_ca2(via6522_t* via);
 
 /**
- * @brief Trigger CB1 interrupt (legacy: pulse high→low→high)
+ * @brief Trigger CB1 interrupt (legacy: pulse high→low→high; no edge when CB1 is already low)
  *
  * @param via Pointer to VIA structure
  */
@@ -345,20 +342,6 @@ void via_set_cb2_input(via6522_t* via, bool level);
 void via_pb6_pulse(via6522_t* via);
 
 /**
- * @brief Get the current CA2 output pin level.
- * @param via Pointer to VIA structure
- * @return CA2 level (true = high)
- */
-
-
-/**
- * @brief Get the current CB2 output pin level (shift-out data or PCR output).
- * @param via Pointer to VIA structure
- * @return CB2 level (true = high)
- */
-
-
-/**
  * @brief Effective PB7 output level.
  *
  * When ACR bit7 is set, PB7 is driven by Timer 1 (via->pb7_pin, toggled on
@@ -408,8 +391,8 @@ static inline bool via_get_cb2(via6522_t* via) {
     return via->cb2_pin;                  /* 100/101: handshake/pulse level */
 }
 static inline bool via_get_pb7(via6522_t* via) {
-    /* PB7 driven by Timer 1 (Oric cassette WRITE line) only when BOTH DDRB bit7
-     * and ACR bit7 are set (datasheet p.9). */
+    /* PB7 driven by Timer 1 (Oric cassette WRITE line) when ACR bit7 is set, whatever
+     * DDRB bit7 says (Neo6502Vic20 choice; the datasheet asks for both bits, p.9). */
     if (via->acr & 0x80) return via->pb7_pin;  /* Neo6502Vic20 : sans condition sur DDRB */
     /* Otherwise PB7 is a normal port pin: output register bit7 if configured
      * as output, else idle high (pulled up). */

@@ -89,13 +89,14 @@ typedef struct {
 #define MOS6502CPU_DESC_T            w65c02cpu_desc_t
 #define MOS6502CPU_INIT(c, desc)     w65c02cpu_init(c)
 #define MOS6502CPU_RESET(c)          ((c)->res = true)
-#define MOS6502CPU_NMI(c)            ((c)->nmi_triggered = !(c)->nmi, (c)->nmi = true)
+// One NMI edge (a pulse: the level is not latched, so the next call triggers again)
+#define MOS6502CPU_NMI(c)            ((c)->nmi_triggered = true)
 #define MOS6502CPU_TICK(c)           w65c02cpu_tick(c)
 #define MOS6502CPU_GET_ADDR(c)       ((c)->addr)
 #define MOS6502CPU_GET_DATA(c)       ((c)->data)
 #define MOS6502CPU_SET_DATA(c, d)    ((c)->data = d)
 #define MOS6502CPU_SET_IRQ(c, state) ((c)->irq = state)
-#define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered = ((state) && !(c)->nmi), (c)->nmi = (state))
+#define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered |= ((state) && !(c)->nmi), (c)->nmi = (state))
 // True during an opcode fetch cycle (not available from the real CPU: no SYNC pin on the board)
 #define MOS6502CPU_SYNC(c)           ((c)->sync)
 #endif  // W65C02_NO_MACROS
@@ -160,7 +161,7 @@ static uint8_t _w65_mode(uint8_t op) {
             return W65_REL;                       // Bxx
         case 0x1: return (hi & 1) ? W65_INY : W65_INX;
         case 0x2:
-            if (hi >= 0xA && hi <= 0xA) return W65_IMM;   // LDX #
+            if (hi == 0xA) return W65_IMM;   // LDX #
             if (hi & 1) return W65_ZPI;                    // (zp)
             return W65_NOP2_2;                             // 02 22 42 62 82 C2 E2
         case 0x3: return W65_NOP1;
@@ -169,7 +170,7 @@ static uint8_t _w65_mode(uint8_t op) {
             if (op == 0xDB) return W65_STP;
             return W65_NOP1;
         case 0x4:
-            if (op == 0x04 || op == 0x14) return (op == 0x04) ? W65_ZP : W65_ZP;   // TSB zp, TRB zp
+            if (op == 0x04 || op == 0x14) return W65_ZP;   // TSB zp, TRB zp
             if (op == 0x24) return W65_ZP;                 // BIT zp
             if (op == 0x34) return W65_ZPX;                // BIT zp,X
             if (op == 0x44) return W65_NOP2_3;
@@ -190,13 +191,13 @@ static uint8_t _w65_mode(uint8_t op) {
             return W65_IMP;
         case 0x9:
             if (hi & 1) return W65_ABY;
-            return (op == 0x89) ? W65_IMM : W65_IMM;       // xx9 even rows: immediate (89 = BIT #)
+            return W65_IMM;       // xx9 even rows: immediate (89 = BIT #)
         case 0xA:
             if (op == 0x5A || op == 0xDA) return W65_PUSH;      // PHY PHX
             if (op == 0x7A || op == 0xFA) return W65_PULL;      // PLY PLX
             return W65_ACC;                                     // shifts A, INC A/DEC A, TXA...
         case 0xC:
-            if (op == 0x0C || op == 0x1C) return (op == 0x0C) ? W65_ABS : W65_ABS;   // TSB abs, TRB abs
+            if (op == 0x0C || op == 0x1C) return W65_ABS;   // TSB abs, TRB abs
             if (op == 0x2C) return W65_ABS;                // BIT abs
             if (op == 0x3C) return W65_ABX;                // BIT abs,X
             if (op == 0x4C) return W65_JMP_ABS;
@@ -248,12 +249,10 @@ static void _w65_adc(w65c02cpu_t* c, uint8_t v) {
         int lo = (c->A & 0x0F) + (v & 0x0F) + cin;
         int hi = (c->A >> 4) + (v >> 4);
         if (lo > 9) { lo += 6; hi++; }
-        int bin = c->A + v + cin;
         c->vf = (~(c->A ^ v) & (c->A ^ (uint8_t)(hi << 4)) & 0x80) != 0;
         if (hi > 9) hi += 6;
         c->cf = hi > 15;
         c->A = (uint8_t)(((hi & 0x0F) << 4) | (lo & 0x0F));
-        (void)bin;
         _w65_nz(c, c->A);
     } else {
         int r = c->A + v + (c->cf ? 1 : 0);
@@ -464,6 +463,10 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
         c->stopped = false;
         c->waiting = false;
         c->in_brk = false;
+        // Nothing pending from before the reset may be served after it
+        c->take_irq = false;
+        c->nmi_pending = c->nmi_prev = c->nmi_poll = false;
+        c->irq_prev = c->irq_poll = false;
         c->irq_vec = 0xFC;
         c->step = 100;   // Interrupt sequence, reset flavour
         c->sync = false;
@@ -480,6 +483,16 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
         // WAI: resume on any interrupt line (IRQ even if masked, NMI)
         if (c->nmi_pending || c->irq) {
             c->waiting = false;
+            // The poll pipeline is stale after the wait: decide here. NMI, or IRQ with I clear,
+            // is serviced right away (CLI; WAI; ...); with I set execution just continues
+            if (c->nmi_pending) {
+                c->nmi_pending = c->nmi_prev = c->nmi_poll = false;
+                c->irq_vec = 0xFA;
+                c->take_irq = true;
+            } else if (!c->iflag) {
+                c->irq_vec = 0xFE;
+                c->take_irq = true;
+            }
         } else {
             _w65_rd(c, c->PC);
             return;
@@ -499,7 +512,6 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
     if (c->step >= 100) {
         switch (c->step) {
             case 100:   // Dummy read of PC (BRK: operand byte, PC already incremented)
-                if (c->irq_vec == 0xFC) { _w65_rd(c, c->PC); c->step = 101; return; }
                 _w65_rd(c, c->PC);
                 c->step = 101;
                 return;

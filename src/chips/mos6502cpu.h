@@ -6,8 +6,9 @@
 //
 // Project repo: https://github.com/floooh/chips/
 //
-// NOTE: this file is code-generated from mos6502cpu.template.h and mos6502cpu_gen.py
-// in the 'codegen' directory.
+// NOTE: this file derives from the code-generated mos6502cpu.h of floooh/chips (generator not
+// in this repository) and has been edited by hand since (sticky bit 15 of nmi_pip,
+// MOS6502_NO_MACROS, NMI pulse): edit it directly.
 //
 // Do this:
 // ~~~C
@@ -214,14 +215,15 @@ extern "C" {
 #define MOS6502CPU_DESC_T            mos6502cpu_desc_t
 #define MOS6502CPU_INIT(c, desc)     mos6502cpu_init(c, desc)
 #define MOS6502CPU_RESET(c)          ((c)->res = true)
-#define MOS6502CPU_NMI(c)            ((c)->nmi_triggered = !(c)->nmi, (c)->nmi = true)
+// One NMI edge (a pulse: the level is not latched, so the next call triggers again)
+#define MOS6502CPU_NMI(c)            ((c)->nmi_triggered = true)
 #define MOS6502CPU_TICK(c)           mos6502cpu_tick(c)
 #define MOS6502CPU_GET_ADDR(c)       ((c)->addr)
 #define MOS6502CPU_GET_DATA(c)       ((c)->data)
 #define MOS6502CPU_SET_DATA(c, d)    ((c)->data = d)
 #define MOS6502CPU_SET_IRQ(c, state) ((c)->irq = state)
 // Level-driven NMI: the rising edge is reported once (nmi_triggered), call every tick
-#define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered = ((state) && !(c)->nmi), (c)->nmi = (state))
+#define MOS6502CPU_SET_NMI(c, state) ((c)->nmi_triggered |= ((state) && !(c)->nmi), (c)->nmi = (state))
 // True during an opcode fetch cycle (not available from the real CPU: no SYNC pin on the board)
 #define MOS6502CPU_SYNC(c)           ((c)->sync)
 #endif  // MOS6502_NO_MACROS
@@ -335,7 +337,7 @@ void mos6502cpu_snapshot_onload(mos6502cpu_t* snapshot, mos6502cpu_t* c);
 // Memory write tick
 #define _WR() (c->rw = false)
 // Set N and Z flags depending on value
-#define _NZ(v) (c->nf = (v & 0x80) != 0, c->zf = (v & 0xFF) == 0)
+#define _NZ(v) (c->nf = ((v) & 0x80) != 0, c->zf = ((v) & 0xFF) == 0)
 
 static inline uint8_t _get_flags(mos6502cpu_t* c) {
     return (c->cf ? 0x01 : 0) | (c->zf ? 0x02 : 0) | (c->iflag ? 0x04 : 0) | (c->df ? 0x08 : 0) | (c->bf ? 0x10 : 0) |
@@ -614,7 +616,7 @@ void mos6502cpu_snapshot_onload(mos6502cpu_t* snapshot, mos6502cpu_t* c) {
 #endif
 
 void mos6502cpu_tick(mos6502cpu_t* c) {
-    if (c->sync || c->irq || c->nmi || c->rdy || c->res) {
+    if (c->sync || c->irq || c->nmi || c->nmi_triggered || c->rdy || c->res) {
         // Interrupt detection also works in RDY phases, but only NMI is "sticky"
 
         // NMI is edge-triggered: the edge is consumed here
@@ -722,7 +724,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x00 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA (zp,X)
         case (0x01 << 3) | 0:
@@ -749,10 +751,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x01 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x01 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x02 << 3) | 0:
@@ -763,22 +765,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x02 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x02 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x02 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x02 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x02 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x02 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SLO (zp,X) (undoc)
         case (0x03 << 3) | 0:
@@ -824,19 +826,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x04 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x04 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x04 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x04 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x04 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA zp
         case (0x05 << 3) | 0:
@@ -851,19 +853,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x05 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x05 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x05 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x05 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x05 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ASL zp
         case (0x06 << 3) | 0:
@@ -884,13 +886,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x06 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x06 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x06 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SLO zp (undoc)
         case (0x07 << 3) | 0:
@@ -914,13 +916,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x07 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x07 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x07 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // PHP
         case (0x08 << 3) | 0:
@@ -934,19 +936,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x08 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x08 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x08 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x08 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x08 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA #
         case (0x09 << 3) | 0:
@@ -958,22 +960,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x09 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x09 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x09 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x09 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x09 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x09 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ASLA
         case (0x0A << 3) | 0:
@@ -984,22 +986,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x0A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ANC # (undoc)
         case (0x0B << 3) | 0:
@@ -1012,22 +1014,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x0B << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0B << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0B << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0B << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0B << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP abs (undoc)
         case (0x0C << 3) | 0:
@@ -1044,16 +1046,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x0C << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA abs
         case (0x0D << 3) | 0:
@@ -1072,16 +1074,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x0D << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ASL abs
         case (0x0E << 3) | 0:
@@ -1106,10 +1108,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x0E << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SLO abs (undoc)
         case (0x0F << 3) | 0:
@@ -1137,10 +1139,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x0F << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x0F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BPL #
         case (0x10 << 3) | 0:
@@ -1167,16 +1169,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x10 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x10 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x10 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x10 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA (zp),Y
         case (0x11 << 3) | 0:
@@ -1204,10 +1206,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x11 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x11 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x12 << 3) | 0:
@@ -1218,22 +1220,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x12 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x12 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x12 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x12 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x12 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x12 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SLO (zp),Y (undoc)
         case (0x13 << 3) | 0:
@@ -1283,16 +1285,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x14 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x14 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x14 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x14 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA zp,X
         case (0x15 << 3) | 0:
@@ -1311,16 +1313,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x15 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x15 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x15 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x15 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ASL zp,X
         case (0x16 << 3) | 0:
@@ -1345,10 +1347,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x16 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x16 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SLO zp,X (undoc)
         case (0x17 << 3) | 0:
@@ -1376,10 +1378,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x17 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x17 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CLC
         case (0x18 << 3) | 0:
@@ -1390,22 +1392,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x18 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x18 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x18 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x18 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x18 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x18 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA abs,Y
         case (0x19 << 3) | 0:
@@ -1429,13 +1431,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x19 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x19 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x19 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP (undoc)
         case (0x1A << 3) | 0:
@@ -1445,22 +1447,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x1A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SLO abs,Y (undoc)
         case (0x1B << 3) | 0:
@@ -1492,7 +1494,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x1B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP abs,X (undoc)
         case (0x1C << 3) | 0:
@@ -1514,13 +1516,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x1C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ORA abs,X
         case (0x1D << 3) | 0:
@@ -1544,13 +1546,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x1D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x1D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ASL abs,X
         case (0x1E << 3) | 0:
@@ -1579,7 +1581,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x1E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SLO abs,X (undoc)
         case (0x1F << 3) | 0:
@@ -1611,7 +1613,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x1F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JSR
         case (0x20 << 3) | 0:
@@ -1637,10 +1639,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x20 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x20 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND (zp,X)
         case (0x21 << 3) | 0:
@@ -1667,10 +1669,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x21 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x21 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x22 << 3) | 0:
@@ -1681,22 +1683,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x22 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x22 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x22 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x22 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x22 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x22 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RLA (zp,X) (undoc)
         case (0x23 << 3) | 0:
@@ -1743,19 +1745,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x24 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x24 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x24 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x24 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x24 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND zp
         case (0x25 << 3) | 0:
@@ -1770,19 +1772,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x25 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x25 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x25 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x25 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x25 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROL zp
         case (0x26 << 3) | 0:
@@ -1803,13 +1805,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x26 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x26 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x26 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RLA zp (undoc)
         case (0x27 << 3) | 0:
@@ -1833,13 +1835,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x27 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x27 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x27 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // PLP
         case (0x28 << 3) | 0:
@@ -1856,16 +1858,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x28 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x28 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x28 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x28 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND #
         case (0x29 << 3) | 0:
@@ -1877,22 +1879,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x29 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x29 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x29 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x29 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x29 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x29 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROLA
         case (0x2A << 3) | 0:
@@ -1903,22 +1905,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x2A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ANC # (undoc)
         case (0x2B << 3) | 0:
@@ -1931,22 +1933,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x2B << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2B << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2B << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2B << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2B << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BIT abs
         case (0x2C << 3) | 0:
@@ -1964,16 +1966,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x2C << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND abs
         case (0x2D << 3) | 0:
@@ -1992,16 +1994,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x2D << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROL abs
         case (0x2E << 3) | 0:
@@ -2026,10 +2028,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x2E << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RLA abs (undoc)
         case (0x2F << 3) | 0:
@@ -2057,10 +2059,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x2F << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x2F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BMI #
         case (0x30 << 3) | 0:
@@ -2087,16 +2089,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x30 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x30 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x30 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x30 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND (zp),Y
         case (0x31 << 3) | 0:
@@ -2124,10 +2126,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x31 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x31 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x32 << 3) | 0:
@@ -2138,22 +2140,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x32 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x32 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x32 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x32 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x32 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x32 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RLA (zp),Y (undoc)
         case (0x33 << 3) | 0:
@@ -2203,16 +2205,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x34 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x34 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x34 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x34 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND zp,X
         case (0x35 << 3) | 0:
@@ -2231,16 +2233,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x35 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x35 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x35 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x35 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROL zp,X
         case (0x36 << 3) | 0:
@@ -2265,10 +2267,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x36 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x36 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RLA zp,X (undoc)
         case (0x37 << 3) | 0:
@@ -2296,10 +2298,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x37 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x37 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SEC
         case (0x38 << 3) | 0:
@@ -2310,22 +2312,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x38 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x38 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x38 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x38 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x38 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x38 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND abs,Y
         case (0x39 << 3) | 0:
@@ -2349,13 +2351,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x39 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x39 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x39 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP (undoc)
         case (0x3A << 3) | 0:
@@ -2365,22 +2367,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x3A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RLA abs,Y (undoc)
         case (0x3B << 3) | 0:
@@ -2412,7 +2414,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x3B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP abs,X (undoc)
         case (0x3C << 3) | 0:
@@ -2434,13 +2436,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x3C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // AND abs,X
         case (0x3D << 3) | 0:
@@ -2464,13 +2466,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x3D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x3D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROL abs,X
         case (0x3E << 3) | 0:
@@ -2499,7 +2501,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x3E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RLA abs,X (undoc)
         case (0x3F << 3) | 0:
@@ -2531,7 +2533,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x3F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
             // RTI
         case (0x40 << 3) | 0:
@@ -2556,10 +2558,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x40 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x40 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR (zp,X) */
         case (0x41 << 3) | 0:
@@ -2586,10 +2588,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x41 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x41 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x42 << 3) | 0:
@@ -2600,22 +2602,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x42 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x42 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x42 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x42 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x42 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x42 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SRE (zp,X) (undoc)
         case (0x43 << 3) | 0:
@@ -2661,19 +2663,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x44 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x44 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x44 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x44 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x44 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR zp
         case (0x45 << 3) | 0:
@@ -2688,19 +2690,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x45 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x45 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x45 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x45 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x45 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LSR zp
         case (0x46 << 3) | 0:
@@ -2721,13 +2723,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x46 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x46 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x46 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SRE zp (undoc)
         case (0x47 << 3) | 0:
@@ -2751,13 +2753,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x47 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x47 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x47 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // PHA
         case (0x48 << 3) | 0:
@@ -2771,19 +2773,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x48 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x48 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x48 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x48 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x48 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR #
         case (0x49 << 3) | 0:
@@ -2795,22 +2797,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x49 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x49 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x49 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x49 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x49 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x49 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LSRA
         case (0x4A << 3) | 0:
@@ -2821,22 +2823,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x4A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ASR # (undoc)
         case (0x4B << 3) | 0:
@@ -2848,22 +2850,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x4B << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4B << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4B << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4B << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4B << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JMP
         case (0x4C << 3) | 0:
@@ -2878,19 +2880,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x4C << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4C << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR abs
         case (0x4D << 3) | 0:
@@ -2909,16 +2911,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x4D << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LSR abs
         case (0x4E << 3) | 0:
@@ -2943,10 +2945,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x4E << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SRE abs (undoc)
         case (0x4F << 3) | 0:
@@ -2974,10 +2976,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x4F << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x4F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BVC #
         case (0x50 << 3) | 0:
@@ -3004,16 +3006,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x50 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x50 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x50 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x50 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR (zp),Y
         case (0x51 << 3) | 0:
@@ -3041,10 +3043,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x51 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x51 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x52 << 3) | 0:
@@ -3055,22 +3057,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x52 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x52 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x52 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x52 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x52 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x52 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SRE (zp),Y (undoc)
         case (0x53 << 3) | 0:
@@ -3120,16 +3122,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x54 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x54 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x54 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x54 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR zp,X
         case (0x55 << 3) | 0:
@@ -3148,16 +3150,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x55 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x55 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x55 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x55 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LSR zp,X
         case (0x56 << 3) | 0:
@@ -3182,10 +3184,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x56 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x56 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SRE zp,X (undoc)
         case (0x57 << 3) | 0:
@@ -3213,10 +3215,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x57 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x57 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CLI
         case (0x58 << 3) | 0:
@@ -3227,22 +3229,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x58 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x58 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x58 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x58 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x58 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x58 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR abs,Y
         case (0x59 << 3) | 0:
@@ -3266,13 +3268,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x59 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x59 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x59 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP (undoc)
         case (0x5A << 3) | 0:
@@ -3282,22 +3284,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x5A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SRE abs,Y (undoc)
         case (0x5B << 3) | 0:
@@ -3329,7 +3331,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x5B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP abs,X (undoc)
         case (0x5C << 3) | 0:
@@ -3351,13 +3353,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x5C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // EOR abs,X
         case (0x5D << 3) | 0:
@@ -3381,13 +3383,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x5D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x5D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LSR abs,X
         case (0x5E << 3) | 0:
@@ -3416,7 +3418,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x5E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SRE abs,X (undoc)
         case (0x5F << 3) | 0:
@@ -3448,7 +3450,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x5F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RTS
         case (0x60 << 3) | 0:
@@ -3472,10 +3474,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x60 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x60 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC (zp,X)
         case (0x61 << 3) | 0:
@@ -3501,10 +3503,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x61 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x61 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x62 << 3) | 0:
@@ -3515,22 +3517,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x62 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x62 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x62 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x62 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x62 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x62 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RRA (zp,X) (undoc)
         case (0x63 << 3) | 0:
@@ -3575,19 +3577,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x64 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x64 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x64 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x64 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x64 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC zp
         case (0x65 << 3) | 0:
@@ -3601,19 +3603,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x65 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x65 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x65 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x65 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x65 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROR zp
         case (0x66 << 3) | 0:
@@ -3634,13 +3636,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x66 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x66 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x66 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RRA zp (undoc)
         case (0x67 << 3) | 0:
@@ -3663,13 +3665,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x67 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x67 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x67 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // PLA
         case (0x68 << 3) | 0:
@@ -3687,16 +3689,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x68 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x68 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x68 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x68 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC #
         case (0x69 << 3) | 0:
@@ -3707,22 +3709,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x69 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x69 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x69 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x69 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x69 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x69 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RORA
         case (0x6A << 3) | 0:
@@ -3733,22 +3735,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x6A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ARR # (undoc)
         case (0x6B << 3) | 0:
@@ -3760,22 +3762,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x6B << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6B << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6B << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6B << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6B << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JMPI
         case (0x6C << 3) | 0:
@@ -3798,13 +3800,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x6C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC abs
         case (0x6D << 3) | 0:
@@ -3822,16 +3824,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x6D << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROR abs
         case (0x6E << 3) | 0:
@@ -3856,10 +3858,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x6E << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RRA abs (undoc)
         case (0x6F << 3) | 0:
@@ -3886,10 +3888,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x6F << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x6F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BVS #
         case (0x70 << 3) | 0:
@@ -3916,16 +3918,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x70 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x70 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x70 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x70 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC (zp),Y
         case (0x71 << 3) | 0:
@@ -3952,10 +3954,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x71 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x71 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x72 << 3) | 0:
@@ -3966,22 +3968,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x72 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x72 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x72 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x72 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x72 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x72 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RRA (zp),Y (undoc)
         case (0x73 << 3) | 0:
@@ -4030,16 +4032,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x74 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x74 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x74 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x74 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC zp,X
         case (0x75 << 3) | 0:
@@ -4057,16 +4059,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x75 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x75 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x75 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x75 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROR zp,X
         case (0x76 << 3) | 0:
@@ -4091,10 +4093,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x76 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x76 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RRA zp,X (undoc)
         case (0x77 << 3) | 0:
@@ -4121,10 +4123,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x77 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x77 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SEI
         case (0x78 << 3) | 0:
@@ -4135,22 +4137,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x78 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x78 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x78 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x78 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x78 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x78 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC abs,Y
         case (0x79 << 3) | 0:
@@ -4173,13 +4175,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x79 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x79 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x79 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP (undoc)
         case (0x7A << 3) | 0:
@@ -4189,22 +4191,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x7A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RRA abs,Y (undoc)
         case (0x7B << 3) | 0:
@@ -4235,7 +4237,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x7B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP abs,X (undoc)
         case (0x7C << 3) | 0:
@@ -4257,13 +4259,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x7C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ADC abs,X
         case (0x7D << 3) | 0:
@@ -4286,13 +4288,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x7D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x7D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ROR abs,X
         case (0x7E << 3) | 0:
@@ -4321,7 +4323,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x7E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // RRA abs,X (undoc)
         case (0x7F << 3) | 0:
@@ -4352,7 +4354,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x7F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP # (undoc)
         case (0x80 << 3) | 0:
@@ -4362,22 +4364,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x80 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x80 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x80 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x80 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x80 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x80 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STA (zp,X)
         case (0x81 << 3) | 0:
@@ -4404,10 +4406,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x81 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x81 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP # (undoc)
         case (0x82 << 3) | 0:
@@ -4417,22 +4419,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x82 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x82 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x82 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x82 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x82 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x82 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SAX (zp,X) (undoc)
         case (0x83 << 3) | 0:
@@ -4459,10 +4461,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x83 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x83 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STY zp
         case (0x84 << 3) | 0:
@@ -4477,19 +4479,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x84 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x84 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x84 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x84 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x84 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STA zp
         case (0x85 << 3) | 0:
@@ -4504,19 +4506,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x85 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x85 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x85 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x85 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x85 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STX zp
         case (0x86 << 3) | 0:
@@ -4531,19 +4533,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x86 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x86 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x86 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x86 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x86 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SAX zp (undoc)
         case (0x87 << 3) | 0:
@@ -4558,19 +4560,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x87 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x87 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x87 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x87 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x87 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DEY
         case (0x88 << 3) | 0:
@@ -4582,22 +4584,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x88 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x88 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x88 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x88 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x88 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x88 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP # (undoc)
         case (0x89 << 3) | 0:
@@ -4607,22 +4609,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x89 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x89 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x89 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x89 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x89 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x89 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // TXA
         case (0x8A << 3) | 0:
@@ -4634,22 +4636,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x8A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ANE # (undoc)
         case (0x8B << 3) | 0:
@@ -4661,22 +4663,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x8B << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8B << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8B << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8B << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8B << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STY abs
         case (0x8C << 3) | 0:
@@ -4695,16 +4697,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x8C << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STA abs
         case (0x8D << 3) | 0:
@@ -4723,16 +4725,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x8D << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STX abs
         case (0x8E << 3) | 0:
@@ -4751,16 +4753,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x8E << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8E << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8E << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SAX abs (undoc)
         case (0x8F << 3) | 0:
@@ -4779,16 +4781,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x8F << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8F << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8F << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x8F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BCC #
         case (0x90 << 3) | 0:
@@ -4815,16 +4817,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x90 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x90 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x90 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x90 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STA (zp),Y
         case (0x91 << 3) | 0:
@@ -4851,10 +4853,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x91 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x91 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0x92 << 3) | 0:
@@ -4865,22 +4867,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0x92 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x92 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x92 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x92 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x92 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x92 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SHA (zp),Y (undoc)
         case (0x93 << 3) | 0:
@@ -4907,10 +4909,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x93 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x93 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STY zp,X
         case (0x94 << 3) | 0:
@@ -4929,16 +4931,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x94 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x94 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x94 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x94 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STA zp,X
         case (0x95 << 3) | 0:
@@ -4957,16 +4959,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x95 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x95 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x95 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x95 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STX zp,Y
         case (0x96 << 3) | 0:
@@ -4985,16 +4987,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x96 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x96 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x96 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x96 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SAX zp,Y (undoc)
         case (0x97 << 3) | 0:
@@ -5013,16 +5015,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x97 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x97 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x97 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x97 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // TYA
         case (0x98 << 3) | 0:
@@ -5034,22 +5036,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x98 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x98 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x98 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x98 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x98 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x98 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STA abs,Y
         case (0x99 << 3) | 0:
@@ -5072,13 +5074,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x99 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x99 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x99 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // TXS
         case (0x9A << 3) | 0:
@@ -5089,22 +5091,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x9A << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9A << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9A << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9A << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9A << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9A << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SHS abs,Y (undoc)
         case (0x9B << 3) | 0:
@@ -5128,13 +5130,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x9B << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9B << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9B << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SHY abs,X (undoc)
         case (0x9C << 3) | 0:
@@ -5157,13 +5159,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x9C << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9C << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9C << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // STA abs,X
         case (0x9D << 3) | 0:
@@ -5186,13 +5188,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x9D << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9D << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9D << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SHX abs,Y (undoc)
         case (0x9E << 3) | 0:
@@ -5215,13 +5217,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x9E << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9E << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9E << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SHA abs,Y (undoc)
         case (0x9F << 3) | 0:
@@ -5244,13 +5246,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0x9F << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9F << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0x9F << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDY #
         case (0xA0 << 3) | 0:
@@ -5262,22 +5264,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA0 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA0 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA0 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA0 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA0 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA0 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA (zp,X)
         case (0xA1 << 3) | 0:
@@ -5304,10 +5306,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA1 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA1 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDX #
         case (0xA2 << 3) | 0:
@@ -5319,22 +5321,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA2 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA2 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA2 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA2 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA2 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA2 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LAX (zp,X) (undoc)
         case (0xA3 << 3) | 0:
@@ -5361,10 +5363,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA3 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA3 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDY zp
         case (0xA4 << 3) | 0:
@@ -5379,19 +5381,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA4 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA4 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA4 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA4 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA4 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA zp
         case (0xA5 << 3) | 0:
@@ -5406,19 +5408,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA5 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA5 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA5 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA5 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA5 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDX zp
         case (0xA6 << 3) | 0:
@@ -5433,19 +5435,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA6 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA6 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA6 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA6 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA6 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LAX zp (undoc)
         case (0xA7 << 3) | 0:
@@ -5460,19 +5462,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA7 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA7 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA7 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA7 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA7 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // TAY
         case (0xA8 << 3) | 0:
@@ -5484,22 +5486,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA8 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA8 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA8 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA8 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA8 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA8 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA #
         case (0xA9 << 3) | 0:
@@ -5511,22 +5513,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xA9 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA9 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA9 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA9 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA9 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xA9 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // TAX
         case (0xAA << 3) | 0:
@@ -5538,22 +5540,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xAA << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAA << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAA << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAA << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAA << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAA << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LXA # (undoc)
         case (0xAB << 3) | 0:
@@ -5565,22 +5567,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xAB << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAB << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAB << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAB << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAB << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAB << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDY abs
         case (0xAC << 3) | 0:
@@ -5599,16 +5601,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xAC << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAC << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAC << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAC << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA abs
         case (0xAD << 3) | 0:
@@ -5627,16 +5629,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xAD << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAD << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAD << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAD << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDX abs
         case (0xAE << 3) | 0:
@@ -5655,16 +5657,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xAE << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAE << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAE << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAE << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LAX abs (undoc)
         case (0xAF << 3) | 0:
@@ -5683,16 +5685,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xAF << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAF << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAF << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xAF << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BCS #
         case (0xB0 << 3) | 0:
@@ -5719,16 +5721,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB0 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB0 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB0 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB0 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA (zp),Y
         case (0xB1 << 3) | 0:
@@ -5756,10 +5758,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB1 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB1 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0xB2 << 3) | 0:
@@ -5770,22 +5772,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0xB2 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB2 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB2 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB2 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB2 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB2 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LAX (zp),Y (undoc)
         case (0xB3 << 3) | 0:
@@ -5813,10 +5815,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB3 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB3 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDY zp,X
         case (0xB4 << 3) | 0:
@@ -5835,16 +5837,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB4 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB4 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB4 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB4 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA zp,X
         case (0xB5 << 3) | 0:
@@ -5863,16 +5865,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB5 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB5 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB5 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB5 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDX zp,Y
         case (0xB6 << 3) | 0:
@@ -5891,16 +5893,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB6 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB6 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB6 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB6 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LAX zp,Y (undoc)
         case (0xB7 << 3) | 0:
@@ -5919,16 +5921,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB7 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB7 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB7 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB7 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CLV
         case (0xB8 << 3) | 0:
@@ -5939,22 +5941,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB8 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB8 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB8 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB8 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB8 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB8 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA abs,Y
         case (0xB9 << 3) | 0:
@@ -5978,13 +5980,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xB9 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB9 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xB9 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // TSX
         case (0xBA << 3) | 0:
@@ -5996,22 +5998,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xBA << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBA << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBA << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBA << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBA << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBA << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LAS abs,Y (undoc)
         case (0xBB << 3) | 0:
@@ -6035,13 +6037,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xBB << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBB << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBB << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDY abs,X
         case (0xBC << 3) | 0:
@@ -6065,13 +6067,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xBC << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBC << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBC << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDA abs,X
         case (0xBD << 3) | 0:
@@ -6095,13 +6097,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xBD << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBD << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBD << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LDX abs,Y
         case (0xBE << 3) | 0:
@@ -6125,13 +6127,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xBE << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBE << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBE << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // LAX abs,Y (undoc)
         case (0xBF << 3) | 0:
@@ -6155,13 +6157,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xBF << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBF << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xBF << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CPY #
         case (0xC0 << 3) | 0:
@@ -6172,22 +6174,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC0 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC0 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC0 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC0 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC0 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC0 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP (zp,X)
         case (0xC1 << 3) | 0:
@@ -6213,10 +6215,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC1 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC1 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP # (undoc)
         case (0xC2 << 3) | 0:
@@ -6226,22 +6228,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC2 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC2 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC2 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC2 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC2 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC2 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DCP (zp,X) (undoc)
         case (0xC3 << 3) | 0:
@@ -6288,19 +6290,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC4 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC4 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC4 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC4 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC4 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP zp
         case (0xC5 << 3) | 0:
@@ -6314,19 +6316,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC5 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC5 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC5 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC5 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC5 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DEC zp
         case (0xC6 << 3) | 0:
@@ -6349,13 +6351,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC6 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC6 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC6 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DCP zp (undoc)
         case (0xC7 << 3) | 0:
@@ -6379,13 +6381,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC7 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC7 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC7 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // INY
         case (0xC8 << 3) | 0:
@@ -6397,22 +6399,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC8 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC8 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC8 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC8 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC8 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC8 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP #
         case (0xC9 << 3) | 0:
@@ -6423,22 +6425,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xC9 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC9 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC9 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC9 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC9 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xC9 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DEX
         case (0xCA << 3) | 0:
@@ -6450,22 +6452,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xCA << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCA << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCA << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCA << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCA << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCA << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBX # (undoc)
         case (0xCB << 3) | 0:
@@ -6476,22 +6478,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xCB << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCB << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCB << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCB << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCB << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCB << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CPY abs
         case (0xCC << 3) | 0:
@@ -6509,16 +6511,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xCC << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCC << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCC << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCC << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP abs
         case (0xCD << 3) | 0:
@@ -6536,16 +6538,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xCD << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCD << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCD << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCD << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DEC abs
         case (0xCE << 3) | 0:
@@ -6572,10 +6574,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xCE << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCE << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DCP abs (undoc)
         case (0xCF << 3) | 0:
@@ -6603,10 +6605,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xCF << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xCF << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BNE #
         case (0xD0 << 3) | 0:
@@ -6633,16 +6635,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD0 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD0 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD0 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD0 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP (zp),Y
         case (0xD1 << 3) | 0:
@@ -6669,10 +6671,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD1 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD1 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0xD2 << 3) | 0:
@@ -6683,22 +6685,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0xD2 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD2 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD2 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD2 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD2 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD2 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DCP (zp),Y (undoc)
         case (0xD3 << 3) | 0:
@@ -6748,16 +6750,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD4 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD4 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD4 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD4 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP zp,X
         case (0xD5 << 3) | 0:
@@ -6775,16 +6777,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD5 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD5 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD5 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD5 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DEC zp,X
         case (0xD6 << 3) | 0:
@@ -6811,10 +6813,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD6 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD6 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DCP zp,X (undoc)
         case (0xD7 << 3) | 0:
@@ -6842,10 +6844,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD7 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD7 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CLD
         case (0xD8 << 3) | 0:
@@ -6856,22 +6858,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD8 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD8 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD8 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD8 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD8 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD8 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP abs,Y
         case (0xD9 << 3) | 0:
@@ -6894,13 +6896,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xD9 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD9 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xD9 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP (undoc)
         case (0xDA << 3) | 0:
@@ -6910,22 +6912,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xDA << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDA << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDA << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDA << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDA << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDA << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DCP abs,Y (undoc)
         case (0xDB << 3) | 0:
@@ -6957,7 +6959,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xDB << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP abs,X (undoc)
         case (0xDC << 3) | 0:
@@ -6979,13 +6981,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xDC << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDC << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDC << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CMP abs,X
         case (0xDD << 3) | 0:
@@ -7008,13 +7010,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xDD << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDD << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xDD << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DEC abs,X
         case (0xDE << 3) | 0:
@@ -7045,7 +7047,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xDE << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // DCP abs,X (undoc)
         case (0xDF << 3) | 0:
@@ -7077,7 +7079,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xDF << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CPX #
         case (0xE0 << 3) | 0:
@@ -7088,22 +7090,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE0 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE0 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE0 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE0 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE0 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE0 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC (zp,X)
         case (0xE1 << 3) | 0:
@@ -7129,10 +7131,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE1 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE1 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP # (undoc)
         case (0xE2 << 3) | 0:
@@ -7142,22 +7144,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE2 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE2 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE2 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE2 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE2 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE2 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ISB (zp,X) (undoc)
         case (0xE3 << 3) | 0:
@@ -7203,19 +7205,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE4 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE4 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE4 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE4 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE4 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC zp
         case (0xE5 << 3) | 0:
@@ -7229,19 +7231,19 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE5 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE5 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE5 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE5 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE5 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // INC zp
         case (0xE6 << 3) | 0:
@@ -7264,13 +7266,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE6 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE6 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE6 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ISB zp (undoc)
         case (0xE7 << 3) | 0:
@@ -7293,13 +7295,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE7 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE7 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE7 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // INX
         case (0xE8 << 3) | 0:
@@ -7311,22 +7313,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE8 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE8 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE8 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE8 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE8 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE8 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC #
         case (0xE9 << 3) | 0:
@@ -7337,22 +7339,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xE9 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE9 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE9 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE9 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE9 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xE9 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP
         case (0xEA << 3) | 0:
@@ -7362,22 +7364,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xEA << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEA << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEA << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEA << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEA << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEA << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC # (undoc)
         case (0xEB << 3) | 0:
@@ -7388,22 +7390,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xEB << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEB << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEB << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEB << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEB << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEB << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // CPX abs
         case (0xEC << 3) | 0:
@@ -7421,16 +7423,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xEC << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEC << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEC << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEC << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC abs
         case (0xED << 3) | 0:
@@ -7448,16 +7450,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xED << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xED << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xED << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xED << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // INC abs
         case (0xEE << 3) | 0:
@@ -7484,10 +7486,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xEE << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEE << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ISB abs (undoc)
         case (0xEF << 3) | 0:
@@ -7514,10 +7516,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xEF << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xEF << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // BEQ #
         case (0xF0 << 3) | 0:
@@ -7544,16 +7546,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF0 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF0 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF0 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF0 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC (zp),Y
         case (0xF1 << 3) | 0:
@@ -7580,10 +7582,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF1 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF1 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // JAM INVALID (undoc)
         case (0xF2 << 3) | 0:
@@ -7594,22 +7596,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             c->IR--;
             break;
         case (0xF2 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF2 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF2 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF2 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF2 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF2 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ISB (zp),Y (undoc)
         case (0xF3 << 3) | 0:
@@ -7658,16 +7660,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF4 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF4 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF4 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF4 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC zp,X
         case (0xF5 << 3) | 0:
@@ -7685,16 +7687,16 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF5 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF5 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF5 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF5 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // INC zp,X
         case (0xF6 << 3) | 0:
@@ -7721,10 +7723,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF6 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF6 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ISB zp,X (undoc)
         case (0xF7 << 3) | 0:
@@ -7751,10 +7753,10 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF7 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF7 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SED
         case (0xF8 << 3) | 0:
@@ -7765,22 +7767,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF8 << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF8 << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF8 << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF8 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF8 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF8 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC abs,Y
         case (0xF9 << 3) | 0:
@@ -7803,13 +7805,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xF9 << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF9 << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xF9 << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP (undoc)
         case (0xFA << 3) | 0:
@@ -7819,22 +7821,22 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xFA << 3) | 2:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFA << 3) | 3:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFA << 3) | 4:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFA << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFA << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFA << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ISB abs,Y (undoc)
         case (0xFB << 3) | 0:
@@ -7865,7 +7867,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xFB << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // NOP abs,X (undoc)
         case (0xFC << 3) | 0:
@@ -7887,13 +7889,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xFC << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFC << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFC << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // SBC abs,X
         case (0xFD << 3) | 0:
@@ -7916,13 +7918,13 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xFD << 3) | 5:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFD << 3) | 6:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         case (0xFD << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // INC abs,X
         case (0xFE << 3) | 0:
@@ -7953,7 +7955,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xFE << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
         // ISB abs,X (undoc)
         case (0xFF << 3) | 0:
@@ -7984,7 +7986,7 @@ void mos6502cpu_tick(mos6502cpu_t* c) {
             _FETCH();
             break;
         case (0xFF << 3) | 7:
-            assert(false);
+            CHIPS_ASSERT(false);
             break;
     }
     MOS6510CPU_SET_PORT(c, c->io_pins);

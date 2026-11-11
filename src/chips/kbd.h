@@ -328,8 +328,10 @@ void kbd_key_down(kbd_t* kbd, int key) {
     // otherwise find a new, free keybuffer slot
     for (int i = 0; i < KBD_MAX_PRESSED_KEYS; i++) {
         key_state_t* k = &kbd->key_buffer[i];
-        if (k->key == key) {
+        // (an empty slot has key 0 too: only occupied slots count, so that key 0 works)
+        if (k->mask != 0 && k->key == key) {
             k->pressed_time = kbd->cur_time;
+            k->released = false;   // Pressed again while still sticky-released: it is held
             _kbd_update_scanout_masks(kbd);
             return;
         }
@@ -352,7 +354,7 @@ void kbd_key_up(kbd_t* kbd, int key) {
     // Find the key in the keybuffer, just set released_frame
     for (int i = 0; i < KBD_MAX_PRESSED_KEYS; i++) {
         key_state_t* k = &kbd->key_buffer[i];
-        if (key == k->key) {
+        if (k->mask != 0 && key == k->key) {
             k->released = true;
         }
     }

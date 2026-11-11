@@ -48,7 +48,7 @@ l'octet de signature en **A+1** (puis PC = A+2), et non en A+2. Avant : 10 000 �
 sur l'opcode 00 (« cycle 2 : A+2 read, attendu A+1 ») ; après : 0. Effet visible quand A+1
 tombe sur un registre d'entrée-sortie (nes-test-roms cpu_exec_space_ppuio, $2007).
 
-## Résultats (2026-09-30)
+## Résultats (2026-09-30, avant le correctif BRK ci-dessus : à remesurer)
 
 | Cœur | Tests | Échecs fonctionnels | Écarts de bus seuls |
 |---|---|---|---|
@@ -88,8 +88,8 @@ Repris de la NES (Neo6502nes v0.4.2, mesuré sur le W65C02S de la carte, fusion 
 
 Écarts de bus du W65C02 (non corrigés) : le cœur relit l'octet d'opérande là où
 les tests attendent une lecture de l'adresse de base (page zéro indexée, `(zp,X)`,
-branchements avec changement de page…), et `BRK` lit l'octet qui suit la
-signature. À corriger avant que la version PC d'un système à entrées-sorties
+branchements avec changement de page…) (le cas `BRK` est corrigé depuis le 2026-10-02). Le nombre
+d'écarts restant n'a pas été remesuré depuis (les données Harte ne sont pas dans le dépôt). À corriger avant que la version PC d'un système à entrées-sorties
 sensibles aux lectures (Apple II, commutateurs `$C0xx`) n'utilise ce cœur.
 
 Le Telestrat (`~/Neo6502TeleStrat`, copie de `w65c02cpu.h`) a repris ces
@@ -99,3 +99,10 @@ corrections en v0.16.7 (0 échec fonctionnel hors `$5C`).
 `tools/cputest/harte.c` (avec son propre `-Isrc` en premier) et s'appuie sur
 l'option `-x`, les codes de sortie (0, 1, 77) et le choix du cœur par
 `-DUSE_65C02`.
+
+## Interruptions et puces (tests/chips, ctest)
+
+Sans données externes, exécutés à chaque `ctest` : `cpu_irq_nmos` et `cpu_irq_c02` (NMI en front à chaque
+appel de `MOS6502CPU_NMI`, WAI suivi d'une IRQ, RESET qui efface une NMI en attente) et `chips`
+(16 formes de l'enveloppe AY, période de T1 du `mos6522via` appelé de 1 en 1 ou de 2 en 2, front CA1
+consommé une fois, `kbd`, `beeper_init`, `mem`).

@@ -150,7 +150,9 @@ void mem_unmap_layer(mem_t* mem, size_t layer);
 // Unmap all memory pages in all layers, also updates the CPU-visible page-table
 void mem_unmap_all(mem_t* mem);
 // Get the host-memory read-ptr of an emulator memory address
-uint8_t* mem_readptr(mem_t* mem, uint16_t addr);
+const uint8_t* mem_readptr(mem_t* mem, uint16_t addr);
+// Get a pointer to the byte a write to addr would hit (the junk page when it is ROM)
+uint8_t* mem_writeptr(mem_t* mem, uint16_t addr);
 // Copy a range of bytes into memory via mem_wr()
 void mem_write_range(mem_t* mem, uint16_t addr, const uint8_t* src, uint32_t num_bytes);
 
@@ -269,7 +271,7 @@ static void _mem_map(mem_t* m, size_t layer, uint16_t addr, uint32_t size, const
         const uint16_t offset = i * MEM_PAGE_SIZE;
         // The page_index will wrap-around
         const uint16_t page_index = ((addr + offset) & MEM_ADDR_MASK) >> MEM_PAGE_SHIFT;
-        CHIPS_ASSERT(page_index <= MEM_NUM_PAGES);
+        CHIPS_ASSERT(page_index < MEM_NUM_PAGES);
         mem_page_t* page = &m->layers[layer][page_index];
         page->read_ptr = (uint8_t*)read_ptr + offset;
         if (0 != write_ptr) {
@@ -320,9 +322,9 @@ void mem_unmap_all(mem_t* m) {
     }
 }
 
-uint8_t* mem_readptr(mem_t* m, uint16_t addr) {
+const uint8_t* mem_readptr(mem_t* m, uint16_t addr) {
     CHIPS_ASSERT(m);
-    return (uint8_t*)&(m->page_table[addr >> MEM_PAGE_SHIFT].read_ptr[addr & MEM_PAGE_MASK]);
+    return &(m->page_table[addr >> MEM_PAGE_SHIFT].read_ptr[addr & MEM_PAGE_MASK]);
 }
 
 uint8_t* mem_writeptr(mem_t* m, uint16_t addr) {

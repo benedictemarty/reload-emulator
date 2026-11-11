@@ -343,9 +343,13 @@ static CHIPS_HOT void _mos6522via_tick_t1(mos6522via_t* c, uint8_t cycles) {
         t->counter -= cycles;
     }
 
-    // Timer underflow
+    // Timer underflow. A call advancing several cycles may run past it: the cycles after the
+    // underflow one belong to the reload and to the next period (otherwise each period is
+    // lengthened by up to cycles - 1)
     t->t_out = (t->counter < 0);
+    int32_t overshoot = 0;
     if (t->t_out) {
+        overshoot = -t->counter - 1;   // Cycles of this call after the underflow cycle
         t->counter = 0xFFFF;
         // Continuous or oneshot mode
         if (MOS6522VIA_ACR_T1_CONTINUOUS(c)) {
@@ -366,9 +370,13 @@ static CHIPS_HOT void _mos6522via_tick_t1(mos6522via_t* c, uint8_t cycles) {
         // _MOS6522VIA_PIP_SET(t->pip, MOS6522VIA_PIP_TIMER_LOAD, 1);
     }
 
-    // Reload timer from latch
-    if (_MOS6522VIA_PIP_TEST(t->pip, MOS6522VIA_PIP_TIMER_LOAD, 0)) {
-        t->counter = t->latch;
+    // Reload timer from latch; the remaining cycles of a multi-cycle call already count down
+    if (overshoot >= 1 && MOS6522VIA_ACR_T1_CONTINUOUS(c)) {
+        // The reload cycle was inside this call: cancel the pending reload
+        _MOS6522VIA_PIP_RESET(t->pip, MOS6522VIA_PIP_TIMER_LOAD);
+        t->counter = (int32_t)t->latch - (overshoot - 1);
+    } else if (_MOS6522VIA_PIP_TEST(t->pip, MOS6522VIA_PIP_TIMER_LOAD, 0)) {
+        t->counter = (int32_t)t->latch - (cycles - 1);
     }
 }
 
@@ -416,24 +424,34 @@ static CHIPS_HOT void _mos6522via_tick_pipeline(mos6522via_t* c) {
 }
 
 static CHIPS_HOT void _mos6522via_update_cab(mos6522via_t* c) {
+    // An edge is consumed once: left set it would raise the flag again after the CPU
+    // acknowledged it (reading/writing the port), every tick, until the caller cleared it
     if (c->pa.c1_triggered) {
         _mos6522via_set_intr(c, MOS6522VIA_IRQ_CA1);
         if (MOS6522VIA_PCR_CA2_AUTO_HS(c)) {
             c->pa.c2_out = true;
         }
+        c->pa.c1_triggered = false;
     }
-    if (c->pa.c2_triggered && MOS6522VIA_PCR_CA2_INPUT(c)) {
-        _mos6522via_set_intr(c, MOS6522VIA_IRQ_CA2);
+    if (c->pa.c2_triggered) {
+        if (MOS6522VIA_PCR_CA2_INPUT(c)) {
+            _mos6522via_set_intr(c, MOS6522VIA_IRQ_CA2);
+        }
+        c->pa.c2_triggered = false;
     }
     if (c->pb.c1_triggered) {
         _mos6522via_set_intr(c, MOS6522VIA_IRQ_CB1);
         if (MOS6522VIA_PCR_CB2_AUTO_HS(c)) {
             c->pb.c2_out = true;
         }
+        c->pb.c1_triggered = false;
     }
     // FIXME: shift-in/out on CB1
-    if (c->pb.c2_triggered && MOS6522VIA_PCR_CB2_INPUT(c)) {
-        _mos6522via_set_intr(c, MOS6522VIA_IRQ_CB2);
+    if (c->pb.c2_triggered) {
+        if (MOS6522VIA_PCR_CB2_INPUT(c)) {
+            _mos6522via_set_intr(c, MOS6522VIA_IRQ_CB2);
+        }
+        c->pb.c2_triggered = false;
     }
 }
 
