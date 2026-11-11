@@ -148,7 +148,7 @@ chips_display_info_t apple2e_display_info(apple2e_t* sys) {
             .height = APPLE2E_SCREEN_HEIGHT * 2,
         },
         .palette = {
-            .ptr = sys ? apple2e_palette : 0,
+            .ptr = sys ? (void*)apple2e_palette : 0,
             .size = sizeof(apple2e_palette),
         }
     };

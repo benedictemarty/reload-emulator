@@ -126,8 +126,11 @@ static inline uint32_t _oric_tape_header_end(oric_tape_t* t, uint32_t at) {
     const int eh = _oric_tape_byte(t, i + 5), el = _oric_tape_byte(t, i + 6);
     const int sh = _oric_tape_byte(t, i + 7), sl = _oric_tape_byte(t, i + 8);
     i += 1 + 9;
+    // Name: 16 characters at most then 0. Bounded: on a tape without a 0 the search used to
+    // run to the end of it, reading the medium (USB/network on the board) inside the emulated cycle
+    const uint32_t name_start = i;
     int b;
-    while ((b = _oric_tape_byte(t, i)) > 0) i++;
+    while ((b = _oric_tape_byte(t, i)) > 0 && i - name_start < 16) i++;
     if (b != 0) return 0;
     i++;
     // Données tronquées de 256 octets au plus : complétées par des $00

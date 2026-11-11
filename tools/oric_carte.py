@@ -24,8 +24,10 @@ import sys
 import tempfile
 import time
 
-ELF = os.environ.get("NEO_ELF", os.path.expanduser(
-    "~/reload-emulator/platforms/rp2040/build/systems/oric/oric_diag.elf"))
+# Par défaut : la construction de ce dépôt (chemin relatif à ce script, pas à un répertoire personnel)
+ELF = os.environ.get("NEO_ELF", os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "platforms", "rp2040", "build", "systems", "oric",
+    "oric_diag.elf"))
 OPENOCD = os.environ.get("NEO_OPENOCD", os.path.expanduser("~/.local/openocd-dev/bin/openocd"))
 
 # Grille du panneau sur le Neo6502 (800 x 480) : src/osd/osd.h avec OSD_COLS / OSD_ROWS de oric.c
@@ -181,7 +183,13 @@ def envoyer(fichiers):
             src, _, nom = spec.partition("=")
             nom = nom or os.path.basename(src)
             data = open(src, "rb").read()
-            octets = " ".join(str(b) for b in nom.encode("ascii") + b"\0")
+            try:
+                brut = nom.encode("ascii")
+            except UnicodeEncodeError:
+                sys.exit(f"nom de fichier non ASCII : {nom}")
+            if len(brut) > 63:   # diag_file_name[64] côté firmware : un nom plus long écrase la RAM voisine
+                sys.exit(f"nom de fichier trop long ({len(brut)} octets, 63 au plus) : {nom}")
+            octets = " ".join(str(b) for b in brut + b"\0")
             tcl.append(f"echo \"{nom} : {len(data)} octets\"")
             tcl.append(f"write_memory 0x{s['diag_file_name']:08x} 8 {{{octets}}}")
             tcl.append(f"mww 0x{cmd:08x} 1 ; attendre")

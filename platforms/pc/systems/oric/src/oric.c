@@ -296,7 +296,7 @@ chips_display_info_t oric_display_info(oric_t* sys) {
             .height = ORIC_SCREEN_HEIGHT,
         },
         .palette = {
-            .ptr = sys ? oric_palette : 0,
+            .ptr = sys ? (void*)oric_palette : 0,   // (ptr is not const-qualified)
             .size = sizeof(oric_palette),
         }
     };
@@ -344,11 +344,31 @@ void app_init(void) {
 
 static void kbd_raw_key_down(int code);
 static void kbd_raw_key_up(int code);
+
+// Shifted character (« : », « * »…): SHIFT goes down at once, the key one frame later, as on the
+// board and in oric_headless (together, the ROM's keyboard scan may read the key without SHIFT)
+static int shifted_pending = -1;
+static bool shifted_release;   // The key was released before it went down: deliver the tap anyway
+static inline bool oric_key_shifted(int code) {
+    return code >= 0 && code < KBD_MAX_KEYS && code != ORIC_KEY_SHIFT &&
+           (state.oric.kbd.key_masks[code] & (1u << (KBD_MAX_COLUMNS + KBD_MAX_LINES)));
+}
+static void shifted_key_service(void) {
+    if (shifted_pending < 0) return;
+    kbd_key_down(&state.oric.kbd, shifted_pending);
+    if (shifted_release) {
+        kbd_key_up(&state.oric.kbd, shifted_pending);
+        kbd_key_up(&state.oric.kbd, ORIC_KEY_SHIFT);
+    }
+    shifted_pending = -1;
+    shifted_release = false;
+}
 static void draw_status_bar(void);
 
 void app_frame(void) {
     state.frame_time_us = clock_frame_time();
     const uint64_t emu_start_time = stm_now();
+    shifted_key_service();   // After a frame with SHIFT alone
     type_service();
     // Tape loading: several frames of emulation per frame while the tape motor runs
     int runs = (tape_turbo && state.oric.tape.inserted && state.oric.tape.motor) ? 16 : 1;
@@ -363,8 +383,6 @@ void app_frame(void) {
 }
 
 void app_input(const sapp_event* event) {
-    const bool shift = event->modifiers & SAPP_MODIFIER_SHIFT;
-    const bool ctrl = event->modifiers & SAPP_MODIFIER_CTRL;
     switch (event->type) {
         int c;
         case SAPP_EVENTTYPE_CHAR:
@@ -384,12 +402,12 @@ void app_input(const sapp_event* event) {
         case SAPP_EVENTTYPE_KEY_UP:
             switch (event->key_code) {
                 case SAPP_KEYCODE_SPACE:        c = 0x20; break;
-                case SAPP_KEYCODE_LEFT:         c = 0x08; break;  // Left arrow
-                case SAPP_KEYCODE_RIGHT:        c = 0x15; break;  // Right arrow
-                case SAPP_KEYCODE_DOWN:         c = 0x0A; break;  // Down arrow
-                case SAPP_KEYCODE_UP:           c = 0x0B; break;  // Up arrow
+                case SAPP_KEYCODE_LEFT:         c = 0x150; break; // Left arrow
+                case SAPP_KEYCODE_RIGHT:        c = 0x14F; break; // Right arrow
+                case SAPP_KEYCODE_DOWN:         c = 0x151; break; // Down arrow
+                case SAPP_KEYCODE_UP:           c = 0x152; break; // Up arrow
                 case SAPP_KEYCODE_ENTER:        c = 0x0D; break;  // Return
-                case SAPP_KEYCODE_BACKSPACE:    c = 0x01; break;  // Delete
+                case SAPP_KEYCODE_BACKSPACE:    c = 0x08; break;  // Delete
                 case SAPP_KEYCODE_ESCAPE:       c = 0x1B; break;  // Escape
                 case SAPP_KEYCODE_F1:           c = 0x13A; break;
                 case SAPP_KEYCODE_F2:           c = 0x13B; break;
@@ -482,6 +500,13 @@ static void kbd_raw_key_down(int code) {
             break;
 
         default:
+            if (oric_key_shifted(code)) {
+                if (shifted_pending >= 0) shifted_key_service();   // The previous one now
+                kbd_key_down(&sys->kbd, ORIC_KEY_SHIFT);
+                shifted_pending = code;
+                shifted_release = false;
+                break;
+            }
             kbd_key_down(&sys->kbd, code);
             break;
     }
@@ -496,7 +521,12 @@ static void kbd_raw_key_up(int code) {
         }
     }
 
+    if (code == shifted_pending) {   // Released before it went down: the tap is delivered by the service
+        shifted_release = true;
+        return;
+    }
     kbd_key_up(&state.oric.kbd, code);
+    if (oric_key_shifted(code)) kbd_key_up(&state.oric.kbd, ORIC_KEY_SHIFT);
 }
 
 static void draw_status_bar(void) {

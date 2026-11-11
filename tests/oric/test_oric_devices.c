@@ -1036,6 +1036,125 @@ static void test_oric_interfaces(void) {
     oric_discard(&sys);
 }
 
+
+/*-- Review fixes (2026-11-11) -----------------------------------------------*/
+
+// Ejecting a disk while a command runs on it used to leave the command reading a cache whose
+// track pointer was NULL
+static void test_eject_during_command(void) {
+    uint8_t* img = make_blank_image(TRACKS, SIDES);
+    wd1793_init(&fdc);
+    CHECK(wd1793_insert_mem(&fdc, 0, img, IMG_SIZE, false));
+    format_image();
+    seek(1);
+    wd1793_write(&fdc, 2, 3);
+    wd1793_write(&fdc, 0, 0x80);        // READ SECTOR
+    for (int i = 0; i < 30; i++) wd1793_tick(&fdc);
+    CHECK(fdc.state != WD1793_IDLE);
+    wd1793_eject(&fdc, 0);              // The user takes the disk out
+    for (int i = 0; i < 200000; i++) wd1793_tick(&fdc);   // Must not crash
+    CHECK(fdc.state == WD1793_IDLE);
+    CHECK(fdc.intrq);                   // (reading the status register clears it: first)
+    const uint8_t st = wd1793_read(&fdc, 0);
+    CHECK((st & WD1793_ST_NOT_READY) != 0 && !(st & WD1793_ST_BUSY));
+    free(img);
+    wd1793_eject(&fdc, 0);
+}
+
+static int flaky_calls;
+static uint8_t* flaky_image;
+static bool flaky_read(void* ctx, uint32_t off, uint8_t* buf, uint32_t len) {
+    (void)ctx;
+    if (flaky_calls++ == 0) return false;   // First read of a track fails (lost network packet)
+    memcpy(buf, flaky_image + off, len);
+    return true;
+}
+
+static void test_dsk_read_errors(void) {
+    // A streamed image without a read function cannot be inserted
+    CHECK(!wd1793_insert_streamed_file(&fdc, 0, ORIC_DSK_HEADER_SIZE + ORIC_DSK_TRACK_SIZE, 0, 0, 0));
+    // A transient read error is not remembered as an unformatted track
+    flaky_image = make_blank_image(1, 1);
+    oric_dsk_t d;
+    static oric_dsk_track_t t;
+    memset(&t, 0, sizeof(t));
+    CHECK(oric_dsk_open_streamed(&d, flaky_image, ORIC_DSK_HEADER_SIZE + ORIC_DSK_TRACK_SIZE, flaky_read, 0, 0));
+    CHECK(!oric_dsk_load_track(&t, &d, 0, 0));    // Fails ...
+    CHECK(oric_dsk_load_track(&t, &d, 0, 0));     // ... and is retried, not cached
+    free(flaky_image);
+}
+
+// The Oric keyboard: ESC and Ctrl+letter (Ctrl+C breaks a program) exist in the matrix
+static void test_keyboard_matrix(void) {
+    oric_rom[0x3FFC] = 0x00;
+    oric_rom[0x3FFD] = 0xC0;
+    static oric_t k;
+    oric_desc_t desc = {
+        .fdc_type = ORIC_FDC_NONE,
+        .roms = {.rom = {.ptr = oric_rom, .size = sizeof(oric_rom)}},
+    };
+    oric_init(&k, &desc);
+    kbd_key_down(&k.kbd, 0x1B);                          // ESC: column 5, line 1
+    CHECK(kbd_test_lines(&k.kbd, 1 << 5) & (1 << 1));
+    kbd_key_up(&k.kbd, 0x1B);
+    for (int i = 0; i < 10; i++) kbd_update(&k.kbd, 16667);
+    CHECK(kbd_test_lines(&k.kbd, 1 << 5) == 0);
+    kbd_key_down(&k.kbd, 0x03);                          // Ctrl+C: C is column 7, line 2; Ctrl column 4, line 2
+    CHECK(kbd_test_lines(&k.kbd, 1 << 7) & (1 << 2));
+    CHECK(kbd_test_lines(&k.kbd, 1 << 4) & (1 << 2));
+    kbd_key_up(&k.kbd, 0x03);
+    for (int i = 0; i < 10; i++) kbd_update(&k.kbd, 16667);
+    // Every Ctrl+letter exists, except Ctrl+H / Ctrl+M (Delete, Return keep their own keys)
+    int missing = 0;
+    for (int c = 1; c <= 26; c++) {
+        if (c == 8 || c == 13) continue;
+        if (!(k.kbd.key_masks[c] & (1u << (KBD_MAX_COLUMNS + KBD_MAX_LINES + 1)))) missing++;
+    }
+    CHECK(missing == 0);
+    oric_discard(&k);
+}
+
+// Blinking text blinks even when the program writes nothing to the screen
+static void test_blink_without_writes(void) {
+    static oric_t k;
+    oric_desc_t desc = {
+        .fdc_type = ORIC_FDC_NONE,
+        .roms = {.rom = {.ptr = oric_rom, .size = sizeof(oric_rom)}},
+    };
+    oric_init(&k, &desc);
+    oric_screen_update(&k);              // First picture
+    int redraws = 0;
+    bool last = k.blink_drawn;
+    for (int i = 0; i < 128; i++) {
+        k.screen_dirty = false;          // Nothing written
+        oric_screen_update(&k);
+        if (k.blink_drawn != last) { redraws++; last = k.blink_drawn; }
+    }
+    CHECK(redraws >= 3);                 // 128 frames = 4 phases of 32
+    oric_discard(&k);
+}
+
+// A tape header without the 0 ending its name: the search is bounded (it used to read to the end)
+static void test_tape_name_bound(void) {
+    static uint8_t bad[400];
+    static oric_tape_t t;
+    memset(bad, 'A', sizeof(bad));
+    memset(bad, 0x16, 4);
+    bad[4] = 0x24;
+    oric_tape_init(&t);
+    oric_tape_insert_mem(&t, bad, sizeof(bad));
+    CHECK(_oric_tape_header_end(&t, 0) == 0);
+    // A 16-character name ended by 0 is still accepted
+    static uint8_t good[64];
+    memset(good, 0x16, 4);
+    good[4] = 0x24;
+    memset(good + 5, 0, 9);
+    memset(good + 14, 'N', 16);
+    good[30] = 0;
+    oric_tape_insert_mem(&t, good, sizeof(good));
+    CHECK(_oric_tape_header_end(&t, 0) == 31);
+}
+
 int main(void) {
     test_dsk_header();
     test_format_and_read();
@@ -1055,6 +1174,11 @@ int main(void) {
     test_via_ier();
     test_oric_interfaces();
     test_audio();
+    test_eject_during_command();
+    test_dsk_read_errors();
+    test_keyboard_matrix();
+    test_blink_without_writes();
+    test_tape_name_bound();
     free(image);
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

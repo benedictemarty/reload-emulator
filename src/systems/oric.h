@@ -84,12 +84,9 @@
 extern "C" {
 #endif
 
-// Bump snapshot version when oric_t memory layout changes
 #define ORIC_KEY_SHIFT 0x1E1   // SHIFT alone (benches), see _oric_init_key_map
-#define ORIC_SNAPSHOT_VERSION (5)   // 2: sample_rate, sample_acc (audio clock); 3: sample_rate_q8; 4: tape_rec.length_unknown; 5: via6522
 
 #define ORIC_FREQUENCY     (1000000)  // 1 MHz
-#define ORIC_MAX_TAPE_SIZE (1 << 16)  // Max size of tape file in bytes
 
 #define ORIC_SCREEN_WIDTH     240  // (240)
 #define ORIC_SCREEN_HEIGHT    224  // (224)
@@ -172,8 +169,10 @@ typedef struct {
     uint8_t overlay_ram[0x4000];
     uint8_t* rom;
     uint8_t* boot_rom;
+    uint32_t boot_rom_size;
 
     int blink_counter;
+    bool blink_drawn;     // Blink phase of the picture on screen
     uint8_t pattr;
 
     uint8_t reserved[3];
@@ -289,10 +288,10 @@ void oric_tick(oric_t* sys);
 
 // Tick Oric instance for a given number of microseconds, return number of executed ticks
 uint32_t oric_exec(oric_t* sys, uint32_t micro_seconds);
-// Take a snapshot, patches pointers to zero or offsets, returns snapshot version
-uint32_t oric_save_snapshot(oric_t* sys, oric_t* dst);
-// Load a snapshot, returns false if snapshot version doesn't match
-bool oric_load_snapshot(oric_t* sys, uint32_t version, oric_t* src);
+// Release a key (kbd_key_down is called directly by the platforms)
+void oric_key_up(oric_t* sys, int key_code);
+// Non-maskable interrupt (the NMI button of the Microdisc interface)
+void oric_nmi(oric_t* sys);
 
 void oric_screen_update(oric_t* sys);
 
@@ -341,7 +340,6 @@ static void _oric_init_key_map(oric_t* sys);
 static void _oric_update_map(oric_t* sys);
 static void _oric_fdc_reset(oric_t* sys);
 
-#define PATTR_50HZ  (0x02)
 #define PATTR_HIRES (0x04)
 #define LATTR_ALT   (0x01)
 #define LATTR_DSIZE (0x02)
@@ -364,6 +362,7 @@ void oric_init(oric_t* sys, const oric_desc_t* desc) {
     CHIPS_ASSERT(desc->roms.rom.ptr && (desc->roms.rom.size == 0x4000));
     sys->rom = desc->roms.rom.ptr;
     sys->boot_rom = desc->roms.boot_rom.ptr;
+    sys->boot_rom_size = (uint32_t)desc->roms.boot_rom.size;
     if (desc->roms.microdisc_rom.ptr) {
         CHIPS_ASSERT(desc->roms.microdisc_rom.size == ORIC_MICRODISC_ROM_SIZE);
         sys->microdisc_rom = desc->roms.microdisc_rom.ptr;
@@ -488,6 +487,9 @@ bool oric_set_fdc(oric_t* sys, oric_fdc_type_t type) {
         (type == ORIC_FDC_JASMIN && !sys->jasmin_rom)) {
         return false;
     }
+    if (type == ORIC_FDC_PRAVETZ && sys->boot_rom_size < 0x200) {
+        return false;   // The boot ROM is read up to offset $1FF
+    }
     if (type == ORIC_FDC_PRAVETZ && !sys->fdc.valid) {
         disk2_fdc_init(&sys->fdc);
     }
@@ -507,7 +509,9 @@ static const uint8_t _oric_ftdos_boot[2][12] = {
 
 oric_fdc_type_t oric_dsk_interface(oric_t* sys, oric_dsk_t* dsk) {
     CHIPS_ASSERT(sys && dsk);
-    oric_dsk_track_t* t = &sys->wd.cache;
+    // Own track buffer: sys->wd.cache belongs to the command that may be running on another disk
+    static oric_dsk_track_t scratch;
+    oric_dsk_track_t* t = &scratch;
     oric_fdc_type_t type = ORIC_FDC_MICRODISC;
     if (oric_dsk_load_track(t, dsk, 0, 0)) {
         for (int i = 0; i < t->num_sectors; i++) {
@@ -905,7 +909,7 @@ static inline __attribute__((always_inline)) void _oric_tick(oric_t* sys) {
         // PB0..PB2: select keyboard matrix line
         uint8_t pb = mos6522via_get_pb(&sys->via);
         uint8_t line = pb & 7;
-        if (line >= 0 && line <= 7) {
+        {   // (line is 0..7)
             uint8_t line_mask = 1 << line;
             // Any key of this line (another line may have a key down too, e.g. SHIFT)
             const uint8_t data = (kbd_scan_lines(&sys->kbd) & line_mask) ? (pb | (1 << 3)) : (pb & ~(1 << 3));
@@ -952,7 +956,7 @@ static void _oric_psg_out(int port_id, uint8_t data, void* user_data) {
     }
 }
 
-// PSG IN callback (read keyboard matrix)
+// PSG IN callback (the PSG ports are not wired to anything here: keyboard lines go through the VIA)
 static uint8_t _oric_psg_in(int port_id, void* user_data) {
     // this shouldn't be called
     (void)port_id;
@@ -961,12 +965,14 @@ static uint8_t _oric_psg_in(int port_id, void* user_data) {
 }
 
 void oric_screen_update(oric_t* sys) {
-    if (!sys->screen_dirty) {
+    // The blink phase advances with every frame, whether or not the program wrote to the
+    // screen: blinking text must keep blinking; redraw when the phase changed
+    const bool blink_state = sys->blink_counter & 0x20;
+    sys->blink_counter = (sys->blink_counter + 1) & 0x3F;
+    if (!sys->screen_dirty && blink_state == sys->blink_drawn) {
         return;
     }
-
-    bool blink_state = sys->blink_counter & 0x20;
-    sys->blink_counter = (sys->blink_counter + 1) & 0x3F;
+    sys->blink_drawn = blink_state;
 
     uint8_t pattr = sys->pattr;
 
@@ -1141,70 +1147,24 @@ static void _oric_init_key_map(oric_t* sys) {
     kbd_register_key(&sys->kbd, 0x08, 5, 5, 0);   // Delete
     kbd_register_key(&sys->kbd, 0x0D, 5, 7, 0);   // Return
 
-    kbd_register_key(&sys->kbd, 0x14, 1, 1, 2);  // Ctrl+T
-    kbd_register_key(&sys->kbd, 0x10, 3, 5, 2);  // Ctrl+P
-    kbd_register_key(&sys->kbd, 0x06, 3, 1, 2);  // Ctrl+F
-    kbd_register_key(&sys->kbd, 0x04, 7, 1, 2);  // Ctrl+D
-    kbd_register_key(&sys->kbd, 0x11, 6, 1, 2);  // Ctrl+Q
-    kbd_register_key(&sys->kbd, 0x13, 6, 6, 2);  // Ctrl+S
-    kbd_register_key(&sys->kbd, 0x0C, 1, 7, 2);  // Ctrl+L
-    kbd_register_key(&sys->kbd, 0x0E, 1, 0, 2);  // Ctrl+N
+    // ESC: column 5, line 1 of the Oric matrix (the two blanks of that row in the map above)
+    kbd_register_key(&sys->kbd, 0x1B, 5, 1, 0);
+
+    // Ctrl+letter = control code 1..26 for every letter (Ctrl+C breaks a BASIC program), except
+    // Ctrl+H and Ctrl+M which are the Delete (0x08) and Return (0x0D) keys registered above
+    for (int column = 0; column < 8; column++) {
+        for (int line = 0; line < 8; line++) {
+            const int c = keymap[line * 8 + column];
+            if (c >= 'A' && c <= 'Z' && c != 'H' && c != 'M') {
+                kbd_register_key(&sys->kbd, c - 'A' + 1, column, line, 2);
+            }
+        }
+    }
 }
 
 void oric_key_up(oric_t* sys, int key_code) {
     CHIPS_ASSERT(sys && sys->valid);
     kbd_key_up(&sys->kbd, key_code);
-}
-
-uint32_t oric_save_snapshot(oric_t* sys, oric_t* dst) {
-    CHIPS_ASSERT(sys && dst);
-    *dst = *sys;
-    chips_debug_snapshot_onsave(&dst->debug);
-    chips_audio_callback_snapshot_onsave(&dst->audio_callback);
-    // m6502_snapshot_onsave(&dst->cpu);
-    ay38910psg_snapshot_onsave(&dst->psg);
-    disk2_fdc_snapshot_onsave(&dst->fdc);
-    mem_snapshot_onsave(&dst->mem, sys);
-    return ORIC_SNAPSHOT_VERSION;
-}
-
-bool oric_load_snapshot(oric_t* sys, uint32_t version, oric_t* src) {
-    CHIPS_ASSERT(sys && src);
-    if (version != ORIC_SNAPSHOT_VERSION) {
-        return false;
-    }
-    static oric_t im;
-    im = *src;
-    chips_debug_snapshot_onload(&im.debug, &sys->debug);
-    chips_audio_callback_snapshot_onload(&im.audio_callback, &sys->audio_callback);
-    // m6502_snapshot_onload(&im.cpu, &sys->cpu);
-    ay38910psg_snapshot_onload(&im.psg, &sys->psg);
-#ifdef ORIC_VIA6522
-    // VIA callbacks (keyboard on port B) and their user data stay those of the running
-    // machine: the saved ones are addresses of another run (ASLR on PC, other firmware)
-    im.via.porta_read = sys->via.porta_read;
-    im.via.porta_write = sys->via.porta_write;
-    im.via.portb_read = sys->via.portb_read;
-    im.via.portb_write = sys->via.portb_write;
-    im.via.userdata = sys->via.userdata;
-    im.via.irq_callback = sys->via.irq_callback;
-    im.via.irq_userdata = sys->via.irq_userdata;
-#endif
-    // The tape stays that of the running machine (read callback, file being written)
-    im.tape = sys->tape;
-    im.tape_rec = sys->tape_rec;
-    im.tape_due = sys->tape_due;
-    disk2_fdc_snapshot_onload(&im.fdc, &sys->fdc);
-    // Disks stay those of the running machine
-    memcpy(im.wd.disk, sys->wd.disk, sizeof(im.wd.disk));
-    memcpy(im.wd.present, sys->wd.present, sizeof(im.wd.present));
-    oric_dsk_invalidate(&sys->wd.cache, 0);
-    im.wd.cache.disk = 0;
-    im.wd.cache.raw = 0;
-    im.wd.cache.num_sectors = 0;
-    mem_snapshot_onload(&im.mem, sys);
-    *sys = im;
-    return true;
 }
 
 #endif  // CHIPS_IMPL

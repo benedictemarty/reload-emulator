@@ -220,12 +220,23 @@ bool wd1793_insert_streamed(wd1793_t* fdc, int drive, const uint8_t* header, uin
 bool wd1793_insert_streamed_file(wd1793_t* fdc, int drive, uint32_t size, oric_dsk_read_t read, oric_dsk_write_t write,
                                  void* ctx) {
     uint8_t header[ORIC_DSK_HEADER_SIZE];
-    if (size < sizeof(header) || !read(ctx, 0, header, sizeof(header))) return false;
+    if (!read || size < sizeof(header) || !read(ctx, 0, header, sizeof(header))) return false;
     return wd1793_insert_streamed(fdc, drive, header, size, read, write, ctx);
 }
 
 void wd1793_eject(wd1793_t* fdc, int drive) {
     if (drive < 0 || drive >= WD1793_MAX_DRIVES) return;
+    if (drive == fdc->drive && fdc->state != WD1793_IDLE) {
+        // A command is running on this drive: it would go on reading/writing the track cache
+        // (raw = 0 after the invalidation, a NULL dereference). Abort it as a drive that
+        // stops answering would
+        fdc->state = WD1793_IDLE;
+        fdc->op = WD1793_OP_NONE;
+        fdc->wait_us = 0;
+        fdc->drq = false;
+        fdc->status = WD1793_ST_NOT_READY;   // (no BUSY, no DRQ)
+        fdc->intrq = true;
+    }
     oric_dsk_invalidate(&fdc->cache, &fdc->disk[drive]);
     memset(&fdc->disk[drive], 0, sizeof(oric_dsk_t));
     fdc->present[drive] = false;

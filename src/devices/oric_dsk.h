@@ -255,6 +255,7 @@ bool oric_dsk_load_track(oric_dsk_track_t* t, oric_dsk_t* dsk, int track, int si
         t->raw = dsk->data + off;
     } else {
         if (!dsk->read(dsk->ctx, off, t->buf, ORIC_DSK_TRACK_SIZE)) {
+            t->disk = 0;   // A transient read error (lost network packet) must not be remembered as an unformatted track
             return false;
         }
         t->raw = t->buf;

@@ -264,7 +264,7 @@ La ROM mesure l'intervalle entre deux fronts montants de CB1 avec le timer 2 (se
   128 × `$00` puis 128 × `$FF`) au lieu de zéros. Le chargeur de Sedoric additionne
   la RAM de `$0080` à `$36FF` et ne charge que 4 secteurs au lieu de 60 si la somme est
   nulle [M].
-- **VIA 6522** (`src/chips/mos6522via.h`, partagé avec le BBC) : désactiver une source
+- **VIA 6522** (`src/chips/via6522.c` par défaut depuis le 2026-10-02 ; `mos6522via.h`, partagé avec le BBC, en option `ORIC_MOS6522VIA`) : désactiver une source
   par l'IER relâche maintenant l'IRQ (IRQ = IFR ∧ IER, fiche technique). L'IRQ restait
   active après `$7F` → `$030E`, ce qui perdait l'interruption de fin de commande de Sedoric.
 - **Timer 1 en monocoup** : pas d'interruption tant que T1C-H n'a pas été écrit
@@ -303,7 +303,7 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
 - `tests/devices/test_hid_media.c` (test `hid_media`) : descripteurs HID des touches
   multimédia (tableau, variable, identifiants de rapport) et pas du volume.
 - `platforms/pc/systems/oric/src/oric_headless.c` : lanceur sans fenêtre utilisé par
-  ces tests (`-c`, `-0..-3`, `-T`, `-V`, `-t`, `-s`, `-i`, `-P`, `-H`, `-p`, `-r`, `-W`).
+  ces tests (`-c`, `-0..-3`, `-T`, `-t`, `-s`, `-i`, `-P`, `-H`, `-p`, `-r`, `-W`).
 
 ## Limites connues
 
@@ -320,3 +320,24 @@ cd platforms/pc/build && cmake .. && make oric_headless oric_devices_test && cte
   la carte (la clé d'essai ne contenait qu'une disquette Telestrat).
 - Formats non pris en charge : MFM_DISK de géométrie 2, ancien format `ORICDISK`,
   images Sedoric brutes (`SED*`), contrôleur BD-500, Telestrat.
+
+## Revue du 2026-11-11 (corrigé)
+
+- Éjecter ou changer une disquette pendant une commande du WD1793 abandonne la commande (statut NOT READY, INTRQ) au lieu de
+  déréférencer une piste nulle ; `oric_dsk_interface` a son propre tampon de piste.
+- Clavier : ESC (colonne 5, ligne 1 de la matrice Oric standard) et Ctrl+lettre pour toutes les lettres (sauf H et M : Delete et
+  Return). **ESC à confirmer sur une vraie machine ou Oricutron.** PC : flèches `0x150/0x14F/0x151/0x152`, Retour arrière = Delete,
+  astuce « SHIFT une trame avant » comme sur la carte et en headless.
+- Clignotement des attributs : la phase avance à chaque image, même sans écriture à l'écran.
+- Cassette : nom de fichier cherché sur 16 caractères au plus ; piste de disque en flux : une erreur de lecture n'est plus mémorisée ;
+  `wd1793_insert_streamed_file` sans fonction de lecture refusé ; ROM de démarrage Pravetz de moins de 512 octets refusée.
+- Instantanés supprimés (code mort). `tools/oric_carte.py envoyer` : nom ASCII de 63 octets au plus ; ELF par défaut relatif au dépôt.
+- Banc d'intégration : un fichier que CSAVE/STORE doit produire et qui manque est un **échec**, plus un « sauté ».
+
+### Reste à faire
+- PC : le mode `tape-turbo` (16 images par image affichée) pousse 16 fois plus d'échantillons audio et laisse le clavier vieillir 16 fois
+  plus vite ; ne pas confondre avec `oric_tape_fast` (patch de la ROM), absent du PC interactif et du panneau de la carte.
+- Carte : CSAVE écrit octet par octet dans le tick (tampon à prévoir) ; `net_poll` peut réordonner la liste pendant que le
+  sélecteur est ouvert ; surfaces OSD sans barrière mémoire entre les cœurs (effet visuel seulement).
+- Pravetz 8D actif par défaut sans `ORIC.CFG` (héritage, à confirmer) ; `src/roms/pravetz8d_roms.h` contient la ROM Atmos 1.1.
+- Recherche de la marque de données sans synchro `A1 A1 A1` (tolérant, volontaire pour les images exotiques).
