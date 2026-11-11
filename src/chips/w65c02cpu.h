@@ -88,7 +88,11 @@ typedef struct {
 #define MOS6502CPU_T                 w65c02cpu_t
 #define MOS6502CPU_DESC_T            w65c02cpu_desc_t
 #define MOS6502CPU_INIT(c, desc)     w65c02cpu_init(c)
-#define MOS6502CPU_RESET(c)          ((c)->res = true)
+// Interrupts requested before the reset are dropped (those requested after it are kept: the
+// reset sequence runs first, then the NMI is served)
+#define MOS6502CPU_RESET(c)          ((c)->res = true, (c)->take_irq = false, (c)->nmi_triggered = false, \
+                                      (c)->nmi_pending = (c)->nmi_prev = (c)->nmi_poll = false, \
+                                      (c)->irq_prev = (c)->irq_poll = false)
 // One NMI edge (a pulse: the level is not latched, so the next call triggers again)
 #define MOS6502CPU_NMI(c)            ((c)->nmi_triggered = true)
 #define MOS6502CPU_TICK(c)           w65c02cpu_tick(c)
@@ -463,10 +467,7 @@ void w65c02cpu_tick(w65c02cpu_t* c) {
         c->stopped = false;
         c->waiting = false;
         c->in_brk = false;
-        // Nothing pending from before the reset may be served after it
-        c->take_irq = false;
-        c->nmi_pending = c->nmi_prev = c->nmi_poll = false;
-        c->irq_prev = c->irq_poll = false;
+
         c->irq_vec = 0xFC;
         c->step = 100;   // Interrupt sequence, reset flavour
         c->sync = false;

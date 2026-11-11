@@ -564,6 +564,10 @@ static bool state_read(void* ctx, void* data, uint32_t len) {
 
 static void state_save(void) {
     char name[16], msg[96];
+    if (!bbc_state_supported(&state.bbc)) {
+        bbc_menu_message(&menu, true, "Instantanés : Model B seulement");
+        return;
+    }
     state_scan(false);
     snprintf(name, sizeof(name), "BBC%04d.STA", (state_last + 1) % 10000);
     state_io_t* const iop = &state_io;
@@ -594,6 +598,16 @@ static bool state_load(int index) {
     memset(iop, 0, sizeof(*iop));
     if (!neo_file_open_path(&iop->f, name, NEO_READ)) {
         bbc_menu_message(&menu, true, "Instantané : lecture impossible");
+        return false;
+    }
+    if (!bbc_state_supported(&state.bbc)) {
+        neo_file_close(&iop->f);
+        bbc_menu_message(&menu, true, "Instantanés : Model B seulement");   // The running machine is untouched
+        return false;
+    }
+    if (iop->f.size < bbc_state_min_size(&state.bbc)) {
+        neo_file_close(&iop->f);
+        bbc_menu_message(&menu, true, "Instantané tronqué : machine inchangée");
         return false;
     }
     const bool header = bbc_state_check(state_read, iop);
@@ -989,6 +1003,22 @@ static void release_pending_keys(void) {
     }
 }
 
+#define SYS_KEY_MENU  1
+#define SYS_KEY_BREAK 2
+static volatile uint8_t sys_key_pending;   // Waiting for sys_key_service
+
+// F11 and BREAK noted by hid_raw_key_down: run between two frames
+static void sys_key_service(void) {
+    const uint8_t p = sys_key_pending;
+    if (!p) return;
+    sys_key_pending = 0;
+    if (p == SYS_KEY_MENU) {
+        menu_toggle();   // Disc menu
+    } else {
+        bbc_key_down(&state.bbc, BBC_KEY_Break);
+    }
+}
+
 void hid_raw_key_down(uint8_t keycode) {
 #ifdef BBC_DIAG
     diag_keys++;
@@ -999,11 +1029,19 @@ void hid_raw_key_down(uint8_t keycode) {
         menu_key(keycode);
         return;
     }
+    // F11 (panel) and BREAK (reset) are run by the main loop (sys_key_service), not here: this
+    // callback can come from a tuh_task run while a disc sector is read from the USB drive
+    // (msc_app.c), i.e. in the middle of an emulated cycle, where a reset would cut the 6502 and
+    // the WD1770 halfway and the panel would repaint from inside the tick (as the Oric does)
     if (keycode == HID_KEY_F11) {
-        menu_toggle();   // Disc menu
+        sys_key_pending = SYS_KEY_MENU;
         return;
     }
     int key = bbc_key_from_hid(keycode);
+    if (key == BBC_KEY_Break) {
+        sys_key_pending = SYS_KEY_BREAK;
+        return;
+    }
     if (key >= 0) {
         key_release_pending[key & 0x7F] = false;
         key_down_frame[key & 0x7F] = emu_frames;
@@ -1132,7 +1170,14 @@ void __not_in_flash_func(core1_main()) {
 /*-- Core 0: CPU bus ---------------------------------------------------------*/
 
 static void __no_inline_not_in_flash_func(run_ticks)(uint32_t n) {
-    for (uint32_t ticks = 0; ticks < n; ticks += 4) {
+    uint32_t ticks = 0;
+    // Back on a multiple of 4 (a resumed snapshot may leave it otherwise: bbc_tick4 would then
+    // stay on its slow path for good); the ticks of the last group that does not fit are dropped
+    while (ticks < n && (state.bbc.system_ticks & 3)) {
+        bbc_tick(&state.bbc);
+        ticks++;
+    }
+    for (; ticks + 4 <= n; ticks += 4) {
         bbc_tick4(&state.bbc);
     }
 }
@@ -1223,6 +1268,7 @@ int main() {
         tuh_task();
         msc_poll();   // Mounts a USB drive outside tuh_task
         release_pending_keys();
+        sys_key_service();
         if (boot_shift_release && emu_frames >= boot_shift_release) {
             bbc_key_up(&state.bbc, BBC_KEY_Shift);
             boot_shift_release = 0;

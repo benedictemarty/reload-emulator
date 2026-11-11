@@ -10,3 +10,4 @@ ROADMAP.md
 changelog.md
 roadmap.md
 tools/__pycache__/
+tests/bbc/__pycache__/

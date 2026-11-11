@@ -43,10 +43,11 @@ def check_screen(name, frames, text, update):
         ppm = Path(d) / "out.ppm"
         screen, status = run(frames, text, ppm)
         png = GOLDEN / f"{name}.png"
-        if update or not png.exists():
+        if update:
             ppm_to_png(ppm, png)
             print(f"  golden écrit : {png.name}")
             return screen, status
+        assert png.exists(), f"{name}: référence {png.name} absente (--update-golden pour la créer ; sans elle le test serait vide)"
         from PIL import Image
         got = Image.open(ppm).convert("RGB").tobytes()
         assert got == png_bytes(png), f"{name}: écran différent du golden {png.name}"
@@ -148,11 +149,11 @@ def main():
             static = body[0:20 * row] + body[140 * row:200 * row]
             digest = hashlib.md5(static).hexdigest()
             golden = GOLDEN / "spellbinder_salle1.md5"
-            if update or not golden.exists():
+            if update:
                 golden.write_text(digest + "\n")
                 print(f"  golden écrit : {golden.name} = {digest}")
             ok = "ula=89" in status or "ula=88" in status   # MODE 4 (ULA 0x88, bit 0 = clignotement)
-            ok = ok and digest == golden.read_text().strip()
+            ok = ok and golden.exists() and digest == golden.read_text().strip()   # Référence absente = échec
             tests.append(("Spellbinder salle 1 (MODE 4)", ok))
     else:
         print(f"  SKIP Spellbinder : {ssd} absent")
@@ -170,6 +171,42 @@ def main():
                             capture_output=True, text=True, timeout=300)
         ok = ok and "ula=4" in r2.stdout.splitlines()[-1] and "32768" in r2.stdout   # MODE 7 fantôme : HIMEM = &8000
         tests.append(("Master 128 : boot, TIME$, MODE 135 fantôme", ok))
+
+    # 6b. Instantanés (US-48, systems/bbc_state.h) : enregistrer, reprendre, fichier tronqué ou abîmé
+    with tempfile.TemporaryDirectory() as d:
+        sta = Path(d) / "etat.sta"
+        r1 = subprocess.run([str(BIN), "-f", "200", "-t", "A%=1234\n", "-S", f"150:{sta}"], capture_output=True, text=True, timeout=300)
+        saved = r1.returncode == 0 and sta.exists() and sta.stat().st_size > 32768
+        tests.append(("instantané : enregistré (-S)", saved))
+        if saved:
+            r2 = subprocess.run([str(BIN), "-L", str(sta), "-f", "120", "-w", "20", "-s", "-t", "PRINT A%\n"], capture_output=True, text=True, timeout=300)
+            tests.append(("instantané : repris (-L), la variable est intacte", r2.returncode == 0 and any(l.strip() == "1234" for l in r2.stdout.splitlines()[:25])))
+            data = sta.read_bytes()
+            cut = Path(d) / "tronque.sta"
+            cut.write_bytes(data[:len(data) // 2])
+            r3 = subprocess.run([str(BIN), "-L", str(cut), "-f", "5"], capture_output=True, text=True, timeout=300)
+            tests.append(("instantané tronqué : refusé sans plantage", r3.returncode == 1 and "not loaded" in r3.stderr))
+            # Octets du corps remplacés par des 0xFF (champs sélecteurs hors bornes) : pas de plantage
+            bad = Path(d) / "abime.sta"
+            bad.write_bytes(data[:16] + bytes([0xFF]) * (len(data) - 16))
+            r4 = subprocess.run([str(BIN), "-L", str(bad), "-f", "5"], capture_output=True, text=True, timeout=300)
+            tests.append(("instantané abîmé : refusé ou repris, sans plantage", r4.returncode in (0, 1)))
+            wrong = Path(d) / "autre.sta"
+            wrong.write_bytes(b"NOTBBC!!" + data[8:])
+            r5 = subprocess.run([str(BIN), "-L", str(wrong), "-f", "5"], capture_output=True, text=True, timeout=300)
+            tests.append(("instantané d'un autre format : refusé", r5.returncode == 1))
+
+    # 6c. Model B : $FE24-$FE2F est la Video ULA (miroirs), pas le sélecteur de ROM
+    screen, _ = run(200, "?&FE24=4\nPRINT 1+1\n")
+    tests.append(("Model B : écrire en $FE24 ne change pas la ROM", any(l.strip() == "2" for l in screen)))
+
+    # 6d. Télétexte : deux paires de double hauteur consécutives (rangées 1-2 puis 3-4)
+    dh = "MODE 7\nVDU31,0,10,141,65,66,31,0,11,141,65,66,31,0,12,141,67,68,31,0,13,141,67,68\n"
+    try:
+        check_screen("mode7_double_hauteur", 500, dh, update)
+        tests.append(("golden mode7_double_hauteur", True))
+    except AssertionError as e:
+        print(" ", e); tests.append(("golden mode7_double_hauteur", False))
 
     # 7b. Tube : second processeur 6502 (ROM Tube 1.10 requise)
     r = subprocess.run([str(BIN), "-2", "-f", "500", "-s", "-t", "PRINT HIMEM,PAGE\n"], capture_output=True, text=True, timeout=300)
@@ -194,7 +231,7 @@ def main():
         tests.append(("bbc_tick4 = bbc_tick (RAM, écran, son)", out[""] == out["-1"]))
 
     # 7d. Tables octet -> pixels construites progressivement comme sur la carte
-    #     (bbc_headless_lut : BBC_LUT_PROGRESSIVE=16, 8 emplacements) : l'écran
+    #     (bbc_headless_lut : BBC_LUT_PROGRESSIVE=16, 10 emplacements) : l'écran
     #     doit être celui du rendu PC, même quand la trame a plus de palettes que
     #     d'emplacements (logo ATARI de Battlezone : 9 palettes par trame)
     lut_bin = Path(os.environ.get("BBC_HEADLESS_LUT", BIN.with_name("bbc_headless_lut")))

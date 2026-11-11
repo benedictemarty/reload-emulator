@@ -2,7 +2,7 @@
 
 // bbc.h
 //
-// BBC Micro Model B emulator in a C header, for the reload framework.
+// BBC Micro (Model B and Master 128) emulator in a C header, for the reload framework.
 //
 // Do this:
 // ~~~C
@@ -30,7 +30,7 @@
 //   system VIA ($FE40-$FE5F: keyboard, IC32 addressable latch, SN76489,
 //   vsync on CA1, 100 Hz timers), user VIA ($FE60-$FE7F), Acorn 1770 FDC
 //   ($FE80 control, $FE84-$FE87 registers, DRQ/INTRQ on NMI, .ssd/.dsd
-//   images), ADC ($FEC0, stub), Tube ($FEE0, absent).
+//   images), ADC ($FEC0, stub), Tube ($FEE0, second processor).
 //
 // Video is rendered one scanline at a time (at the end of every CRTC
 // scanline) into a 640x256 4-bit framebuffer; Video ULA writes made during
@@ -601,6 +601,7 @@ static void _bbc_rtc_tick(bbc_t* sys, uint32_t us) {
     if (sys->rtc_ticks < 1000000) return;
     sys->rtc_ticks -= 1000000;
     uint8_t* r = sys->rtc_regs;
+    if (r[11] & 0x80) return;   // Register B bit 7 (SET): the clock is stopped while the time is being written
     r[12] |= 0x90;   // Register C: update-ended flag (UF) + IRQF, cleared when read
     bool binary = r[11] & 0x04;
     static const uint8_t days_in_month[13] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -616,6 +617,8 @@ static void _bbc_rtc_tick(bbc_t* sys, uint32_t us) {
     RTC_INC(6, 7, 1);
     uint8_t month = binary ? r[8] : (uint8_t)((r[8] >> 4) * 10 + (r[8] & 0x0F));
     uint8_t dim = (month >= 1 && month <= 12) ? days_in_month[month] : 31;
+    const uint8_t year = binary ? r[9] : (uint8_t)((r[9] >> 4) * 10 + (r[9] & 0x0F));
+    if (month == 2 && (year % 4) == 0) dim = 29;   // Leap year (2000-2099)
     RTC_INC(7, dim, 1); if (!carry) return;
     RTC_INC(8, 12, 1); if (!carry) return;
     RTC_INC(9, 99, 0);
@@ -667,8 +670,7 @@ static BBC_HOT void _bbc_update_ic32(bbc_t* sys) {
     mos6522via_set_pb(&sys->sysvia, (uint8_t)((pb & 0x0F) | 0xC0 | fire));
 
     if (sys->model == BBC_MODEL_MASTER) {
-        _bbc_update_rtc(sys, old);
-        _bbc_rtc_tick(sys, 2);
+        _bbc_update_rtc(sys, old);   // (time itself only advances with the 1 MHz tick, not with each port access)
     }
 }
 
@@ -743,7 +745,9 @@ static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                 }
                 break;
             case 0x20:
-                if ((addr & 0xFF) < 0x24) {
+                // Model B: $FE20-$FE2F is the Video ULA (mirrored), $FE30-$FE3F the ROM select latch;
+                // Master 128: the ULA is $FE20-$FE23 only, the 1770 sits behind
+                if ((addr & 0xFF) < (sys->model == BBC_MODEL_MASTER ? 0x24 : 0x30)) {
                     // Video ULA (write only)
                     if (!rw) {
                         _bbc_crtc_sync(sys);   // Exact character position; the clock rate may change
@@ -753,7 +757,7 @@ static BBC_HOT void _bbc_mem_rw(bbc_t* sys, uint16_t addr, bool rw) {
                         } else {
                             sys->ula_ctrl = v;
                         }
-                        if (sys->ula_event_count < 16) {
+                        if (sys->ula_event_count < BBC_LINE_EVENTS) {
                             sys->ula_events[sys->ula_event_count].hcc = sys->hcc;
                             sys->ula_events[sys->ula_event_count].reg = (uint8_t)(addr & 1);
                             sys->ula_events[sys->ula_event_count].value = v;
@@ -996,7 +1000,10 @@ static inline __attribute__((always_inline)) void _bbc_tick_1mhz(bbc_t* sys) {
         // Auto-scan only matters while a key is down (or to drop CA2 after release)
         if (sys->any_key || sys->kbd_ca2) _bbc_update_keyboard(sys, true);
         // IC32 follows port B writes (see _bbc_mem_rw); the Master RTC also counts time
-        if (sys->model == BBC_MODEL_MASTER) _bbc_update_ic32(sys);
+        if (sys->model == BBC_MODEL_MASTER) {
+            _bbc_update_ic32(sys);
+            _bbc_rtc_tick(sys, 2);   // One call per 2 us
+        }
         // Control lines: only on a level change, or to drop the edge seen last time
         if (sys->sysvia.pa.c1_in != sys->vsync || sys->sysvia.pa.c1_triggered) {
             mos6522via_set_ca1(&sys->sysvia, sys->vsync);
@@ -1704,9 +1711,12 @@ static BBC_HOT void _bbc_capture_line(bbc_t* sys, bbc_line_t* ln) {
             if (n > 40) n = 40;
             for (int c = 0; c < n; c++) ln->data[c] = _bbc_vram(sys, lynne, (uint16_t)(((ma + c) & 0x3FF) | 0x7C00));
             if (sys->rc == 0) {
-                // First raster of the row: does the previous row use double height?
+                // First raster of the row: it is the bottom half of a double-height pair when the
+                // previous row used double height and was itself a top row (two pairs in a row
+                // are 1-2 then 3-4: row 3 is a top row even though row 2 holds the code)
+                const bool prev_was_bottom = sys->tt_bottom_row;
                 sys->tt_bottom_row = false;
-                if (sys->vcc > 0) {
+                if (sys->vcc > 0 && !prev_was_bottom) {
                     uint16_t prev = (uint16_t)(ma - ln->chars);
                     for (int c = 0; c < n; c++) {
                         if ((_bbc_vram(sys, lynne, (uint16_t)(((prev + c) & 0x3FF) | 0x7C00)) & 0x7F) == 0x0D) {

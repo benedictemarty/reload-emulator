@@ -308,11 +308,32 @@ BBC_COLD bool bbc_state_save(bbc_t* sys, bbc_state_write_t wr, void* ctx) {
            wr(ctx, &sys->sn, sizeof(sys->sn)) && wr(ctx, &fd, sizeof(fd));
 }
 
+// Taille minimale d'un instantané (sans RAM latérale) : un fichier plus court est tronqué
+BBC_COLD uint32_t bbc_state_min_size(const bbc_t* sys) {
+    return (uint32_t)(sizeof(bbc_state_header_t) + sizeof(bbc_regs_t) + sizeof(bbc_state_core_t) + sizeof(sys->ram) +
+                      sizeof(sys->sysvia) + sizeof(sys->uservia) + sizeof(sys->sn) + sizeof(bbc_state_fdc_t));
+}
+
+// Les instantanés sont ceux du Model B, sans Tube : false (et rien n'est touché) sinon
+BBC_COLD bool bbc_state_supported(const bbc_t* sys) { return sys->model == BBC_MODEL_B && !sys->tube_enabled; }
+
 // Vérifie l'en-tête d'un instantané (lu par rd) ; false : pas un instantané de cette version
 BBC_COLD bool bbc_state_check(bbc_state_read_t rd, void* ctx) {
     bbc_state_header_t h;
     return rd(ctx, &h, sizeof(h)) && !memcmp(h.magic, BBC_STATE_MAGIC, 8) && h.version == BBC_STATE_VERSION &&
            h.model == BBC_MODEL_B && h.sizes == _bbc_state_sizes();
+}
+
+// Champs lus tels quels qui servent d'indice ou de sélecteur : un fichier abîmé (en-tête valide)
+// ne doit pas faire sortir d'un tableau ni appeler un lecteur inexistant
+BBC_COLD static bool _bbc_state_sane(const bbc_t* sys, const bbc_state_core_t* c, const bbc_state_fdc_t* fd) {
+    if (fd->drive < -1 || fd->drive > 1 || (fd->side != 0 && fd->side != 1)) return false;
+    if (c->key_scan_column > 15 || c->crtc_addr > 0x1F) return false;   // (crtc_addr is 5 bits: 18-31 select nothing)
+    if (sys->sn.reg > 7) return false;
+    for (int i = 0; i < 4; i++) {
+        if (sys->sn.vol[i] > 15) return false;
+    }
+    return true;
 }
 
 // Reprend la machine depuis un instantané (lu par rd, en-tête compris). En cas d'échec
@@ -338,6 +359,7 @@ BBC_COLD bool bbc_state_load(bbc_t* sys, bbc_state_read_t rd, void* ctx) {
     }
     sys->sn.sample_period = sample_period;
     sys->sn.sample_accum = sample_accum;
+    if (!_bbc_state_sane(sys, &c, &fd)) return false;   // Machine mélangée : l'appelant la redémarre
     sys->system_ticks = c.system_ticks;
     sys->adc_timer = c.adc_timer;
     sys->field_count = c.field_count;

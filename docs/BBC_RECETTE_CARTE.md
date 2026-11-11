@@ -42,8 +42,10 @@ image en flash), `insertion=demarrer|inserer`, `volume=0..8`.
 - [ ] Enregistrer pendant un accès disque : refus « Instantané refusé : accès disque en cours »,
       aucun fichier à moitié écrit.
 - [ ] Clé retirée : « Instantané : écriture impossible (clé USB ?) ».
-- [ ] Fichier `.STA` d'un autre modèle (Model B sur Master, ou inversement) ou tronqué : message
-      « Pas un instantané de ce BBC (version ou modèle) », la machine continue.
+- [ ] Fichier `.STA` d'un autre format ou d'une autre version : message « Pas un instantané de ce BBC (version ou modèle) » ;
+      fichier **tronqué** : « Instantané tronqué : machine inchangée » ; sur la variante Master (ou avec le Tube), tout
+      instantané : « Instantanés : Model B seulement ». Dans tous ces cas la machine continue sans être touchée.
+- [ ] F12 (BREAK) et F11 pendant un accès disque long : pris en compte entre deux images, sans plantage ni état mélangé.
 - [ ] Taille d'un instantané relevée : ______ Ko ; durée d'enregistrement et de reprise : ______ s.
 
 ## Résultat

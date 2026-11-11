@@ -14,7 +14,7 @@ garde le mode d'emploi détaillé (`docs/UTILISATION.md`) et le banc sur carte
 - Vidéo : CRTC 6845 et Video ULA (écritures en cours de ligne rejouées à leur
   position), SAA5050 pour le MODE 7 (police Bedstead, graphismes, double hauteur…).
 - Son : SN76489 par le latch IC32. Manette : convertisseur uPD7002.
-- Disques : `.ssd` / `.dsd`, lecteur 0 ; WD1770 sans formatage (pas de WRITE TRACK).
+- Disques : `.ssd` / `.dsd`, lecteurs 0 et 1 (sur PC : lecteur 0) ; WD1770 sans formatage (pas de WRITE TRACK).
 - Tube : second processeur 6502 (`src/devices/tube.h`), **sur PC seulement**.
 - Pas de cassette (ACIA 6850 sans réception).
 
@@ -46,8 +46,9 @@ compatibilité 65C02). Le texte à taper doit contenir de vrais retours à la li
   372 MHz, 1,30 V, les 256 lignes BBC). Le cœur 0 capture chaque ligne, le cœur 1 la
   dessine en plans de 1 bit (pas d'image complète en mémoire).
 - **Disques** : clé USB, `.ssd` / `.dsd` à la racine (lecture et écriture) ; **F11** =
-  menu des disques (Entrée = insérer et SHIFT+BREAK, Espace = insérer, Échap =
-  fermer) ; images en flash (`src/images/bbc_images.h`) sans clé.
+  panneau (disques des lecteurs 0 et 1, configuration `BBC.CFG`, instantanés, volume ; voir
+  [BBC_RECETTE_CARTE.md](BBC_RECETTE_CARTE.md)) ; F11 et BREAK sont exécutés entre deux images, jamais au milieu d'un
+  cycle émulé (un secteur lu sur la clé fait tourner `tuh_task`, donc les rappels HID) ; images en flash (`src/images/bbc_images.h`) sans clé.
 - **Clavier** : touches HID vers la matrice BBC ; manette USB = manette 1 ; **Pause** =
   retour au firmware Neo6502 (multiboot, `NEO_SLOT_BBC`, `NEO_SLOT_BBC_MASTER`).
 - **Banc** : `bbc_diag` (ligne de diagnostic, file de touches par SWD) et
@@ -66,6 +67,9 @@ eux) sur `bbc_headless` et `bbc_headless_lut` :
 | `ADVAL` | manette, bouton de tir |
 | barres de raster | changement de palette en cours de ligne |
 | `*SAVE` puis `*INFO` | écriture sur disque (WD1770, `-W`) |
+| instantanés `-S` / `-L` | enregistrer, reprendre (variable intacte), fichier tronqué, abîmé ou d'un autre format refusés |
+| écrire en `$FE24` (Model B) | la ROM n'est pas changée (la Video ULA occupe `$FE20-$FE2F`) |
+| télétexte double hauteur | deux paires consécutives (`mode7_double_hauteur`) |
 | Spellbinder salle 1 | jeu (image hors dépôt : `SPELLBINDER_SSD`) |
 | Master 128, Tube | si les ROM sont présentes |
 | `bbc_tick4` = `bbc_tick` | chemin de la carte = chemin de référence (RAM, écran, son) |
@@ -77,5 +81,13 @@ Les écrans et la RAM de référence ont été comparés à l'émulateur b2
 
 ## Limites
 
-- Tube absent sur la carte ; pas de cassette ; un seul lecteur ; pas de formatage.
+- Tube absent sur la carte ; pas de cassette ; pas de formatage.
+- **Master 128 sur la carte** : le cœur réel n'a pas de broche SYNC (`MOS6502CPU_SYNC` vaut faux), donc `last_pc` reste à 0 et la règle
+  ACCCON E (pilote VDU en `$C000-$DFFF` → LYNNE) ne s'applique pas : les modes fantômes (`MODE 128+`) sont probablement faux. Pas
+  corrigé : à traiter et à confirmer sur la carte. Sur PC (cœur émulé) la règle fonctionne.
+- **Instantanés** : Model B sans Tube seulement (refus annoncé sans toucher la machine) ; un fichier plus court que le minimum est refusé
+  avant toute lecture ; les champs servant d'indice sont validés au chargement ; seules les banques de RAM latérale 0-7 sont enregistrées.
+- BREAK remet les VIA à zéro (comme la ligne de reset d'une vraie machine) : non modifié ; l'écart signalé (démarrage à froid ?) reste à vérifier.
+- Écarts connus non corrigés : VSYNC d'une ligne trop court (le front CA1 est juste), cas limites du CRTC (R0 = 255), SN76489 période 1,
+  `$FE38-$FE3F` du Master, registre à décalage du VIA.
 - Master 128 sur la carte sans RAM latérale.

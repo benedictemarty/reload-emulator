@@ -195,16 +195,48 @@ static uint8_t disc_data[2 * 80 * 10 * 256];
 static size_t disc_size;
 static char disc_path[1024];
 
+// With write=1 the disc in the drive is written back to its file when it is replaced and at exit
+static void write_back_disc(void) {
+    if (!disc_size || !sargs_exists("write") || !sargs_boolean("write")) return;
+    FILE* f = fopen(disc_path, "wb");
+    if (f) {
+        const bool ok = fwrite(disc_data, 1, disc_size, f) == disc_size;
+        if (fclose(f) != 0 || !ok) {
+            fprintf(stderr, "Disc NOT written: %s\n", disc_path);
+            return;
+        }
+        printf("Disc written: %s\n", disc_path);
+    }
+}
+
+static bool has_ext_nocase(const char* path, const char* ext) {
+    const size_t len = strlen(path), e = strlen(ext);
+    if (len <= e) return false;
+    for (size_t i = 0; i < e; i++) {
+        const char c = path[len - e + i];
+        if ((c >= 'A' && c <= 'Z' ? c + 32 : c) != ext[i]) return false;
+    }
+    return true;
+}
+
 static bool load_disc(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) {
         perror(path);
         return false;
     }
-    size_t n = fread(disc_data, 1, sizeof(disc_data), f);
+    static uint8_t probe[sizeof(disc_data) + 1];
+    size_t n = fread(probe, 1, sizeof(probe), f);
     fclose(f);
-    size_t len = strlen(path);
-    int sides = (len > 4 && !strcmp(path + len - 4, ".dsd")) ? 2 : 1;
+    if (n == 0 || n > sizeof(disc_data) || (n % 256) != 0) {
+        // Empty, too big (it would be cut) or not whole sectors: not an .ssd/.dsd
+        fprintf(stderr, "%s: not a disc image (%u bytes: expected 256-byte sectors, at most %u bytes)\n", path,
+                (unsigned)n, (unsigned)sizeof(disc_data));
+        return false;
+    }
+    write_back_disc();   // The disc being replaced
+    memcpy(disc_data, probe, n);
+    int sides = has_ext_nocase(path, ".dsd") ? 2 : 1;
     disc_size = n;
     strncpy(disc_path, path, sizeof(disc_path) - 1);
     bbc_insert_disc(&state.bbc, 0, disc_data, n, sides, false);
@@ -428,6 +460,7 @@ void app_input(const sapp_event* event) {
             int key = bbc_key_from_keycode(event->key_code);
             if (key >= 0) {
                 if (event->type == SAPP_EVENTTYPE_KEY_DOWN) {
+                    if (event->key_repeat && key == BBC_KEY_Break) break;   // Holding F12 must not reset over and over
                     bbc_key_down(&state.bbc, (uint8_t)key);
                 } else {
                     bbc_key_up(&state.bbc, (uint8_t)key);
@@ -446,14 +479,7 @@ void app_input(const sapp_event* event) {
 }
 
 void app_cleanup(void) {
-    if (disc_size && sargs_exists("write") && sargs_boolean("write")) {
-        FILE* f = fopen(disc_path, "wb");
-        if (f) {
-            fwrite(disc_data, 1, disc_size, f);
-            fclose(f);
-            printf("Disc written: %s\n", disc_path);
-        }
-    }
+    write_back_disc();
     bbc_discard(&state.bbc);
     saudio_shutdown();
     gfx_shutdown();

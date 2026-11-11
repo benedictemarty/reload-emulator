@@ -181,8 +181,20 @@ void wd1770_reset(wd1770_t* fdc) {
     fdc->state = WD1770_IDLE;
 }
 
+// A disc taken out or put in while a command runs on that drive: the command ends at once
+// (it would go on with the old sector pointer, or write the old data to the new file)
+static void _wd1770_abort_on(wd1770_t* fdc, int drive) {
+    if (fdc->drive == drive && fdc->state != WD1770_IDLE) {
+        fdc->status = (uint8_t)((fdc->status & ~(WD1770_ST_BUSY | WD1770_ST_DRQ_INDEX)) | WD1770_ST_RNF);   // Error: record not found
+        fdc->drq = false;
+        fdc->intrq = true;
+        fdc->state = WD1770_IDLE;
+    }
+}
+
 void wd1770_insert(wd1770_t* fdc, int drive, uint8_t* data, size_t size, int sides, bool write_protected) {
     if (drive < 0 || drive > 1) return;
+    _wd1770_abort_on(fdc, drive);
     fdc->disc[drive].data = data;
     fdc->disc[drive].size = size;
     fdc->disc[drive].sides = sides ? sides : 1;
@@ -192,6 +204,7 @@ void wd1770_insert(wd1770_t* fdc, int drive, uint8_t* data, size_t size, int sid
 void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd1770_read_sector_t read_sector,
                             wd1770_write_sector_t write_sector, void* ctx) {
     if (drive < 0 || drive > 1) return;
+    _wd1770_abort_on(fdc, drive);
     fdc->disc[drive].data = 0;
     fdc->disc[drive].size = size;
     fdc->disc[drive].sides = sides ? sides : 1;
@@ -203,6 +216,7 @@ void wd1770_insert_streamed(wd1770_t* fdc, int drive, size_t size, int sides, wd
 
 void wd1770_eject(wd1770_t* fdc, int drive) {
     if (drive < 0 || drive > 1) return;
+    _wd1770_abort_on(fdc, drive);
     memset(&fdc->disc[drive], 0, sizeof(wd1770_disc_t));
 }
 
@@ -462,6 +476,11 @@ CHIPS_HOT void wd1770_tick(wd1770_t* fdc) {
             break;
 
         case WD1770_WRITE_BYTE: {
+            if (fdc->drive < 0) {   // Drive deselected during the transfer
+                fdc->status |= WD1770_ST_RNF;
+                _wd1770_end(fdc);
+                break;
+            }
             wd1770_disc_t* disc = &fdc->disc[fdc->drive];
             uint8_t* d = disc->data ? disc->data + fdc->sector_offset : fdc->sector_buf;
             if (fdc->drq) {
