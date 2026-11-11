@@ -61,7 +61,7 @@ static inline int oric_config_volume(const char* v, int max) { return osd_cfg_in
 // Nouveau contenu de ORIC.CFG : les lignes de `old` (peut être NULL) qui ne
 // sont pas à nous, puis nos réglages (lecteurs et cassette vides : omis ;
 // volume < 0 : omis). Retourne la longueur écrite (sans le 0 final), tronquée
-// à out_size - 1.
+// à out_size - 1 : un résultat de out_size - 1 octets est donc à refuser (fin perdue).
 static inline size_t oric_config_merge(const char* old, int fdc, const char* const drives[4], const char* tape, int volume,
                                        char* out, size_t out_size) {
     static const char* const ours[7] = {"fdc", "a", "b", "c", "d", "tape", "volume"};

@@ -314,9 +314,48 @@ static void test_volume(void) {
     CHECK(!neo_storage_ready(1));
 }
 
+
+/*-- Review fixes (2026-11-11) -----------------------------------------------*/
+
+// A server that always answers EAGAIN used to freeze the client for ever
+static int busy_calls, busy_sleeps;
+static uint32_t busy_slept;
+static int busy_xfer(void* ctx, const uint8_t* req, int len, uint8_t* resp, int max, uint32_t timeout_ms) {
+    (void)ctx; (void)len; (void)max; (void)timeout_ms;
+    busy_calls++;
+    resp[0] = req[0]; resp[1] = req[1]; resp[2] = req[2]; resp[3] = req[3];
+    resp[4] = NEO_TNFS_EAGAIN;
+    resp[5] = 0xFF; resp[6] = 0xFF;   // "Come back in 65 s"
+    return 7;
+}
+static void busy_sleep(uint32_t ms) { busy_sleeps++; busy_slept += ms; }
+
+static void test_busy_server(void) {
+    neo_tnfs_t t;
+    neo_tnfs_init(&t, busy_xfer, 0);
+    t.sleep = busy_sleep;
+    CHECK(!neo_tnfs_mount(&t, "/", "", ""));
+    CHECK(busy_calls <= NEO_TNFS_BUSY_MAX + 1 + t.tries);
+    CHECK(busy_sleeps <= NEO_TNFS_BUSY_MAX);
+    CHECK(busy_slept <= (uint32_t)NEO_TNFS_BUSY_MAX * NEO_TNFS_BACKOFF_MAX_MS);   // Back-off capped (was 65 s each)
+}
+
+static void test_server_paths(void) {
+    char p[64];
+    CHECK(_neo_tnfs_abs("jeux/a.tap", p, sizeof(p)) && !strcmp(p, "/jeux/a.tap"));
+    CHECK(_neo_tnfs_abs("/a.tap", p, sizeof(p)) && !strcmp(p, "/a.tap"));
+    CHECK(_neo_tnfs_abs("..a", p, sizeof(p)) && _neo_tnfs_abs("a..", p, sizeof(p)));   // Not path components
+    CHECK(!_neo_tnfs_abs("../x", p, sizeof(p)));
+    CHECK(!_neo_tnfs_abs("a/../x", p, sizeof(p)));
+    CHECK(!_neo_tnfs_abs("a/..", p, sizeof(p)));
+    CHECK(!_neo_tnfs_abs("0123456789012345678901234567890123456789012345678901234567890123", p, sizeof(p)));   // Would be cut
+}
+
 int main(void) {
     test_client();
     test_volume();
+    test_busy_server();
+    test_server_paths();
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
 }

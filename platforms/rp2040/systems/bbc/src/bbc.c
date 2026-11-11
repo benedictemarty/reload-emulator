@@ -486,7 +486,12 @@ static bool config_apply(void) {
 static void config_save(void) {
     char* old = (char*)state.bbc.lines;
     char* out = old + CONFIG_TEXT_MAX;
-    uint32_t n = 0;
+    uint32_t n = 0, file_size = 0;
+    if (neo_file_size(NEO_VOL_USB, BBC_CONFIG_FILE, &file_size) && file_size > CONFIG_TEXT_MAX - 1) {
+        bbc_menu_message(&menu, true, "BBC.CFG trop long : non réécrit");   // It would be written back cut
+        memset(state.bbc.lines, 0, sizeof(state.bbc.lines));
+        return;
+    }
     if (!neo_file_load(NEO_VOL_USB, BBC_CONFIG_FILE, (uint8_t*)old, CONFIG_TEXT_MAX - 1, &n, false)) n = 0;
     old[n] = 0;
     char names[2][BBC_CONFIG_NAME_LEN + 1];
@@ -496,6 +501,11 @@ static void config_save(void) {
     }
     const char* drives[2] = {names[0], names[1]};
     const size_t len = bbc_config_merge(old, drives, menu.autoboot, audio_volume_level(), out, CONFIG_TEXT_MAX);
+    if (len + 1 >= CONFIG_TEXT_MAX) {   // Does not fit: its end would be lost
+        bbc_menu_message(&menu, true, "BBC.CFG trop long : non réécrit");
+        memset(state.bbc.lines, 0, sizeof(state.bbc.lines));
+        return;
+    }
     const bool ok = usb_scanned && neo_file_save(NEO_VOL_USB, BBC_CONFIG_FILE, (const uint8_t*)out, (uint32_t)len);
     memset(state.bbc.lines, 0, sizeof(state.bbc.lines));   // Blank until the emulation captures them again
     bbc_menu_message(&menu, !ok, ok ? "Configuration enregistrée dans BBC.CFG" : "BBC.CFG : écriture impossible (clé USB ?)");

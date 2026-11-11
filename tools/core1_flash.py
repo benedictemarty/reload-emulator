@@ -228,4 +228,10 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        # objdump / nm / c++filt absent or failing: code 2 (an uncaught exception exits with 1,
+        # which means "function in flash reached")
+        print(f"erreur : {e}", file=sys.stderr)
+        sys.exit(2)

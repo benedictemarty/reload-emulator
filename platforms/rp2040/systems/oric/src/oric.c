@@ -705,11 +705,21 @@ static void config_load(void) {
 static void config_save(void) {
     static char out[1536];
     char *old = config_text;
-    uint32_t n = 0;
+    uint32_t n = 0, file_size = 0;
+    // A file longer than the buffer would be read cut and written back cut: its end (profiles,
+    // comments) lost. Refused instead
+    if (neo_file_size(NEO_VOL_USB, ORIC_CONFIG_FILE, &file_size) && file_size > sizeof(config_text) - 1) {
+        oric_menu_message(&menu, true, "ORIC.CFG trop long (1,5 Ko max) : non réécrit");
+        return;
+    }
     if (!neo_file_load(NEO_VOL_USB, ORIC_CONFIG_FILE, (uint8_t *)old, sizeof(config_text) - 1, &n, false)) n = 0;
     old[n] = 0;
     const char *drives[ORIC_MENU_DRIVES] = {menu.drive[0], menu.drive[1], menu.drive[2], menu.drive[3]};
     size_t len = oric_config_merge(old, menu.fdc, drives, menu.tape, audio_volume_level(), out, sizeof(out));
+    if (len + 1 >= sizeof(out)) {   // The result does not fit: its end would be lost
+        oric_menu_message(&menu, true, "ORIC.CFG trop long (1,5 Ko max) : non réécrit");
+        return;
+    }
     bool ok = neo_file_save(NEO_VOL_USB, ORIC_CONFIG_FILE, (const uint8_t *)out, (uint32_t)len);
     oric_menu_message(&menu, !ok, ok ? "Configuration enregistrée dans ORIC.CFG" : "ORIC.CFG : écriture impossible");
 }

@@ -264,6 +264,7 @@ static inline void osd_row_clear(osd_row_t* r, uint8_t attr) {
 
 static inline int osd_row_puts(osd_row_t* r, int col, const char* str, uint8_t attr) {
     int n = 0;
+    if (col < 0) return 0;   // (a negative column wrote before the row)
     while (*str && col + n < OSD_COLS) {
         r->ch[col + n] = osd_next_char(&str);
         r->attr[col + n] = attr;

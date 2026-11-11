@@ -91,7 +91,32 @@ static int host_read(void* ctx, uint32_t timeout_us) {
     return head == tail ? -1 : to_host[head++ % sizeof(to_host)];
 }
 
+// Arguments of AT commands: " , \ escaped (an SSID holding them gave an invalid command)
+static void test_quote(void) {
+    char q[16];
+    CHECK(_neo_esp_quote(q, sizeof(q), "MaBox") && !strcmp(q, "MaBox"));
+    CHECK(_neo_esp_quote(q, sizeof(q), "a\"b,c\\d") && !strcmp(q, "a\\\"b\\,c\\\\d"));
+    CHECK(!_neo_esp_quote(q, 4, "abcd"));        // Does not fit (room for the 0)
+    CHECK(!_neo_esp_quote(q, 4, "ab,"));         // The escape does not fit either
+    CHECK(_neo_esp_quote(q, 4, "abc") && !strcmp(q, "abc"));
+}
+
+// A +IPD length above a datagram is not a datagram: no 100 KB swallowed
+static void test_ipd_bound(void) {
+    static neo_esp_t e2;
+    neo_esp_init(&e2, host_write, host_read, 0);
+    const char* junk = "+IPD,99999:";
+    for (const char* c = junk; *c; c++) _neo_esp_feed(&e2, (uint8_t)*c);
+    CHECK(e2.ipd == 0);
+    _neo_esp_feed(&e2, '\n');   // (the junk line ends: the next +IPD starts a line)
+    const char* ok = "+IPD,5:";
+    for (const char* c = ok; *c; c++) _neo_esp_feed(&e2, (uint8_t)*c);
+    CHECK(e2.ipd == 2 && e2.ipd_len == 5);
+}
+
 int main(void) {
+    test_quote();
+    test_ipd_bound();
     modem.out = modem_out;
     modem.udp_open = udp_open;
     modem.udp_send = udp_send;

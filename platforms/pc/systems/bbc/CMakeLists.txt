@@ -1,3 +1,5 @@
+# Executables and integration tests that need the BBC ROMs (src/roms/bbc_roms.h, not in the repository)
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/roms/bbc_roms.h)
 #=== EXECUTABLE: bbc
 
 if(CMAKE_SYSTEM_NAME STREQUAL Windows)
@@ -34,6 +36,16 @@ if (NOT MSVC)
     target_compile_options(bbc_headless_lut PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 
+#=== Integration tests (tests/bbc/test_bbc_pc.py, Python 3 + Pillow): boot, BASIC,
+# screens compared to references, sound, joystick, disc write, Master 128, Tube,
+# bbc_tick4 = bbc_tick, progressive tables = PC rendering (docs/BBC.md)
+add_test(NAME bbc_integration COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/bbc/test_bbc_pc.py)
+set_tests_properties(bbc_integration PROPERTIES SKIP_RETURN_CODE 77
+    ENVIRONMENT "BBC_HEADLESS=$<TARGET_FILE:bbc_headless>;BBC_HEADLESS_LUT=$<TARGET_FILE:bbc_headless_lut>")
+else()
+    message(STATUS "bbc_roms.h absent: bbc, bbc_headless and bbc_integration not built")
+endif()
+
 #=== EXECUTABLE: bbc_menu_test (control panel of the board, src/osd/bbc_menu.h)
 
 add_executable(bbc_menu_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/bbc/test_bbc_menu.c)
@@ -43,9 +55,3 @@ if (NOT MSVC)
 endif()
 add_test(NAME bbc_menu COMMAND bbc_menu_test)
 
-#=== Integration tests (tests/bbc/test_bbc_pc.py, Python 3 + Pillow): boot, BASIC,
-# screens compared to references, sound, joystick, disc write, Master 128, Tube,
-# bbc_tick4 = bbc_tick, progressive tables = PC rendering (docs/BBC.md)
-add_test(NAME bbc_integration COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/bbc/test_bbc_pc.py)
-set_tests_properties(bbc_integration PROPERTIES SKIP_RETURN_CODE 77
-    ENVIRONMENT "BBC_HEADLESS=$<TARGET_FILE:bbc_headless>;BBC_HEADLESS_LUT=$<TARGET_FILE:bbc_headless_lut>")

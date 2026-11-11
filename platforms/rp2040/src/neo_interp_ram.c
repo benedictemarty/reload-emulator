@@ -8,6 +8,9 @@
 // démarrage, pire ligne 113 µs, puis 0 ligne et 39 µs avec ces copies en RAM.
 // Trouvé dans le binaire par Neo6502Trinity (tools/core1_flash.py le détecte).
 //
+// Licence : le corps des deux fonctions reprend `hardware_interp/interp.c` du SDK Pico, © 2020 Raspberry Pi
+// (Trading) Ltd, licence BSD 3-clauses (SDK : pico-sdk/LICENSE.TXT) ; le reste est © bmarty, zlib/libpng.
+//
 // À ajouter aux sources d'un firmware qui utilise l'encodeur 16 bpp, avec :
 //   target_link_options(cible PRIVATE -Wl,--wrap=interp_save -Wl,--wrap=interp_restore)
 // Même code que hardware_interp/interp.c du SDK.

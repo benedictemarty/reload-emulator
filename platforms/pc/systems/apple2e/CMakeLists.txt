@@ -1,3 +1,6 @@
+# Needs src/roms/apple2ee_roms.h (ROMs are not in the repository: see the .example files); without it only the
+# tests that need no ROM are built
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/roms/apple2ee_roms.h)
 #=== EXECUTABLE: apple2e
 
 if(CMAKE_SYSTEM_NAME STREQUAL Windows)
@@ -23,4 +26,7 @@ endif()
 # explicitly strip dead code
 if (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_SYSTEM_NAME STREQUAL Emscripten)
     target_link_options(apple2e PRIVATE LINKER:-dead_strip)
+endif()
+else()
+    message(STATUS "apple2ee_roms.h absent: apple2e not built")
 endif()

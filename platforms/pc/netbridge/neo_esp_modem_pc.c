@@ -53,13 +53,21 @@ static bool udp_open(void* ctx, const char* host, uint16_t port) {
     memcpy(&server, res->ai_addr, sizeof(server));
     server.sin_port = htons(port);
     freeaddrinfo(res);
-    if (udp_fd < 0) udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udp_fd >= 0) {   // New server: a new socket, connected to it (only its datagrams come back)
+        close(udp_fd);
+        udp_fd = -1;
+    }
+    udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udp_fd >= 0 && connect(udp_fd, (struct sockaddr*)&server, sizeof(server)) != 0) {
+        close(udp_fd);
+        udp_fd = -1;
+    }
     return udp_fd >= 0;
 }
 
 static bool udp_send(void* ctx, const uint8_t* p, int n) {
     (void)ctx;
-    return sendto(udp_fd, p, (size_t)n, 0, (const struct sockaddr*)&server, sizeof(server)) == n;
+    return udp_fd >= 0 && send(udp_fd, p, (size_t)n, 0) == n;
 }
 
 static void out2(void* ctx, const uint8_t* p, int n) {
@@ -79,6 +87,7 @@ static bool tnfs_send(void* ctx, const char* host, uint16_t port, const uint8_t*
     (void)ctx;
     if (udp2_fd < 0 || strcmp(host, relay_host) || port != relay_port) {
         if (udp2_fd >= 0) close(udp2_fd);
+        udp2_fd = -1;   // (a failure below must not leave a closed descriptor to poll)
         struct addrinfo hints, *res = 0;
         memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_INET;
@@ -89,7 +98,12 @@ static bool tnfs_send(void* ctx, const char* host, uint16_t port, const uint8_t*
         a.sin_port = htons(port);
         freeaddrinfo(res);
         udp2_fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (udp2_fd < 0 || connect(udp2_fd, (struct sockaddr*)&a, sizeof(a))) return false;
+        if (udp2_fd < 0) return false;
+        if (connect(udp2_fd, (struct sockaddr*)&a, sizeof(a))) {
+            close(udp2_fd);
+            udp2_fd = -1;
+            return false;
+        }
         snprintf(relay_host, sizeof(relay_host), "%s", host);
         relay_port = port;
     }

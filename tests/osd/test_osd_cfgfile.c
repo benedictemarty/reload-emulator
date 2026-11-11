@@ -55,8 +55,12 @@ static void test_write(void) {
     osd_cfg_writer_init(&w, out, 8);   // Tronqué, toujours terminé
     osd_cfg_put(&w, "%s", "0123456789");
     CHECK(w.len == 7 && strlen(out) == 7);
+    CHECK(w.overflow);        // Le texte ne tenait pas
     osd_cfg_put(&w, "x");
     CHECK(w.len == 7);
+    osd_cfg_writer_init(&w, out, sizeof(out));
+    osd_cfg_put(&w, "tient\n");
+    CHECK(!w.overflow);       // Rien de perdu
 }
 
 int main(void) {

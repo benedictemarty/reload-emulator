@@ -7,6 +7,9 @@
 # A project that is absent is skipped.
 #   tools/socle_consommateurs.sh
 set -u
+# Dossier qui contient les projets consommateurs (défaut : le répertoire personnel)
+PROJETS="${SOCLE_PROJETS:-$HOME}"
+JOBS="$(nproc 2>/dev/null || echo 4)"
 RELOAD="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -19,8 +22,8 @@ for v in "Neo6502nes||nes" "Neo6502TeleStrat||telestrat" "Neo6502TeleStrat|-DTEL
     name="${rest#*|}"
     # A project, or a path to its CMake root when it is not platforms/rp2040
     case "$p" in
-        */*) src="$HOME/$p" ;;
-        *) src="$HOME/$p/platforms/rp2040" ;;
+        */*) src="$PROJETS/$p" ;;
+        *) src="$PROJETS/$p/platforms/rp2040" ;;
     esac
     if [ ! -d "$src" ]; then
         echo "SKIP  $name : $src absent"
@@ -28,7 +31,7 @@ for v in "Neo6502nes||nes" "Neo6502TeleStrat||telestrat" "Neo6502TeleStrat|-DTEL
     fi
     # shellcheck disable=SC2086
     if cmake -S "$src" -B "$TMP/$name" -DRELOAD_DIR="$RELOAD" $opts >"$TMP/$name.log" 2>&1 &&
-       cmake --build "$TMP/$name" -j8 >>"$TMP/$name.log" 2>&1; then
+       cmake --build "$TMP/$name" -j"$JOBS" >>"$TMP/$name.log" 2>&1; then
         margins=""
         for map in $(find "$TMP/$name" -name '*.elf.map'); do
             lim=$(grep -m1 "__HeapLimit = " "$map" | awk '{print $1}')

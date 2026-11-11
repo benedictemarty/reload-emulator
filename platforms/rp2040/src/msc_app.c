@@ -43,7 +43,14 @@ bool msc_inquiry_complete = false;
 
 // The volume is mounted from the main loop (msc_poll), not inside this TinyUSB
 // callback: f_mount reads sectors, which runs tuh_task again from within it
-static volatile uint8_t msc_pending_mount;   // dev_addr + 1, 0 = none
+// Several drives may answer their INQUIRY before msc_poll runs (two keys plugged at start-up):
+// a small queue of dev_addr + 1 (0 = empty slot). Likewise for the unmounts: f_unmount from the
+// callback could run inside a FatFs call (tuh_task runs while a sector is read), and FatFs is
+// not reentrant: the callback only notes the slot, msc_poll does the work
+#define MSC_PENDING 4
+static volatile uint8_t msc_pending_mount[MSC_PENDING];
+static volatile uint8_t msc_pending_umount;   // Bit n: slot n to unmount
+void neo_fatfs_drop_files(void);              // neo_storage_fatfs.c
 
 bool inquiry_complete_cb(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_data) {
     if (cb_data->csw->status != 0) {
@@ -57,20 +64,41 @@ bool inquiry_complete_cb(uint8_t dev_addr, tuh_msc_complete_data_t const *cb_dat
 
     printf("MSC %luMB %.8s %.16s rev %.4s\r\n", (unsigned long)size, msc_inquiry_resp.vendor_id, msc_inquiry_resp.product_id,
            msc_inquiry_resp.product_rev);
-    msc_pending_mount = (uint8_t)(dev_addr + 1);
+    for (int i = 0; i < MSC_PENDING; i++) {
+        if (!msc_pending_mount[i]) {
+            msc_pending_mount[i] = (uint8_t)(dev_addr + 1);
+            return true;
+        }
+    }
+    printf("MSC: too many drives waiting to be mounted\r\n");
     return true;
 }
 
 // Call from the main loop (outside tuh_task): mounts a volume that answered INQUIRY
 void msc_poll(void) {
-    if (!msc_pending_mount) return;
-    uint8_t dev_addr = (uint8_t)(msc_pending_mount - 1);
-    msc_pending_mount = 0;
-    if (!tuh_msc_mounted(dev_addr)) return;   // Pulled out since its INQUIRY: no slot for a dead address
+    // Unplugged drives first: volume released, files of the emulators dropped
+    while (msc_pending_umount) {
+        int slot = 0;
+        while (!(msc_pending_umount & (1u << slot))) slot++;
+        msc_pending_umount &= (uint8_t)~(1u << slot);
+        char drive_path[3] = "0:";
+        drive_path[0] += slot;
+        f_unmount(drive_path);
+        neo_fatfs_drop_files();
+        msc_slot_addr[slot] = 0;
+        bool any = false;
+        for (int i = 0; i < MSC_SLOTS; i++) any = any || msc_slot_addr[i];
+        msc_inquiry_complete = any;
+    }
+    for (int q = 0; q < MSC_PENDING; q++) {
+    if (!msc_pending_mount[q]) continue;
+    uint8_t dev_addr = (uint8_t)(msc_pending_mount[q] - 1);
+    msc_pending_mount[q] = 0;
+    if (!tuh_msc_mounted(dev_addr)) continue;   // Pulled out since its INQUIRY: no slot for a dead address
     const int slot = msc_slot_take(dev_addr);
     if (slot < 0) {
         printf("MSC: no free volume for USB address %u (%d volumes)\r\n", dev_addr, MSC_SLOTS);
-        return;
+        continue;
     }
 
     char drive_path[3] = "0:";
@@ -79,16 +107,14 @@ void msc_poll(void) {
     if (result != FR_OK) {
         printf("MSC filesystem mount failed (%d)\r\n", result);
         msc_slot_addr[slot] = 0;   // Slot given back: the drive may be plugged in again
-        return;
+        continue;
     }
 
-    char s[2];
-    if (FR_OK != f_getcwd(s, 2)) {
-        f_chdrive(drive_path);
-        f_chdir("/");
-    }
+    f_chdrive(drive_path);   // Default drive: the one mounted last
+    f_chdir("/");
 
     msc_inquiry_complete = true;
+    }
 }
 
 void tuh_msc_mount_cb(uint8_t dev_addr) {
@@ -98,15 +124,16 @@ void tuh_msc_mount_cb(uint8_t dev_addr) {
 }
 
 void tuh_msc_umount_cb(uint8_t dev_addr) {
-    if (msc_pending_mount == (uint8_t)(dev_addr + 1)) msc_pending_mount = 0;   // Pulled out before msc_poll
+    for (int i = 0; i < MSC_PENDING; i++) {
+        if (msc_pending_mount[i] == (uint8_t)(dev_addr + 1)) msc_pending_mount[i] = 0;   // Pulled out before msc_poll
+    }
     const int slot = msc_slot(dev_addr);
     if (slot < 0) return;
-    char drive_path[3] = "0:";
-    drive_path[0] += slot;
-    f_unmount(drive_path);
-    msc_slot_addr[slot] = 0;
+    // Not unmounted here (see MSC_PENDING): the slot keeps its address until msc_poll, disk_status
+    // already reports the drive gone (tuh_msc_mounted is false)
+    msc_pending_umount |= (uint8_t)(1u << slot);
     bool any = false;
-    for (int i = 0; i < MSC_SLOTS; i++) any = any || msc_slot_addr[i];
+    for (int i = 0; i < MSC_SLOTS; i++) any = any || (msc_slot_addr[i] && !(msc_pending_umount & (1u << i)));
     msc_inquiry_complete = any;
 }
 
@@ -165,6 +192,7 @@ DSTATUS disk_initialize(BYTE pdrv) {
 #define MSC_IO_TRIES 3
 #else
 #define MSC_IO_TRIES 1
+#warning "TinyUSB without patches/tinyusb-data-seq.sh: a USB data sequence error panics the board (re-run cmake after a submodule update)"
 #endif
 volatile uint32_t msc_recoveries, msc_io_errors;   // Counters (bench over SWD)
 
@@ -206,7 +234,24 @@ static void msc_reset_recovery(uint8_t daddr) {
 static void msc_reset_recovery(uint8_t daddr) { (void)daddr; }
 #endif
 
+static DRESULT disk_rw_1(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count, bool write);
+
+// READ(10) / WRITE(10) carry 16 bits of block count: a bigger FatFs request (large exFAT
+// clusters) is cut, instead of being truncated and reported complete
 static DRESULT disk_rw(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count, bool write) {
+    const uint32_t block = pdrv < MSC_SLOTS && msc_slot_addr[pdrv] ? tuh_msc_get_block_size(msc_slot_addr[pdrv], 0) : 512;
+    while (count) {
+        const UINT n = count > 0xFFFF ? 0xFFFF : count;
+        const DRESULT r = disk_rw_1(pdrv, buff, sector, n, write);
+        if (r != RES_OK) return r;
+        buff += (size_t)n * (block ? block : 512);
+        sector += n;
+        count -= n;
+    }
+    return RES_OK;
+}
+
+static DRESULT disk_rw_1(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count, bool write) {
     if (pdrv >= MSC_SLOTS || !msc_slot_addr[pdrv]) return RES_PARERR;
     uint8_t const dev_addr = msc_slot_addr[pdrv];
     uint8_t const lun = 0;

@@ -1,7 +1,7 @@
 #pragma once
 
 // neo_serial_posix.h — liaison série du PC (port série USB, pseudo-terminal)
-// pour neo_netlink (src/devices/neo_netlink.h) : la passerelle Pico W branchée
+// pour neo_dgram_serial.h (src/devices/neo_dgram_serial.h) : la passerelle Pico W branchée
 // sur le PC (/dev/ttyACM0) ou la passerelle PC des tests (pseudo-terminal).
 //
 // Copyright (c) 2026 bmarty — licence zlib/libpng (voir src/devices/neo_storage.h)

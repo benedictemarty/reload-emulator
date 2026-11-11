@@ -92,14 +92,15 @@ modem composite 7 → 17/15 : le port TNFS risque de ne pas monter. D'où le rep
 Convenu avec le Telestrat (2026-10-01) : longueur **petit-boutiste** ; serveur donné par
 `AT$TNFS=hôte:port` sur le port 0, gardé en flash par `AT&W` ; le port 1 ne porte que des
 datagrammes. Reste : l'accord de la session qui tient PicoWiFiModemUSB, puis son
-implémentation. L'Oric n'utilise pas encore ce port (il parle AT UDP sur le port 0).
+implémentation (section « Convenu avec le Telestrat » : état au moment de cet accord). Depuis, l'Oric prend le port TNFS s'il
+est monté (`CFG_TUH_CDC=2`), sinon l'AT UDP sur le port 0.
 Coût mesuré par le Telestrat : `CFG_TUH_CDC=2` = +504 o de RAM (sa variante 64 Ko tomberait
 à 220 o, sous son seuil de 300 o : place à regagner avant).
 
 ## Sur la Neo6502 (Oric, 2026-10-01, compilé, non essayé sur la carte)
 
 - `platforms/rp2040/src/neo_cdc_serial.c` (socle) : port série USB côté hôte (TinyUSB CDC,
-  `CFG_TUH_CDC=1` dans le CMake du firmware) au format de `neo_esp_init`.
+  `CFG_TUH_CDC=1` pour un seul port, `=2` avec le port TNFS : variante standard de l'Oric ; `oric_diag` reste à 1) au format de `neo_esp_init`.
 - Oric : `ORIC.CFG` `reseau=`, `wifi=`, `wifi_mdp=` ; au branchement du modem, le volume
   `NEO_VOL_NET` est monté et ses fichiers listés `net:/NOM` dans le menu ; `neo_storage_split`
   choisit le volume d'après le préfixe du nom. RAM : 3,6 Ko (oric : 9 416 o de marge,
@@ -119,3 +120,19 @@ Coût mesuré par le Telestrat : `CFG_TUH_CDC=2` = +504 o de RAM (sa variante 64
 ## Reste à faire
 
 - Essai du Pico W sur PC, puis sur la carte ; UART de l'UEXT en option ; autres systèmes.
+
+## Revue du 2026-11-11 (corrigé)
+
+- TNFS : une réponse EAGAIN n'est plus attendue sans fin (10 au plus, attente plafonnée à 2 s) ; réponse de montage sans version refusée ;
+  noms de répertoire vides ignorés, listing borné à 4096 entrées ; chemins `..` ou trop longs pour le message refusés (ils étaient
+  tronqués). Côté FatFs : un chemin tronqué est refusé aussi (il aurait ouvert ou écrasé un autre fichier).
+- Modem AT : arguments `"` `,` `\` échappés (SSID, mot de passe, hôte) ; longueur `+IPD` limitée à un datagramme ; attente bornée en octets
+  (un modem qui parle sans arrêt ne bloque plus) ; purges des trames périmées bornées.
+- PC : sockets UDP connectées au serveur (seules ses réponses sont acceptées), descripteurs remis à -1 après échec.
+- Carte : manettes retirées au débranchement, un clavier = un état précédent, code de touche hors table ignoré, ErrorRollOver ignoré ;
+  `f_unmount` fait par `msc_poll` (pas dans le rappel TinyUSB), plusieurs clés en attente de montage, fichiers abandonnés libérés ;
+  requêtes de plus de 65 535 secteurs découpées ; `ORIC.CFG` / `BBC.CFG` trop longs : non réécrits.
+
+### Reste à faire
+- Mise en route du modem encore bloquante (jusqu'à environ 2 min), chaque requête TNFS jusqu'à 2,5 s : une machine à états non bloquante.
+- Délai d'E/S USB dépassé : le transfert reste en cours (sans le correctif TinyUSB, pas d'abandon possible).

@@ -133,7 +133,7 @@ static void _neo_esp_feed(neo_esp_t* e, uint8_t c) {
         return;
     }
     if (e->ipd == 1) {
-        if (c >= '0' && c <= '9' && e->ipd_len < 100000) {
+        if (c >= '0' && c <= '9' && e->ipd_len * 10 + (uint32_t)(c - '0') <= NEO_ESP_DGRAM_MAX) {   // Longer than a datagram: not ours
             e->ipd_len = e->ipd_len * 10 + (uint32_t)(c - '0');
         } else if (c == ':' && e->ipd_len > 0) {
             e->ipd = 2;
@@ -164,16 +164,34 @@ static void _neo_esp_feed(neo_esp_t* e, uint8_t c) {
 // Reads until done(e) or timeout; true if done
 static bool _neo_esp_wait(neo_esp_t* e, bool (*done)(const neo_esp_t*), uint32_t timeout_ms) {
     uint32_t left_us = timeout_ms * 1000u;
+    // The time only counts the silences: a modem that never stops talking would hold us for
+    // ever. Bound the bytes read as well (about what 115200 bauds carry in the time allowed)
+    uint32_t budget = timeout_ms * 12u + 64u;
     while (!done(e)) {
-        if (!left_us) return false;
+        if (!left_us || !budget) return false;
         const uint32_t step = left_us < 10000u ? left_us : 10000u;
         const int c = e->read_byte(e->ctx, step);
         if (c < 0) {
             left_us -= step;
             continue;
         }
+        budget--;
         _neo_esp_feed(e, (uint8_t)c);
     }
+    return true;
+}
+
+// Argument of an AT command between quotes: " , \ are escaped with a backslash (an SSID or a
+// password holding them made an invalid command). False when it does not fit
+static bool _neo_esp_quote(char* dst, size_t size, const char* src) {
+    size_t k = 0;
+    for (; *src; src++) {
+        const bool special = *src == '"' || *src == ',' || *src == '\\';
+        if (k + (special ? 2 : 1) + 1 > size) return false;
+        if (special) dst[k++] = '\\';
+        dst[k++] = *src;
+    }
+    dst[k] = 0;
     return true;
 }
 
@@ -199,7 +217,9 @@ bool neo_esp_prepare(neo_esp_t* e, const char* ssid, const char* password) {
     neo_esp_command(e, "ATE0", 1000);
     char cmd[160];
     if (ssid && ssid[0]) {
-        if (snprintf(cmd, sizeof(cmd), "AT+CWJAP_DEF=\"%s\",\"%s\"", ssid, password ? password : "") >= (int)sizeof(cmd)) {
+        char qs[72], qp[72];
+        if (!_neo_esp_quote(qs, sizeof(qs), ssid) || !_neo_esp_quote(qp, sizeof(qp), password ? password : "") ||
+            snprintf(cmd, sizeof(cmd), "AT+CWJAP_DEF=\"%s\",\"%s\"", qs, qp) >= (int)sizeof(cmd)) {
             return false;
         }
         // The modem retries up to 30 s (Neo6502picowifi). ERROR is not fatal: with its host
@@ -235,8 +255,9 @@ bool neo_esp_enable_tnfs_usb(neo_esp_t* e) {
 }
 
 bool neo_esp_tnfs_server(neo_esp_t* e, const char* host, uint16_t port) {
-    char cmd[160];
-    if (snprintf(cmd, sizeof(cmd), "AT$TNFS=\"%s\",%u", host, (unsigned)port) >= (int)sizeof(cmd)) return false;
+    char cmd[160], qh[96];
+    if (!_neo_esp_quote(qh, sizeof(qh), host) ||
+        snprintf(cmd, sizeof(cmd), "AT$TNFS=\"%s\",%u", qh, (unsigned)port) >= (int)sizeof(cmd)) return false;
     return neo_esp_command(e, cmd, 2000);
 }
 
@@ -249,9 +270,10 @@ bool neo_esp_open_udp(neo_esp_t* e, const char* host, uint16_t port, const char*
 }
 
 bool neo_esp_udp_start(neo_esp_t* e, const char* host, uint16_t port) {
-    char cmd[160];
+    char cmd[160], qh[96];
     neo_esp_command(e, "AT+CIPCLOSE", 1000);   // ERROR when no link is open: fine
-    if (snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"UDP\",\"%s\",%u", host, (unsigned)port) >= (int)sizeof(cmd)) return false;
+    if (!_neo_esp_quote(qh, sizeof(qh), host) ||
+        snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"UDP\",\"%s\",%u", qh, (unsigned)port) >= (int)sizeof(cmd)) return false;
     e->open = neo_esp_command(e, cmd, 12000);   // A host name: DNS up to 10 s in the modem
     e->queued = 0;
     return e->open;

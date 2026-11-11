@@ -43,6 +43,7 @@ static inline bool _osd_cfg_end(char c) { return c == 0 || c == '\r' || c == '\n
 
 // Copie la valeur (jusqu'à la fin de ligne, espaces de fin retirés), tronquée à size - 1
 static inline void osd_cfg_copy(char* dst, size_t size, const char* v) {
+    if (!size) return;   // No room, not even for the 0
     size_t n = 0;
     while (!_osd_cfg_end(v[n])) n++;
     while (n > 0 && v[n - 1] == ' ') n--;
@@ -54,7 +55,7 @@ static inline void osd_cfg_copy(char* dst, size_t size, const char* v) {
 // Entier de 0 à max (3 chiffres au plus, espaces de fin admis), -1 si invalide
 static inline int osd_cfg_int(const char* v, int max) {
     int n = 0, digits = 0;
-    while (v[digits] >= '0' && v[digits] <= '9' && digits < 3) n = n * 10 + (v[digits++] - '0');
+    while (digits < 3 && v[digits] >= '0' && v[digits] <= '9') n = n * 10 + (v[digits++] - '0');
     const char e = v[digits];
     if (!digits || (!_osd_cfg_end(e) && e != ' ') || n > max) return -1;
     return n;
@@ -89,23 +90,35 @@ typedef struct {
     char* out;
     size_t size;   // Taille du tampon (le texte est toujours terminé par 0)
     size_t len;    // Longueur écrite
+    bool overflow; // Du texte n'a pas tenu dans le tampon (il manque la fin : ne pas enregistrer)
 } osd_cfg_writer_t;
 
 static inline void osd_cfg_writer_init(osd_cfg_writer_t* w, char* out, size_t size) {
     w->out = out;
     w->size = size;
     w->len = 0;
+    w->overflow = false;
     if (size) out[0] = 0;
 }
 
 // Ajoute du texte au format printf (tronqué à la fin du tampon)
 static inline void osd_cfg_put(osd_cfg_writer_t* w, const char* fmt, ...) {
-    if (w->len + 1 >= w->size) return;
+    if (w->len + 1 >= w->size) {
+        w->overflow = true;
+        return;
+    }
     va_list ap;
     va_start(ap, fmt);
     const int n = vsnprintf(w->out + w->len, w->size - w->len, fmt, ap);
     va_end(ap);
-    if (n > 0) w->len += (size_t)n < w->size - w->len ? (size_t)n : w->size - w->len - 1;
+    if (n > 0) {
+        if ((size_t)n < w->size - w->len) {
+            w->len += (size_t)n;
+        } else {
+            w->len += w->size - w->len - 1;
+            w->overflow = true;
+        }
+    }
 }
 
 // Recopie les lignes de `old` (peut être NULL) dont la clé n'est pas dans `keys` (ces clés-là

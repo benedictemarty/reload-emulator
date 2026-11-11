@@ -5,6 +5,8 @@ if (ORIC_PC_NMOS)
     add_compile_definitions(ORIC_NMOS)
 endif()
 
+# Executables and integration tests that need the Oric ROM (src/roms/oric_roms.h, not in the repository)
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/roms/oric_roms.h)
 #=== EXECUTABLE: oric
 
 if(CMAKE_SYSTEM_NAME STREQUAL Windows)
@@ -53,6 +55,12 @@ endif()
 add_test(NAME oric_integration_mos
          COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/run_integration.sh $<TARGET_FILE:oric_headless_mos>)
 set_tests_properties(oric_integration_mos PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME oric_integration
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/run_integration.sh $<TARGET_FILE:oric_headless>)
+set_tests_properties(oric_integration PROPERTIES SKIP_RETURN_CODE 77)
+else()
+    message(STATUS "oric_roms.h absent: oric, oric_headless and their integration tests not built")
+endif()
 
 #=== EXECUTABLE: oric_devices_test (unit tests of the disk and tape devices, no ROM needed)
 
@@ -62,9 +70,6 @@ if (NOT MSVC)
     target_compile_options(oric_devices_test PUBLIC -Wall -Wextra -Wsign-compare)
 endif()
 add_test(NAME oric_devices COMMAND oric_devices_test)
-add_test(NAME oric_integration
-         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tests/oric/run_integration.sh $<TARGET_FILE:oric_headless>)
-set_tests_properties(oric_integration PROPERTIES SKIP_RETURN_CODE 77)
 
 #=== EXECUTABLE: oric_menu_test (control panel, ORIC.CFG, OSD rendering)
 

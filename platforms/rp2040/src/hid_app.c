@@ -3,11 +3,15 @@
 // taken from ~/Neo6502TeleStrat), handed to hid_media_key_down(); these
 // interfaces are not taken for gamepads.
 #include <stdio.h>
+#include <string.h>
 #include "tusb.h"
 #include "class/hid/hid.h"
 #include "../../../src/devices/hid_media.h"   // Relative: consumers of these sources (RELOAD_DIR) need no include path
 
 #define GAMEPAD_MAX_DEVICES 2
+#ifndef HID_KEY_ERROR_ROLLOVER
+#define HID_KEY_ERROR_ROLLOVER 0x01   // Usage reported in every slot when too many keys are down
+#endif
 
 typedef struct {
     uint16_t id;
@@ -19,7 +23,31 @@ typedef struct {
 
 uint8_t const keycode_to_ascii_table[128][2] = {HID_KEYCODE_TO_ASCII};
 
-static hid_keyboard_report_t prev_report = {0, 0, {0}};
+// One previous report per keyboard: with two keyboards, a single one made each report release the
+// other keyboard's keys and press its own again
+#define KBD_MAX 2
+static struct {
+    uint8_t dev_addr, instance;
+    bool used;
+    hid_keyboard_report_t report;
+} kbd_slots[KBD_MAX];
+static hid_keyboard_report_t prev_report = {0, 0, {0}};   // Previous report of the keyboard being processed
+
+static int kbd_slot(uint8_t dev_addr, uint8_t instance, bool take) {
+    int free_slot = -1;
+    for (int i = 0; i < KBD_MAX; i++) {
+        if (kbd_slots[i].used && kbd_slots[i].dev_addr == dev_addr && kbd_slots[i].instance == instance) return i;
+        if (!kbd_slots[i].used && free_slot < 0) free_slot = i;
+    }
+    if (take && free_slot >= 0) {
+        kbd_slots[free_slot].used = true;
+        kbd_slots[free_slot].dev_addr = dev_addr;
+        kbd_slots[free_slot].instance = instance;
+        memset(&kbd_slots[free_slot].report, 0, sizeof(hid_keyboard_report_t));
+        return free_slot;
+    }
+    return -1;
+}
 
 static gamepad_t gamepads[GAMEPAD_MAX_DEVICES];
 static int8_t gamepads_count = 0;
@@ -112,7 +140,8 @@ static void process_kbd_report(hid_keyboard_report_t const* r1, hid_keyboard_rep
                 bool is_shift = r1->modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT);
                 bool is_ctrl = r1->modifier & (KEYBOARD_MODIFIER_LEFTCTRL | KEYBOARD_MODIFIER_RIGHTCTRL);
                 uint8_t keycode = r1->keycode[i];
-                int code = keycode_to_ascii_table[keycode][is_shift];
+                // The table has 128 entries: the codes above (JIS Ro/Yen, Korean keys…) read beyond it
+                int code = keycode < 128 ? keycode_to_ascii_table[keycode][is_shift] : 0;
                 if (code == 0 && keycode != 0) {
                     code = keycode | 0x100;
                 } else if (is_ctrl) {
@@ -215,7 +244,7 @@ static uint32_t get_button_state_04284001(uint8_t const* report) {
     return button_state;
 }
 
-// Support for PS3 controller (05832060)
+// Support for the iBuffalo SNES-style USB gamepad (0583:2060; this was labelled « PS3 controller »)
 static uint8_t get_hat_state_05832060(uint8_t const* report) {
     uint8_t hat_state = 0;
     uint8_t dpad = report[2] & 0x0F;
@@ -281,7 +310,7 @@ static uint32_t get_button_state_05832060(uint8_t const* report) {
     return button_state;
 }
 
-// Support for PS4 controller (054C0CDA)
+// Support for the PlayStation Classic controller (054C:0CDA; this was labelled « PS4 controller »)
 static uint8_t get_hat_state_054C0CDA(uint8_t const* report) {
     uint8_t hat_state = 0;
     uint8_t dpad = report[5] & 0x0F;
@@ -694,7 +723,7 @@ static void process_gamepad_report(uint8_t dev_addr, uint8_t instance, uint8_t c
             gamepad->button_state = get_button_state_04284001(report);
             break;
             
-        case 0x05832060: // PS3 controller
+        case 0x05832060: // iBuffalo gamepad
             if (len != 8) {
                 return;
             }
@@ -702,7 +731,7 @@ static void process_gamepad_report(uint8_t dev_addr, uint8_t instance, uint8_t c
             gamepad->button_state = get_button_state_05832060(report);
             break;
             
-        case 0x054C0CDA: // PS4 controller
+        case 0x054C0CDA: // PlayStation Classic controller
             if (len != 10) {
                 return;
             }
@@ -843,11 +872,20 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
     }
 
     switch (itf_protocol) {
-        case HID_ITF_PROTOCOL_KEYBOARD:
-            find_pressed_keys((const hid_keyboard_report_t*)report);
-            find_released_keys((const hid_keyboard_report_t*)report);
-            memcpy(&prev_report, report, sizeof(hid_keyboard_report_t));
+        case HID_ITF_PROTOCOL_KEYBOARD: {
+            if (len < sizeof(hid_keyboard_report_t)) break;   // Short report (boot protocol is 8 bytes)
+            const hid_keyboard_report_t* kr = (const hid_keyboard_report_t*)report;
+            // ErrorRollOver (usage 1 in every slot: more keys down than the keyboard can report):
+            // not a key, and not a release of the keys held: the state is kept
+            if (kr->keycode[0] == HID_KEY_ERROR_ROLLOVER) break;
+            const int slot = kbd_slot(dev_addr, instance, true);
+            if (slot < 0) break;   // More keyboards than KBD_MAX
+            memcpy(&prev_report, &kbd_slots[slot].report, sizeof(prev_report));
+            find_pressed_keys(kr);
+            find_released_keys(kr);
+            memcpy(&kbd_slots[slot].report, report, sizeof(hid_keyboard_report_t));
             break;
+        }
 
         case HID_ITF_PROTOCOL_NONE:
             process_gamepad_report(dev_addr, instance, report, len);
@@ -863,4 +901,26 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
     media_itf_t* media = find_media(dev_addr, instance);
     if (media) media->used = false;
+    // Keyboard: release what it held, free its slot
+    const int ks = kbd_slot(dev_addr, instance, false);
+    if (ks >= 0) {
+        hid_keyboard_report_t none;
+        memset(&none, 0, sizeof(none));
+        memcpy(&prev_report, &kbd_slots[ks].report, sizeof(prev_report));
+        find_released_keys(&none);
+        kbd_slots[ks].used = false;
+    }
+    // Gamepad: buttons released, entry removed (the count never went down: after two plug/unplug
+    // cycles every new gamepad was ignored, and a reused USB address got the old VID:PID)
+    const uint16_t id = (uint16_t)(dev_addr << 8 | instance);
+    for (int i = 0; i < gamepads_count; i++) {
+        if (gamepads[i].id != id) continue;
+        gamepad_state_update(gamepads[i].index, 0, 0);
+        for (int j = i; j < gamepads_count - 1; j++) {
+            gamepads[j] = gamepads[j + 1];
+            gamepads[j].index = (uint8_t)j;
+        }
+        gamepads_count--;
+        break;
+    }
 }

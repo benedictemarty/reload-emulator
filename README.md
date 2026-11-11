@@ -86,6 +86,10 @@ make
 # Done
 ```
 
+Without the ROM headers (they are not in the repository, see the `.example` files in `src/roms`),
+only the emulators whose ROM is present are built; the unit tests that need no ROM are always built
+and run by `ctest` (and by the CI, `.github/workflows/ci.yml`). Licences and origins: [NOTICE.md](NOTICE.md).
+
 ### Oric on the PC
 
 ```bash

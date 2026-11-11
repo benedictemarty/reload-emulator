@@ -24,6 +24,7 @@ typedef struct {
 
 static bool neo_tnfs_udp_open(neo_tnfs_udp_t* u, const char* host, uint16_t port) {
     memset(u, 0, sizeof(*u));
+    u->fd = -1;   // (0 would be stdin if the open fails and the caller closes anyway)
     struct addrinfo hints, *res = 0;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -33,6 +34,12 @@ static bool neo_tnfs_udp_open(neo_tnfs_udp_t* u, const char* host, uint16_t port
     u->server.sin_port = htons(port);
     freeaddrinfo(res);
     u->fd = socket(AF_INET, SOCK_DGRAM, 0);
+    // Connected: only the server's datagrams are accepted (the session and sequence numbers were
+    // the only filter, and any host could inject a reply)
+    if (u->fd >= 0 && connect(u->fd, (const struct sockaddr*)&u->server, sizeof(u->server)) != 0) {
+        close(u->fd);
+        u->fd = -1;
+    }
     return u->fd >= 0;
 }
 
@@ -44,7 +51,7 @@ static void neo_tnfs_udp_close(neo_tnfs_udp_t* u) {
 // One datagram out, the first datagram from the server back (or -1 after timeout_ms)
 static int neo_tnfs_udp_xfer(void* ctx, const uint8_t* req, int len, uint8_t* resp, int max, uint32_t timeout_ms) {
     neo_tnfs_udp_t* u = (neo_tnfs_udp_t*)ctx;
-    if (sendto(u->fd, req, (size_t)len, 0, (const struct sockaddr*)&u->server, sizeof(u->server)) != len) return -1;
+    if (send(u->fd, req, (size_t)len, 0) != len) return -1;
     struct pollfd p = {u->fd, POLLIN, 0};
     if (poll(&p, 1, (int)timeout_ms) <= 0) return -1;
     const ssize_t n = recv(u->fd, resp, (size_t)max, 0);

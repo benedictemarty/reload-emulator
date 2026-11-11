@@ -37,6 +37,9 @@ extern "C" {
 #define NEO_TNFS_IO_MAX   512   // Données par READ / WRITE (tnfsd : MAX_IOSZ)
 #ifndef NEO_TNFS_FILES
 #define NEO_TNFS_FILES    8     // Descripteurs suivis par le volume
+#define NEO_TNFS_BUSY_MAX       10     // Réponses EAGAIN acceptées pour une requête
+#define NEO_TNFS_BACKOFF_MAX_MS 2000   // Attente maximale demandée par un EAGAIN
+#define NEO_TNFS_LIST_MAX       4096   // Entrées d'un répertoire lues au plus
 #endif
 
 // Commandes
@@ -145,6 +148,7 @@ static int _neo_tnfs_call(neo_tnfs_t* t, uint8_t cmd, int plen) {
     _neo_tnfs_le16(t->req, cmd == NEO_TNFS_MOUNT ? 0 : t->session);
     t->req[2] = t->seq;
     t->req[3] = cmd;
+    int busy = 0;   // EAGAIN answers so far
     for (int attempt = 0; attempt < t->tries; attempt++) {
         if (attempt) t->resent++;
         t->sent++;
@@ -152,9 +156,13 @@ static int _neo_tnfs_call(neo_tnfs_t* t, uint8_t cmd, int plen) {
         if (n < 5 || t->resp[2] != t->seq || t->resp[3] != cmd) continue;   // Lost, or a late answer to another request
         if (cmd != NEO_TNFS_MOUNT && _neo_tnfs_get16(t->resp) != t->session) continue;
         t->error = t->resp[4];
-        if (t->error == NEO_TNFS_EAGAIN && n >= 7) {
-            // Server busy: back off as asked, then ask again (new sequence number)
-            if (t->sleep) t->sleep(_neo_tnfs_get16(t->resp + 5));
+        if (t->error == NEO_TNFS_EAGAIN && n >= 7 && busy < NEO_TNFS_BUSY_MAX) {
+            // Server busy: back off as asked (at most NEO_TNFS_BACKOFF_MAX_MS), then ask again (new
+            // sequence number). Bounded: a server that always says EAGAIN used to freeze the emulation
+            busy++;
+            uint16_t ms = _neo_tnfs_get16(t->resp + 5);
+            if (ms > NEO_TNFS_BACKOFF_MAX_MS) ms = NEO_TNFS_BACKOFF_MAX_MS;
+            if (t->sleep) t->sleep(ms);
             t->seq++;
             t->req[2] = t->seq;
             attempt--;   // A back-off is not a failed attempt
@@ -180,7 +188,7 @@ bool neo_tnfs_mount(neo_tnfs_t* t, const char* path, const char* user, const cha
     n += _neo_tnfs_str(p + n, path);
     n += _neo_tnfs_str(p + n, user ? user : "");
     n += _neo_tnfs_str(p + n, password ? password : "");
-    if (_neo_tnfs_call(t, NEO_TNFS_MOUNT, n) < 0) return false;
+    if (_neo_tnfs_call(t, NEO_TNFS_MOUNT, n) < 2) return false;   // (the answer carries the version: 2 bytes)
     t->session = _neo_tnfs_get16(t->resp);
     t->version = _neo_tnfs_get16(t->resp + 5);
     t->mounted = true;
@@ -259,6 +267,7 @@ bool neo_tnfs_list(neo_tnfs_t* t, const char* path, neo_tnfs_dir_cb_t cb, void* 
     if (_neo_tnfs_call(t, NEO_TNFS_OPENDIR, _neo_tnfs_str(t->req + 4, path)) < 1) return false;
     const uint8_t dh = t->resp[5];
     bool ok = true;
+    int entries = 0;
     for (;;) {
         t->req[4] = dh;
         const int n = _neo_tnfs_call(t, NEO_TNFS_READDIR, 1);
@@ -266,6 +275,7 @@ bool neo_tnfs_list(neo_tnfs_t* t, const char* path, neo_tnfs_dir_cb_t cb, void* 
             ok = t->error == NEO_TNFS_EOF;
             break;
         }
+        if (++entries > NEO_TNFS_LIST_MAX) break;   // A server that never ends the listing
         char name[NEO_STORAGE_NAME_MAX];
         int k = 0;
         while (k < n && k < (int)sizeof(name) - 1 && t->resp[5 + k]) {
@@ -273,6 +283,7 @@ bool neo_tnfs_list(neo_tnfs_t* t, const char* path, neo_tnfs_dir_cb_t cb, void* 
             k++;
         }
         name[k] = 0;
+        if (k == 0) continue;   // Empty name: nothing to report
         if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
         if (!cb(name, user)) break;
     }
@@ -288,11 +299,19 @@ bool neo_tnfs_unlink(neo_tnfs_t* t, const char* path) {
 
 // Volume neo_storage : le descripteur est un neo_tnfs_file_t (qui pointe vers son
 // client) ; la position du serveur est suivie : un LSEEK seulement quand elle change
-static void _neo_tnfs_abs(const char* path, char* out, size_t n) {
+// Absolute server path of `path`; false when it does not fit (a truncated path would reach
+// another file) or climbs out with ".."
+static bool _neo_tnfs_abs(const char* path, char* out, size_t n) {
     const size_t k = path[0] == '/' ? 0 : 1;
+    const size_t len = strlen(path);
+    if (len + k + 1 > n) return false;
+    for (const char* q = path; (q = strstr(q, "..")) != 0; q += 2) {
+        const bool start = q == path || q[-1] == '/', end = q[2] == 0 || q[2] == '/';
+        if (start && end) return false;
+    }
     out[0] = '/';
-    strncpy(out + k, path, n - 1 - k);
-    out[n - 1] = 0;
+    memcpy(out + k, path, len + 1);
+    return true;
 }
 
 static bool _neo_tnfs_ready(void* vol) { return ((neo_tnfs_t*)vol)->mounted; }
@@ -303,7 +322,7 @@ static void* _neo_tnfs_vopen(void* vol, const char* path, int mode, uint32_t* si
     while (slot < NEO_TNFS_FILES && t->files[slot].used) slot++;
     if (slot == NEO_TNFS_FILES) return 0;
     char p[NEO_TNFS_MSG_MAX - 16];
-    _neo_tnfs_abs(path, p, sizeof(p));
+    if (!_neo_tnfs_abs(path, p, sizeof(p))) return 0;
     uint16_t flags = (mode & NEO_WRITE) ? ((mode & NEO_READ) ? NEO_TNFS_O_RDWR : NEO_TNFS_O_WRONLY) : NEO_TNFS_O_RDONLY;
     if (mode & NEO_CREATE) flags |= NEO_TNFS_O_CREAT | NEO_TNFS_O_TRUNC;
     uint32_t sz = 0;
@@ -388,14 +407,14 @@ static bool _neo_tnfs_list_entry(const char* name, void* user) {
 static bool _neo_tnfs_vlist(void* vol, const char* dir, neo_dirent_cb_t cb, void* user) {
     neo_tnfs_t* t = (neo_tnfs_t*)vol;
     char d[NEO_TNFS_MSG_MAX - 80];
-    _neo_tnfs_abs(dir[0] ? dir : "/", d, sizeof(d));
+    if (!_neo_tnfs_abs(dir[0] ? dir : "/", d, sizeof(d))) return false;
     _neo_tnfs_list_t l = {t, d, cb, user};
     return neo_tnfs_list(t, d, _neo_tnfs_list_entry, &l);
 }
 
 static bool _neo_tnfs_vremove(void* vol, const char* path) {
     char p[NEO_TNFS_MSG_MAX - 16];
-    _neo_tnfs_abs(path, p, sizeof(p));
+    if (!_neo_tnfs_abs(path, p, sizeof(p))) return false;
     return neo_tnfs_unlink((neo_tnfs_t*)vol, p);
 }
 

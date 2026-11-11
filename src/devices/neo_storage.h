@@ -141,6 +141,9 @@ bool neo_file_write_cb(void* ctx, uint32_t offset, const uint8_t* buf, uint32_t 
 // Fichier entier : lit au plus max octets (*n = lus ; false si absent ou plus grand que max
 // quand exact) ; écrit (créé ou remplacé)
 bool neo_file_load(int vol, const char* path, uint8_t* buf, uint32_t max, uint32_t* n, bool exact);
+// Taille d'un fichier (false si absent) : pour refuser de réécrire un fichier que neo_file_load
+// aurait tronqué à la lecture
+bool neo_file_size(int vol, const char* path, uint32_t* size);
 bool neo_file_save(int vol, const char* path, const uint8_t* buf, uint32_t len);
 
 // Pilote en mémoire (tests ; images intégrées) : un seul répertoire, fichiers en RAM
@@ -249,6 +252,14 @@ bool neo_file_load(int vol, const char* path, uint8_t* buf, uint32_t max, uint32
     neo_file_close(&f);
     if (ok) *n = len;
     return ok;
+}
+
+bool neo_file_size(int vol, const char* path, uint32_t* size) {
+    neo_file_t f;
+    if (!neo_file_open(&f, vol, path, NEO_READ)) return false;
+    *size = f.size;
+    neo_file_close(&f);
+    return true;
 }
 
 bool neo_file_save(int vol, const char* path, const uint8_t* buf, uint32_t len) {

@@ -67,7 +67,7 @@ static inline bool hid_media_parse(hid_media_t* m, const uint8_t* desc, uint16_t
     uint16_t bits[HID_MEDIA_MAX_IDS];
     int nid = 0;
 
-    for (uint16_t i = 0; i < len;) {
+    for (uint32_t i = 0; i < len;) {   // (32 bits: `i += 2 + desc[i]` could wrap a uint16_t near 65535)
         const uint8_t p = desc[i++];
         if (p == 0xFE) {  // élément long : ignoré
             if (i + 1 >= len) break;

@@ -1,0 +1,27 @@
+# Intégration continue : build PC et tests qui n'ont pas besoin de ROM (les ROM ne sont pas dans le
+# dépôt : oric, bbc, apple2, apple2e et leurs tests d'intégration ne sont construits que si
+# src/roms/*.h existent, voir platforms/pc/systems/*/CMakeLists.txt).
+# Le firmware RP2040 demande les mêmes ROM : il n'est pas construit ici.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pc-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Sous-modules du PC (sokol, imgui)
+        run: git submodule update --init --depth 1 -- platforms/pc/lib/sokol platforms/pc/lib/imgui platforms/pc/lib/ImGuiFileDialog
+      - name: Dépendances
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential libx11-dev libxi-dev libxcursor-dev libgl1-mesa-dev libasound2-dev
+      - name: Configuration
+        run: cmake -S platforms/pc -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-Wall -Wextra"
+      - name: Construction
+        run: cmake --build build -j4
+      - name: Tests
+        run: cd build && ctest --output-on-failure

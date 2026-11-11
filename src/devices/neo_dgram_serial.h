@@ -60,7 +60,8 @@ void neo_dgram_init(neo_dgram_t* d, bool (*write)(void*, const uint8_t*, int), i
 // Drops whatever is pending until the line is quiet (after a desynchronisation)
 static void _neo_dgram_drain(neo_dgram_t* d) {
     d->resync++;
-    while (d->read_byte(d->ctx, 20000) >= 0) {}
+    // Bounded: a line that never goes quiet (a chatty modem) must not hold the emulation for ever
+    for (int i = 0; i < 4 * NEO_DGRAM_MAX && d->read_byte(d->ctx, 20000) >= 0; i++) {}
 }
 
 // Reads one frame (length then bytes); first_us: wait for its first byte
@@ -87,7 +88,7 @@ int neo_dgram_xfer(void* ctx, const uint8_t* req, int len, uint8_t* resp, int ma
     if (len < 1 || len > NEO_DGRAM_MAX) return -1;
     // Late answers to earlier requests (after a timeout) are dropped first: read as
     // the answer to this request, they would put every exchange one frame behind
-    while (_neo_dgram_frame(d, 0, 0, 0) > 0) d->stale++;
+    for (int i = 0; i < 8 && _neo_dgram_frame(d, 0, 0, 0) > 0; i++) d->stale++;   // (8 frames at most)
     const uint8_t hdr[2] = {(uint8_t)len, (uint8_t)(len >> 8)};
     if (!d->write(d->ctx, hdr, 2) || !d->write(d->ctx, req, len)) return -1;
     d->sent++;

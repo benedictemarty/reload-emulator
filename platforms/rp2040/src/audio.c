@@ -18,6 +18,9 @@
 #define SAMPLE_REPETITION_RATE 4
 _Static_assert(SAMPLES_CHUNK_SIZE == 32, "audio_buffer_dequeue fills empty_samples with 8 words");
 
+_Static_assert(SAMPLES_BUFFER_SIZE % 32 == 0 && SAMPLES_BUFFER_SIZE <= 65535,
+               "SAMPLES_BUFFER_SIZE: a multiple of 32 (DMA blocks), at most 65535 (16-bit indices)");
+
 typedef struct {
     critical_section_t cs;
     uint8_t samples[SAMPLES_BUFFER_SIZE];

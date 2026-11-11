@@ -1,3 +1,5 @@
+// Dérivé de la configuration des exemples de TinyUSB (https://github.com/hathach/tinyusb), licence MIT,
+// © Ha Thach (tinyusb.org) ; adapté à ce projet.
 #ifndef _TUSB_CONFIG_H_
 #define _TUSB_CONFIG_H_
 

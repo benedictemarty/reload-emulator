@@ -60,6 +60,18 @@ execute_process(COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/patches/tinyusb-data-seq.
 if (NOT tinyusb_patch_rc EQUAL 0)
 	message(FATAL_ERROR "TinyUSB : échec de patches/tinyusb-data-seq.sh")
 endif()
+# The patches are applied when CMake configures. A `git submodule update` (or a checkout) puts the
+# original files back: make CMake configure again, so the patches are applied again, when the
+# patched files or the patch scripts change (otherwise `make` would build TinyUSB without the fix and
+# the "Data Seq Error" panic would be back)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/PicoDVI/software/libdvi/dvi.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/tinyusb/src/portable/raspberrypi/rp2040/hcd_rp2040.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/tinyusb/src/class/msc/msc_host.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/tinyusb/src/class/msc/msc_host.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/patches/picodvi-dbg-tcr.sh
+    ${CMAKE_CURRENT_SOURCE_DIR}/patches/picodvi-line-repeat.sh
+    ${CMAKE_CURRENT_SOURCE_DIR}/patches/tinyusb-data-seq.sh)
 add_subdirectory(lib/PicoDVI/software/libdvi)
 add_subdirectory(lib/fatfs/source)
 add_subdirectory(systems)

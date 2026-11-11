@@ -29,8 +29,9 @@ static bool neo_fatfs_ready(void *vol) {
 static FIL neo_fatfs_fil[NEO_FATFS_FILES];
 static bool neo_fatfs_used[NEO_FATFS_FILES];
 
-static void neo_fatfs_path(const char *drive, const char *path, char *out, size_t n) {
-    snprintf(out, n, "%s%s", drive ? drive : "", path);
+// false when the path does not fit: a truncated one would open (or, with NEO_CREATE, overwrite) another file
+static bool neo_fatfs_path(const char *drive, const char *path, char *out, size_t n) {
+    return snprintf(out, n, "%s%s", drive ? drive : "", path) < (int)n;
 }
 
 static void *neo_fatfs_open(void *vol, const char *path, int mode, uint32_t *size) {
@@ -38,7 +39,7 @@ static void *neo_fatfs_open(void *vol, const char *path, int mode, uint32_t *siz
     while (i < NEO_FATFS_FILES && neo_fatfs_used[i]) i++;
     if (i == NEO_FATFS_FILES) return 0;
     char p[96];
-    neo_fatfs_path((const char *)vol, path, p, sizeof(p));
+    if (!neo_fatfs_path((const char *)vol, path, p, sizeof(p))) return 0;
     BYTE m = (mode & NEO_READ) ? FA_READ : 0;
     if (mode & NEO_WRITE) m |= FA_WRITE | ((mode & NEO_CREATE) ? FA_CREATE_ALWAYS : 0);
     if (f_open(&neo_fatfs_fil[i], p, m) != FR_OK) return 0;
@@ -67,7 +68,7 @@ static bool neo_fatfs_close(void *h) {
 
 static bool neo_fatfs_list(void *vol, const char *dir, neo_dirent_cb_t cb, void *user) {
     char p[96];
-    neo_fatfs_path((const char *)vol, dir, p, sizeof(p));
+    if (!neo_fatfs_path((const char *)vol, dir, p, sizeof(p))) return false;
     DIR d;
     FILINFO fno;
     if (f_opendir(&d, p) != FR_OK) return false;
@@ -88,9 +89,20 @@ static bool neo_fatfs_list(void *vol, const char *dir, neo_dirent_cb_t cb, void 
 
 static bool neo_fatfs_remove(void *vol, const char *path) {
     char p[96];
-    neo_fatfs_path((const char *)vol, path, p, sizeof(p));
+    if (!neo_fatfs_path((const char *)vol, path, p, sizeof(p))) return false;
     return f_unlink(p) == FR_OK;
 }
 
 const neo_storage_ops_t neo_storage_fatfs_ops = {neo_fatfs_ready, neo_fatfs_open, neo_fatfs_read, neo_fatfs_write, neo_fatfs_close,
                                                  neo_fatfs_list, neo_fatfs_remove};
+
+// The drive was unplugged: its files are gone, release their slots (otherwise the NEO_FATFS_FILES
+// descriptors end up all "used" after a few unplugs, the emulator never having closed them)
+void neo_fatfs_drop_files(void) {
+    for (int i = 0; i < NEO_FATFS_FILES; i++) {
+        if (neo_fatfs_used[i]) {
+            f_close(&neo_fatfs_fil[i]);   // Result ignored: the volume is no longer there
+            neo_fatfs_used[i] = false;
+        }
+    }
+}
