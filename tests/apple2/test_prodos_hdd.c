@@ -41,6 +41,7 @@ static uint8_t pattern(uint32_t block, int i) { return (uint8_t)(block * 37 + i 
 
 static void make_image(void) {
     FILE* f = fopen(path, "wb");
+    if (!f) { perror(path); exit(2); }
     for (uint32_t b = 0; b < BLOCKS; b++)
         for (int i = 0; i < PRODOS_HDD_BYTES_PER_BLOCK; i++) fputc(pattern(b, i), f);
     fclose(f);

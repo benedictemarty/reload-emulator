@@ -484,7 +484,8 @@ static void kbd_raw_key_down(int code) {
                 }
             } else {
                 index -= num_nib_images;
-                if (index < CHIPS_ARRAY_SIZE(oric_tap_images)) {
+                const size_t num_taps = CHIPS_ARRAY_SIZE(oric_tap_images);   // (0 with the placeholder header)
+                if (index < num_taps) {
                     oric_insert_tap(sys, oric_tap_images[index], oric_tap_image_sizes[index]);
                 }
             }

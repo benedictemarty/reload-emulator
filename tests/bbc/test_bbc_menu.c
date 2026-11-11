@@ -257,7 +257,7 @@ static void test_osd_lines(void) {
     for (int y = 0; y < 256; y++) {
         int l = bbc_menu_osd_line(y);
         if (l < prev || l >= OSD_LINES) ok = 0;
-        shown[l]++;
+        if (l >= 0 && l < OSD_LINES) shown[l]++;   // (an out-of-range line is already a failure, not a write)
         prev = l;
         out += (y & 7) == 7 ? 1 : 2;
     }

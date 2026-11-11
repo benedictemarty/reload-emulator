@@ -917,7 +917,7 @@ static void panel_action(oric_menu_action_t a) {
             break;
         case ORIC_ACT_INSERT:
             if (dsk_insert(a.target, menu.files[a.file].name)) {
-                snprintf(msg, sizeof(msg), "%.48s dans le lecteur %c%s", menu.files[a.file].name, 'A' + a.target,
+                snprintf(msg, sizeof(msg), "%.40s dans le lecteur %c%s", menu.files[a.file].name, 'A' + a.target,
                          a.target == 0 ? " : Redémarrer pour démarrer dessus" : "");
                 oric_menu_message(&menu, false, msg);
             } else {

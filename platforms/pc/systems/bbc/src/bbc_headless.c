@@ -261,7 +261,9 @@ static void mos_print_summary(void) {
     for (int a = 0; a < 256; a++) if (osword_calls[a]) printf(" &%02X(%u)", a, osword_calls[a]);
     printf("\n  VDU    :");
     for (int a = 0; a < 32; a++) if (vdu_calls[a]) printf(" %d(%u)", a, vdu_calls[a]);
-    printf("  (>=32 : %u)\n", (unsigned)({ uint32_t t = 0; for (int a = 32; a < 256; a++) t += vdu_calls[a]; t; }));
+    uint32_t vdu_high = 0;
+    for (int a = 32; a < 256; a++) vdu_high += vdu_calls[a];
+    printf("  (>=32 : %u)\n", (unsigned)vdu_high);
 }
 
 static FILE* wav;

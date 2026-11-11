@@ -276,7 +276,8 @@ static void kbd_raw_key_down(int code) {
         {
             if (sys->fdc.valid) {
                 uint8_t index = code - 0x13A;
-                if (CHIPS_ARRAY_SIZE(apple2_nib_images) > index) {
+                const size_t num_images = CHIPS_ARRAY_SIZE(apple2_nib_images);   // (0 with the placeholder header)
+                if (index < num_images) {
                     disk2_fdd_insert_disk(&sys->fdc.fdd[0], apple2_nib_images[index]);
                 }
             }

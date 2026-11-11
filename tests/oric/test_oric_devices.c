@@ -195,6 +195,7 @@ static uint8_t read_sector(int track, int side, int sector, uint8_t* buf, int* c
 static uint8_t* make_blank_image(int tracks, int sides) {
     uint32_t size = ORIC_DSK_HEADER_SIZE + (uint32_t)(tracks * sides) * ORIC_DSK_TRACK_SIZE;
     uint8_t* img = calloc(1, size);
+    if (!img) { perror("calloc"); exit(2); }
     memcpy(img, "MFM_DISK", 8);
     img[8] = (uint8_t)sides;
     img[12] = (uint8_t)tracks;
@@ -459,6 +460,7 @@ static bool s_write(void* ctx, uint32_t off, const uint8_t* buf, uint32_t len) {
 
 static void test_streamed(void) {
     stream_img = malloc(IMG_SIZE);
+    if (!stream_img) { perror("malloc"); exit(2); }
     memcpy(stream_img, image, IMG_SIZE);
     wd1793_init(&fdc);
     CHECK(wd1793_insert_streamed(&fdc, 0, stream_img, IMG_SIZE, s_read, s_write, 0));

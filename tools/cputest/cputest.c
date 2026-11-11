@@ -19,8 +19,9 @@ int main(int argc, char** argv) {
     if (argc < 3) { fprintf(stderr, "usage: cputest image.bin success_pc_hex [max_cycles]\n"); return 2; }
     FILE* f = fopen(argv[1], "rb");
     if (!f) { perror(argv[1]); return 2; }
-    if (fread(mem, 1, 65536, f) == 0) { fprintf(stderr, "empty image\n"); return 2; }
+    const size_t got = fread(mem, 1, 65536, f);
     fclose(f);
+    if (got == 0) { fprintf(stderr, "%s: empty image\n", argv[1]); return 2; }   // (shorter than 64 KB is accepted: loaded at $0000)
     uint16_t success = (uint16_t)strtol(argv[2], 0, 16);
     uint64_t max_cycles = argc > 3 ? strtoull(argv[3], 0, 10) : 500000000ULL;
     mem[0xFFFC] = 0x00; mem[0xFFFD] = 0x04;     // Reset vector -> $0400
