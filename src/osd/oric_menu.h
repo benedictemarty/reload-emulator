@@ -119,6 +119,8 @@ typedef struct {
     int page;
     int cursor;
     int browse_target;   // Élément qui a ouvert le sélecteur
+    int vol_filter;      // Volume des fichiers listés (OSD_VOL_*), gardé d'une ouverture à l'autre
+    bool vol_choice;     // Le sélecteur ouvert a des fichiers sur la clé et sur le réseau
     osd_browser_t browse;   // Lecteurs et cassette : ligne 0 = « éjecter », puis la liste
     int browse_list[ORIC_MENU_FILES];
 } oric_menu_t;
@@ -159,8 +161,15 @@ static inline void _oric_open_browser(oric_menu_t* m, int item) {
         cursor = m->profile_cur >= 0 && m->profile_cur < count ? m->profile_cur : 0;
     } else {
         const uint8_t kind = item == ORIC_ITEM_TAPE ? ORIC_FILE_TAP : ORIC_FILE_DSK;
+        bool has_usb = false, has_net = false;
+        for (int i = 0; i < m->nfiles; i++) {
+            if (m->files[i].kind != kind) continue;
+            if (osd_vol_is_net(m->files[i].name)) has_net = true; else has_usb = true;
+        }
+        m->vol_choice = has_usb && has_net;
+        if (!m->vol_choice) m->vol_filter = OSD_VOL_ALL;
         for (int i = 0; i < m->nfiles && count < ORIC_MENU_FILES; i++) {
-            if (m->files[i].kind == kind) m->browse_list[count++] = i;
+            if (m->files[i].kind == kind && osd_vol_match(m->vol_filter, m->files[i].name)) m->browse_list[count++] = i;
         }
         // Curseur sur l'image ou la cassette en place
         const char* cur = item == ORIC_ITEM_TAPE ? m->tape : m->drive[item - ORIC_ITEM_DRIVE0];
@@ -189,6 +198,12 @@ static inline void oric_menu_message(oric_menu_t* m, bool error, const char* tex
 static inline oric_menu_action_t oric_menu_key(oric_menu_t* m, int key) {
     oric_menu_action_t a = {ORIC_ACT_NONE, 0, -1};
     if (m->page == ORIC_PAGE_BROWSE) {
+        // Droite : volume suivant (clé, réseau) quand les deux ont des fichiers
+        if (key == OSD_KEY_RIGHT && m->vol_choice) {
+            m->vol_filter = osd_vol_next(m->vol_filter, true, true);
+            _oric_open_browser(m, m->browse_target);
+            return a;
+        }
         const int r = osd_browser_key(&m->browse, key, _oric_browse_name, m);
         if (r == OSD_BROWSER_BACK) m->page = ORIC_PAGE_MAIN;
         if (r != OSD_BROWSER_PICK) return a;
@@ -478,6 +493,11 @@ static inline void oric_menu_draw(const oric_menu_t* m, osd_surface_t* s) {
             snprintf(tag, sizeof(tag), "en %c", 'A' + d);
             osd_puts(s, row, left + width - 18, tag, sel ? OSD_PANEL_POPUP_SEL_ERR : OSD_PANEL_POPUP_ACC, -1);
         }
+    }
+    if (!fdc && !prof && m->vol_choice) {
+        char vol[48];
+        snprintf(vol, sizeof(vol), "Volume : %s (→ change)", osd_vol_label(m->vol_filter));
+        osd_puts(s, top + height - 2, left + 4, vol, OSD_PANEL_POPUP_ACC, -1);
     }
     if (!fdc && !prof && m->browse.count == 0) {
         osd_puts(s, top + 4, left + 4, tape ? "Aucune cassette .tap sur la clé" : "Aucune image .dsk sur la clé",

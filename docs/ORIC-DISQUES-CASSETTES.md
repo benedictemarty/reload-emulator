@@ -66,7 +66,7 @@ alors sur la disquette du lecteur A) ; le menu réécrit ces lignes et garde les
 `wifi=RÉSEAU` et `wifi_mdp=MOT DE PASSE` (facultatifs : sinon le réseau enregistré dans le
 modem). Quand le modem Wi-Fi Neo6502picowifi (Pico W) est branché sur le hub USB, l'Oric
 monte le serveur et liste ses fichiers sous la forme `net:/NOM.DSK` à côté de ceux de la clé
-(`a=net:/SED.DSK` dans `ORIC.CFG` fonctionne aussi). La connexion bloque l'émulation le temps
+(`a=net:/SED.DSK` dans `ORIC.CFG` fonctionne aussi). Quand la clé et le réseau ont chacun des fichiers, la touche **Droite** du sélecteur choisit le volume affiché : Tous, Clé USB, Réseau (choix gardé d'une ouverture à l'autre). La connexion bloque l'émulation le temps
 de l'établir (une tentative par branchement du modem). **Non essayé sur la carte.**
 
 ![Sélecteur de disquette](images/oric_menu_disque.png)

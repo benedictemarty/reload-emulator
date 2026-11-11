@@ -51,6 +51,26 @@ static inline int osd_key_from_hid(int code) {
     }
 }
 
+// Volume d'un sélecteur de fichiers : les noms du volume réseau portent le préfixe « net: »
+// (devices/neo_storage.h), ceux de la clé n'en ont pas. Droite fait passer le sélecteur de
+// « Tous » à « Clé USB » puis « Réseau », quand les deux volumes ont des fichiers.
+enum { OSD_VOL_ALL = 0, OSD_VOL_USB, OSD_VOL_NET };
+
+static inline bool osd_vol_is_net(const char* name) {
+    return name[0] == 'n' && name[1] == 'e' && name[2] == 't' && name[3] == ':';
+}
+static inline bool osd_vol_match(int filter, const char* name) {
+    return filter == OSD_VOL_ALL || (filter == OSD_VOL_NET) == osd_vol_is_net(name);
+}
+static inline const char* osd_vol_label(int filter) {
+    return filter == OSD_VOL_USB ? "Clé USB" : filter == OSD_VOL_NET ? "Réseau" : "Tous";
+}
+// Filtre suivant ; reste sur « Tous » s'il n'y a qu'un seul volume
+static inline int osd_vol_next(int filter, bool has_usb, bool has_net) {
+    if (!has_usb || !has_net) return OSD_VOL_ALL;
+    return (filter + 1) % 3;
+}
+
 typedef struct {
     int count;     // Entrées de la liste
     int first;     // Lignes fixes avant la liste (0 ou 1)

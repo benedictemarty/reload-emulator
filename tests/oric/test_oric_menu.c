@@ -501,6 +501,46 @@ static void test_frame_title(void) {
     CHECK(surf.ch[20][2] == OSD_HLINE && surf.ch[20][3] == OSD_HLINE);
 }
 
+// Volume choice in the file selector: files on the USB drive and on the network ("net:")
+static void test_volumes(void) {
+    oric_menu_init(&menu);
+    menu.fdc = 2;
+    const char* names[] = {"A.DSK", "net:/B.DSK", "C.DSK", "net:/D.DSK"};
+    for (int i = 0; i < 4; i++) {
+        snprintf(menu.files[i].name, sizeof(menu.files[i].name), "%s", names[i]);
+        menu.files[i].kind = ORIC_FILE_DSK;
+    }
+    menu.nfiles = 4;
+    menu.usb_present = true;
+    menu.cursor = ORIC_ITEM_DRIVE0;
+    oric_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.vol_choice && menu.vol_filter == OSD_VOL_ALL && menu.browse.count == 4);
+    osd_clear(&surf, 0);
+    oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("Volume : Tous"));
+    // Right: USB drive only, then network only, then everything again
+    oric_menu_key(&menu, OSD_KEY_RIGHT);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.vol_filter == OSD_VOL_USB && menu.browse.count == 2);
+    CHECK(menu.browse_list[0] == 0 && menu.browse_list[1] == 2);
+    oric_menu_draw(&menu, &surf);
+    CHECK(screen_contains("Volume : Cl") && !screen_contains("net:/B.DSK"));
+    oric_menu_key(&menu, OSD_KEY_RIGHT);
+    CHECK(menu.vol_filter == OSD_VOL_NET && menu.browse.count == 2 && menu.browse_list[0] == 1);
+    oric_menu_action_t a = oric_menu_key(&menu, OSD_KEY_DOWN);   // Row 0 = eject, then the first file
+    a = oric_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(a.type == ORIC_ACT_INSERT && a.file == 1);
+    // The filter is kept; with one volume only there is no choice and the filter is reset
+    oric_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(menu.vol_filter == OSD_VOL_NET && menu.browse.count == 2);
+    oric_menu_key(&menu, OSD_KEY_ESC);
+    menu.nfiles = 2;   // A.DSK, net:/B.DSK -> keep a single volume
+    snprintf(menu.files[1].name, sizeof(menu.files[1].name), "E.DSK");
+    oric_menu_key(&menu, OSD_KEY_ENTER);
+    CHECK(!menu.vol_choice && menu.vol_filter == OSD_VOL_ALL && menu.browse.count == 2);
+    oric_menu_key(&menu, OSD_KEY_RIGHT);
+    CHECK(menu.page == ORIC_PAGE_BROWSE && menu.browse.count == 2);
+}
+
 int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : NULL;
     test_render();
@@ -511,6 +551,7 @@ int main(int argc, char** argv) {
     test_profiles(dir);
     test_banner(dir);
     test_volume(dir);
+    test_volumes();
     printf("%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;
 }
