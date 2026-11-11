@@ -110,6 +110,15 @@ bool prodos_hdd_insert_disk_file(prodos_hdd_t* sys, const char* path) {
         }
         ro = true;   // Read-only file or volume
     }
+    // Raw ProDOS-order image only: smaller than a block it would be an empty volume, and a .2mg
+    // (64-byte header) would shift every block
+    uint8_t magic[4] = {0, 0, 0, 0};
+    if (sys->file.size < PRODOS_HDD_BYTES_PER_BLOCK ||
+        (neo_file_read(&sys->file, 0, magic, 4) && memcmp(magic, "2IMG", 4) == 0)) {
+        printf("ProDOS: %s is not a raw .po/.hdv image\r\n", path);
+        neo_file_close(&sys->file);
+        return false;
+    }
     sys->image_type = PRODOS_HDD_IMAGE_TYPE_FILE;
     sys->image_blocks = sys->file.size / PRODOS_HDD_BYTES_PER_BLOCK;
     sys->image_loaded = true;
@@ -120,6 +129,7 @@ bool prodos_hdd_insert_disk_file(prodos_hdd_t* sys, const char* path) {
 bool prodos_hdd_insert_disk_internal(prodos_hdd_t* sys, uint8_t* po_image, uint32_t po_image_size) {
     CHIPS_ASSERT(sys && sys->valid);
     prodos_hdd_remove_disk(sys);
+    if (!po_image || po_image_size < PRODOS_HDD_BYTES_PER_BLOCK) return false;
     sys->po_image = po_image;
     sys->image_type = PRODOS_HDD_IMAGE_TYPE_INTERNAL;
     sys->image_blocks = po_image_size / PRODOS_HDD_BYTES_PER_BLOCK;

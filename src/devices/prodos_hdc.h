@@ -16,7 +16,7 @@ extern "C" {
 #define PRODOS_HDC_PARA (0x07)  // paravirtualization trigger
 
 #define PRODOS_HDC_MAGIC      (0x65)
-#define PRODOS_HDC_MAX_DRIVES 2
+#define PRODOS_HDC_MAX_DRIVES 1   // one unit (0x70): a second drive was never wired
 
 // ProDOS disk driver parameters
 #define PRODOS_DRV_COMMAND (0x0042)
@@ -108,6 +108,7 @@ void prodos_hdc_write_byte(prodos_hdc_t* sys, uint8_t addr, uint8_t byte, mem_t*
     }
 
     uint32_t blocks = prodos_hdd_get_blocks(hdd);
+    if (blocks > 0xFFFF) blocks = 0xFFFF;   // STATUS reports 16 bits: 65536 blocks would read as an empty volume
 
     uint16_t buffer = mem_rd16(mem, PRODOS_DRV_BUFFER);
     uint16_t block = mem_rd16(mem, PRODOS_DRV_BLOCK);

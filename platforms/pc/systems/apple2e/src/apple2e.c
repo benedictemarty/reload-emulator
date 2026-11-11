@@ -194,19 +194,12 @@ void app_frame(void) {
 }
 
 void app_input(const sapp_event* event) {
-    const bool shift = event->modifiers & SAPP_MODIFIER_SHIFT;
-    const bool ctrl = event->modifiers & SAPP_MODIFIER_CTRL;
     switch (event->type) {
         int c;
         case SAPP_EVENTTYPE_CHAR:
             c = (int) event->char_code;
             if ((c > 0x20) && (c < 0x7F)) {
-                // need to invert case (unshifted is upper caps, shifted is lower caps
-                if (isupper(c)) {
-                    c = tolower(c);
-                } else if (islower(c)) {
-                    c = toupper(c);
-                }
+                // The //e keyboard sends lower case unshifted: the character is passed as typed
                 kbd_raw_key_down(c);
                 kbd_raw_key_up(c);
             }
@@ -220,8 +213,8 @@ void app_input(const sapp_event* event) {
                 case SAPP_KEYCODE_DOWN:         c = 0x0A; break;
                 case SAPP_KEYCODE_UP:           c = 0x0B; break;
                 case SAPP_KEYCODE_ENTER:        c = 0x0D; break;
-                case SAPP_KEYCODE_BACKSPACE:    c = shift ? 0x0C : 0x01; break;
-                case SAPP_KEYCODE_ESCAPE:       c = shift ? 0x13 : 0x03; break;
+                case SAPP_KEYCODE_BACKSPACE:    c = 0x7F; break;     // DELETE key
+                case SAPP_KEYCODE_ESCAPE:       c = 0x1B; break;     // ESC (was Ctrl-C: it interrupted BASIC)
                 case SAPP_KEYCODE_F1:           c = 0x13A; break;
                 case SAPP_KEYCODE_F2:           c = 0x13B; break;
                 case SAPP_KEYCODE_F3:           c = 0x13C; break;
@@ -259,9 +252,6 @@ void app_cleanup(void) {
 }
 
 static void kbd_raw_key_down(int code) {
-    if (isascii(code)) {
-        code = toupper(code);
-    }
 
     if (code == 0x14F) {
         // Arrow right

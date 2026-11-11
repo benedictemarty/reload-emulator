@@ -3,9 +3,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <fcntl.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,7 +30,6 @@ typedef struct {
     bool nib_image_loaded;
     uint8_t control_bits;
     uint8_t write_ready;
-    int nib_image_offset;
     uint8_t* nib_image;
 } disk2_fdd_t;
 
@@ -50,8 +46,13 @@ void disk2_fdd_reset(disk2_fdd_t* sys);
 
 void disk2_fdd_tick(disk2_fdd_t* sys);
 
-// Insert a new disk file
+// Insert a disk image already known to be DISK2_FDD_NIB_IMAGE_SIZE bytes long (images embedded
+// in the firmware, produced by tools/dsk2nib: the layout is NOT the standard .nib one, whose
+// tracks are 6656 bytes; ours are 16 x 374 = 5984 bytes)
 bool disk2_fdd_insert_disk(disk2_fdd_t* sys, uint8_t* nib_image);
+
+// Same, but refuses an image of any other size (the reader would run past its end)
+bool disk2_fdd_insert_disk_sized(disk2_fdd_t* sys, uint8_t* nib_image, size_t size);
 
 // Remove the disk file
 void disk2_fdd_remove_disk(disk2_fdd_t* sys);
@@ -120,7 +121,6 @@ CHIPS_HOT void disk2_fdd_tick(disk2_fdd_t* sys) {
 
 bool disk2_fdd_insert_disk(disk2_fdd_t* sys, uint8_t* nib_image) {
     CHIPS_ASSERT(sys && sys->valid);
-    sys->nib_image_offset = 0;
     sys->nib_image = nib_image;
     sys->nib_image_loaded = true;
     return true;
@@ -130,6 +130,11 @@ void disk2_fdd_remove_disk(disk2_fdd_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     sys->nib_image_loaded = false;
     sys->image_dirty = false;
+}
+
+bool disk2_fdd_insert_disk_sized(disk2_fdd_t* sys, uint8_t* nib_image, size_t size) {
+    if (!nib_image || size != DISK2_FDD_NIB_IMAGE_SIZE) return false;
+    return disk2_fdd_insert_disk(sys, nib_image);
 }
 
 bool disk2_fdd_is_disk_inserted(disk2_fdd_t* sys) {
@@ -171,7 +176,8 @@ CHIPS_HOT uint8_t disk2_fdd_read_byte(disk2_fdd_t* sys) {
             return *(sys->nib_image + (sys->half_track / 2) * DISK2_FDD_BYTES_PER_NIB_TRACK + sys->offset);
 
         case 1:
-            return sys->write_protected | sys->motor_state;
+            // Write-protect sense: bit 7 set = protected (the RWTS tests it before writing)
+            return (uint8_t)((sys->write_protected ? 0x80 : 0x00) | sys->motor_state);
 
         case 2:
             return sys->write_ready;
@@ -189,8 +195,6 @@ CHIPS_HOT void disk2_fdd_write_byte(disk2_fdd_t* sys, uint8_t byte) {
     }
 
     if (sys->motor_state && sys->control_bits == 3 && sys->write_ready) {
-        printf("disk2_fdd_write_byte: offset=%d, byte=%02x\n", sys->offset, byte);
-
         _disk2_fdd_update_offset(sys);
         *(sys->nib_image + (sys->half_track / 2) * DISK2_FDD_BYTES_PER_NIB_TRACK + sys->offset) = byte;
         sys->image_dirty = true;

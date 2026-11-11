@@ -3,7 +3,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,9 +51,10 @@ extern "C" {
 #define DISK2_FDC_PORT_READ  (1 << 0)
 #define DISK2_FDC_PORT_WRITE (1 << 1)
 
-#define DISK2_FDC_MAX_DRIVES 1
+// Two drives: a program may select drive 2 ($C0EB); the second one stays empty (no image)
+#define DISK2_FDC_MAX_DRIVES 2
 
-// Oric floppy disk controller state
+// Disk II floppy disk controller state
 typedef struct {
     bool valid;
     uint64_t pins;
@@ -62,7 +62,7 @@ typedef struct {
     disk2_fdd_t fdd[DISK2_FDC_MAX_DRIVES];
 } disk2_fdc_t;
 
-// Oric floppy disk controller interface
+// Disk II floppy disk controller interface
 
 // Initialize a new floppy disk controller
 void disk2_fdc_init(disk2_fdc_t* sys);
@@ -108,27 +108,23 @@ void disk2_fdc_init(disk2_fdc_t* sys) {
     CHIPS_ASSERT(sys && !sys->valid);
     memset(sys, 0, sizeof(disk2_fdc_t));
     sys->valid = true;
-    disk2_fdd_init(&sys->fdd[0]);
-    // disk2_fdd_init(&sys->fdd[1], dump_disk2_nib);
+    for (int i = 0; i < DISK2_FDC_MAX_DRIVES; i++) disk2_fdd_init(&sys->fdd[i]);
 }
 
 void disk2_fdc_discard(disk2_fdc_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
     sys->valid = false;
-    disk2_fdd_discard(&sys->fdd[0]);
-    // disk2_fdd_discard(&sys->fdd[1]);
+    for (int i = 0; i < DISK2_FDC_MAX_DRIVES; i++) disk2_fdd_discard(&sys->fdd[i]);
 }
 
 void disk2_fdc_reset(disk2_fdc_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
-    disk2_fdd_reset(&sys->fdd[0]);
-    // disk2_fdd_reset(&sys->fdd[1]);
+    for (int i = 0; i < DISK2_FDC_MAX_DRIVES; i++) disk2_fdd_reset(&sys->fdd[i]);
 }
 
 CHIPS_HOT void disk2_fdc_tick(disk2_fdc_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
-    disk2_fdd_tick(&sys->fdd[0]);
-    // disk2_fdd_tick(&sys->fdd[1]);
+    for (int i = 0; i < DISK2_FDC_MAX_DRIVES; i++) disk2_fdd_tick(&sys->fdd[i]);
 }
 
 CHIPS_HOT uint8_t disk2_fdc_read_byte(disk2_fdc_t* sys, uint8_t addr) {
@@ -168,9 +164,8 @@ static CHIPS_HOT void _disk2_fdc_process_soft_switches(disk2_fdc_t* sys, uint8_t
 
         case DISK2_FDC_SELECT_DRIVE1:
         case DISK2_FDC_SELECT_DRIVE2:
-            if (sys->selected_drive != (addr & 1)) {
-                sys->selected_drive = addr & 1;
-            }
+            // DRIVE1 = $C0EA (even), DRIVE2 = $C0EB (odd); always inside fdd[]
+            sys->selected_drive = (uint8_t)((addr & 1) % DISK2_FDC_MAX_DRIVES);
             break;
 
         case DISK2_FDC_Q6L:

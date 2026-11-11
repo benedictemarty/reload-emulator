@@ -5,13 +5,15 @@ Emulated systems:
 ### Apple //e
   - 128 KB RAM installed 
   - Extended 80 column card in the AUX slot
-  - Disk II controller and 1 drive in slot 6
+  - Disk II controller and 1 drive in slot 6 (disabled in the shipped builds, `.fdc_enabled = false`; the
+    emulation is read-only and simplified, see docs/APPLE.md)
   - ProDOS hard disk controller in slot 7
 
 ### Apple ][+
   - 64 KB RAM installed
   - 16K Language Card in slot 0,
-  - Disk II controller and 1 drive in slot 6
+  - Disk II controller and 1 drive in slot 6 (disabled in the shipped builds, `.fdc_enabled = false`; the
+    emulation is read-only and simplified, see docs/APPLE.md)
   - ProDOS hard disk controller in slot 7
 
 ### Oric Atmos
@@ -142,11 +144,11 @@ Building headers from DSK file (Apple ][, Oric):
 
 ```bash
 # Moon Patrol.DSK
-dsk2nib -i Moon Patrol.DSK -o Moon Patrol.NIB
-bin2hdr -i Moon Patrol.NIB -o moon_patrol.h -a moon_patrol_nib_image
+dsk2nib -i "Moon Patrol.DSK" -o "Moon Patrol.NIB"
+bin2hdr -i "Moon Patrol.NIB" -o moon_patrol.h -a moon_patrol_nib_image
 
 # Karateka.DSK
-dsk2nib -i Karateka.DSK -o Karateka.NIB
+dsk2nib -i Karateka.DSK -o Karateka.NIB   # -p if the .DSK is in ProDOS order
 bin2hdr -i Karateka.NIB -o karateka.h -a karateka_nib_image
 
 #ProDOS 

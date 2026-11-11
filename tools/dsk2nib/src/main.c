@@ -141,22 +141,25 @@ static void nibbilize(uint8_t track, uint8_t sector, uint8_t* dsk_image) {
 }
 
 // Convert DSK image into NIB image
-static void convert_dsk_to_nib(const char* dsk_file, const char* nib_file) {
+static int convert_dsk_to_nib(const char* dsk_file, const char* nib_file) {
     FILE *in, *out;
 
     in = fopen(dsk_file, "rb");
     if (in == NULL) {
-        fprintf(stderr, "Failed to open file for reading: %s", dsk_file);
-        return;
+        fprintf(stderr, "Failed to open file for reading: %s\n", dsk_file);
+        return 1;
     }
-    fseek(in, 0, SEEK_END);
-    if (ftell(in) != DSK_IMAGE_SIZE) {
-        fprintf(stderr, "Invalid DSK image size: %s", dsk_file);
+    if (fseek(in, 0, SEEK_END) != 0 || ftell(in) != DSK_IMAGE_SIZE) {
+        fprintf(stderr, "Invalid DSK image size (expected %d bytes): %s\n", DSK_IMAGE_SIZE, dsk_file);
         fclose(in);
-        return;
+        return 1;
     }
-    fseek(in, 0, SEEK_SET);
-    fread(dsk_image, DSK_IMAGE_SIZE, 1, in);
+    rewind(in);
+    if (fread(dsk_image, DSK_IMAGE_SIZE, 1, in) != 1) {
+        fprintf(stderr, "Failed to read file: %s\n", dsk_file);
+        fclose(in);
+        return 1;
+    }
     fclose(in);
 
     int volume = DEFAULT_VOLUME;
@@ -196,17 +199,24 @@ static void convert_dsk_to_nib(const char* dsk_file, const char* nib_file) {
 
     out = fopen(nib_file, "wb");
     if (out == NULL) {
-        fprintf(stderr, "Failed to open file for writing: %s", nib_file);
-        return;
+        fprintf(stderr, "Failed to open file for writing: %s\n", nib_file);
+        return 1;
     }
-    fwrite(nib_image, NIB_IMAGE_SIZE, 1, out);
-    fclose(out);
+    int rc = fwrite(nib_image, NIB_IMAGE_SIZE, 1, out) == 1 ? 0 : 1;
+    if (fclose(out) != 0) rc = 1;
+    if (rc) {
+        fprintf(stderr, "Failed to write file: %s\n", nib_file);
+        remove(nib_file);
+    }
+    return rc;
 }
 
 static void print_usage(const char* argv0) {
     fprintf(stderr,
-            "Usage: %s [-i DSK_file] [-o NIB_file] [-p]\n"
-            "\t-h show this help\n",
+            "Usage: %s -i DSK_file -o NIB_file [-p]\n"
+            "\t-p the DSK image is in ProDOS order (.po)\n"
+            "\t-h show this help\n"
+            "Output: 35 tracks x 16 sectors x 374 bytes (reload format, NOT the standard 6656-byte-track .nib)\n",
             argv0);
     exit(1);
 }
@@ -215,7 +225,7 @@ int main(int argc, char* const argv[]) {
     char *infile = NULL, *outfile = NULL;
     int opt;
 
-    while ((opt = getopt(argc, argv, "i:o:p:h")) != -1) {
+    while ((opt = getopt(argc, argv, "i:o:ph")) != -1) {
         switch (opt) {
             case 'i':
                 infile = strdup(optarg);
@@ -236,8 +246,8 @@ int main(int argc, char* const argv[]) {
     if (!infile || !outfile) {
         print_usage(argv[0]);
     } else {
-        convert_dsk_to_nib(infile, outfile);
+        return convert_dsk_to_nib(infile, outfile);
     }
-    
+
     return 0;
 }

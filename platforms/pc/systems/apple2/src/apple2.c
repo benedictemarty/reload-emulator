@@ -193,7 +193,6 @@ void app_frame(void) {
 }
 
 void app_input(const sapp_event* event) {
-    const bool shift = event->modifiers & SAPP_MODIFIER_SHIFT;
     switch (event->type) {
         int c;
         case SAPP_EVENTTYPE_CHAR:
@@ -216,8 +215,8 @@ void app_input(const sapp_event* event) {
                 case SAPP_KEYCODE_LEFT:         c = 0x150; break;
                 case SAPP_KEYCODE_RIGHT:        c = 0x14F; break;
                 case SAPP_KEYCODE_ENTER:        c = 0x0D; break;
-                case SAPP_KEYCODE_BACKSPACE:    c = shift ? 0x0C : 0x01; break;
-                case SAPP_KEYCODE_ESCAPE:       c = shift ? 0x13 : 0x03; break;
+                case SAPP_KEYCODE_BACKSPACE:    c = 0x7F; break;     // DELETE key
+                case SAPP_KEYCODE_ESCAPE:       c = 0x1B; break;     // ESC (was Ctrl-C: it interrupted BASIC)
                 case SAPP_KEYCODE_F1:           c = 0x13A; break;
                 case SAPP_KEYCODE_F2:           c = 0x13B; break;
                 case SAPP_KEYCODE_F3:           c = 0x13C; break;

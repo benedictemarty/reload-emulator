@@ -65,7 +65,6 @@
 #include <stddef.h>
 
 #include <stdio.h>
-#include <unistd.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -350,6 +349,8 @@ void apple2e_discard(apple2e_t *sys) {
     sys->valid = false;
 }
 
+static void _apple2e_remap_after_reset(apple2e_t *sys);
+
 void apple2e_reset(apple2e_t *sys) {
     CHIPS_ASSERT(sys && sys->valid);
     beeper_reset(&sys->beeper);
@@ -359,6 +360,15 @@ void apple2e_reset(apple2e_t *sys) {
     if (sys->hdc.valid) {
         prodos_hdc_reset(&sys->hdc);
     }
+    // RESET clears the MMU soft switches (otherwise the reset vector is read from the wrong bank)
+    // and puts the Language Card back on ROM, bank 2, write protected
+    sys->_80store = sys->ramrd = sys->ramwrt = sys->altzp = false;
+    sys->intcxrom = sys->slotc3rom = false;
+    sys->_80col = sys->altcharset = false;
+    sys->lcram = false;
+    sys->lcbnk2 = true;
+    sys->prewrite = sys->write_enabled = false;
+    _apple2e_remap_after_reset(sys);
     MOS6502CPU_RESET(&sys->cpu);
 }
 
@@ -435,6 +445,14 @@ static void _apple2e_lc_bank_update(apple2e_t *sys) {
 static void _apple2e_altzp_update(apple2e_t *sys) {
     mem_map_rw(&sys->mem, 0, 0x0000, 0x200, mem_bank_0000[sys->altzp].read_ptr, mem_bank_0000[sys->altzp].write_ptr);
     _apple2e_lc_bank_update(sys);
+}
+
+static void _apple2e_remap_after_reset(apple2e_t *sys) {
+    _apple2e_aux_bank_update(sys);
+    _apple2e_text_bank_update(sys);
+    _apple2e_hires_bank_update(sys);
+    _apple2e_altzp_update(sys);   // also remaps the Language Card area
+    sys->text_page1_dirty = sys->text_page2_dirty = sys->hires_page1_dirty = sys->hires_page2_dirty = true;
 }
 
 static void _apple2e_lc_control(apple2e_t *sys, uint8_t offset, bool rw) {
@@ -605,7 +623,8 @@ static APPLE2E_HOT void _apple2e_mem_c010_c01f_r(apple2e_t *sys, uint16_t addr) 
             break;
 
         case 0x19:  // read VBL
-            data = sys->vbl ? 0x80 : 0x00;
+            // RDVBLBAR: bit 7 is 0 during vertical blanking, 1 while the beam draws (Apple //e)
+            data = sys->vbl ? 0x00 : 0x80;
             break;
 
         case 0x1A:  // read TEXT
@@ -825,7 +844,9 @@ static APPLE2E_HOT void _apple2e_mem_c000_c0ff_rw(apple2e_t *sys, uint16_t addr,
                     MOS6502CPU_SET_DATA(&sys->cpu, sys->fdc.valid ? disk2_fdc_read_byte(&sys->fdc, addr & 0xF) : 0x00);
                 } else {
                     // Memory write
-                    disk2_fdc_write_byte(&sys->fdc, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
+                    if (sys->fdc.valid) {
+                        disk2_fdc_write_byte(&sys->fdc, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu));
+                    }
                 }
             } else if ((addr >= 0xC0F0) && (addr <= 0xC0FF)) {
                 // ProDOS HDC
@@ -835,17 +856,37 @@ static APPLE2E_HOT void _apple2e_mem_c000_c0ff_rw(apple2e_t *sys, uint16_t addr,
                 } else {
                     // Memory write
                     prodos_hdc_write_byte(&sys->hdc, addr & 0xF, MOS6502CPU_GET_DATA(&sys->cpu), &sys->mem);
+                    // A block read writes straight into RAM (not through the bus): redraw the screen pages
+                    sys->text_page1_dirty = sys->text_page2_dirty = true;
+                    sys->hires_page1_dirty = sys->hires_page2_dirty = true;
                 }
             }
             break;
     }
 }
 
+// Bits of every soft switch that changes what the screen shows
+static inline unsigned _apple2e_video_mode(const apple2e_t *sys) {
+    return (sys->text ? 1u : 0) | (sys->mixed ? 2u : 0) | (sys->page2 ? 4u : 0) | (sys->hires ? 8u : 0) |
+           (sys->dhires ? 16u : 0) | (sys->_80col ? 32u : 0) | (sys->altcharset ? 64u : 0) | (sys->_80store ? 128u : 0);
+}
+
+static inline void _apple2e_mark_all_dirty(apple2e_t *sys) {
+    sys->text_page1_dirty = sys->text_page2_dirty = true;
+    sys->hires_page1_dirty = sys->hires_page2_dirty = true;
+}
+
+// Page shown: with 80STORE, PAGE2 selects the aux/main bank, not the second display page
+static inline bool _apple2e_shown_page2(const apple2e_t *sys) { return sys->page2 && !sys->_80store; }
+
 static APPLE2E_HOT void _apple2e_mem_rw(apple2e_t *sys, uint16_t addr, bool rw) {
     if ((addr >= 0xC000) && (addr <= 0xCFFF)) {
         if ((addr >= 0xC000) && (addr <= 0xC0FF)) {
             // Apple //e I/O Page
+            const unsigned vmode = _apple2e_video_mode(sys);
             _apple2e_mem_c000_c0ff_rw(sys, addr, rw);
+            // The frame buffer is shared by all modes: a mode or page change redraws everything
+            if (_apple2e_video_mode(sys) != vmode) _apple2e_mark_all_dirty(sys);
         } else if ((addr >= 0xC300) && (addr <= 0xC3FF) && !sys->intcxrom) {
             if (rw) {
                 // Memory read
@@ -895,7 +936,7 @@ APPLE2E_HOT void apple2e_tick(apple2e_t *sys) {
         sys->vbl = true;
     }
 
-    if (sys->vbl_ticks < 17030) {
+    if (sys->vbl_ticks < 17029) {   // 17030 cycles per frame (0..17029)
         sys->vbl_ticks++;
     } else {
         sys->vbl_ticks = 0;
@@ -937,7 +978,7 @@ APPLE2E_HOT void apple2e_tick(apple2e_t *sys) {
         if (sys->flash_timer_ticks == 0) {
             sys->flash = !sys->flash;
             sys->flash_timer_ticks = APPLE2E_FREQUENCY / 2;
-            if (!sys->page2) {
+            if (!_apple2e_shown_page2(sys)) {
                 sys->text_page1_dirty = true;
             } else {
                 sys->text_page2_dirty = true;
@@ -1136,7 +1177,7 @@ static uint8_t *_apple2e_get_fb_addr(apple2e_t *sys, uint16_t row) {
 }
 
 static void _apple2e_lores_update(apple2e_t *sys, uint16_t begin_row, uint16_t end_row) {
-    if ((!sys->page2 && !sys->text_page1_dirty) || (sys->page2 && !sys->text_page2_dirty)) {
+    if (!(_apple2e_shown_page2(sys) ? sys->text_page2_dirty : sys->text_page1_dirty)) {
         return;
     }
 
@@ -1185,15 +1226,10 @@ static void _apple2e_lores_update(apple2e_t *sys, uint16_t begin_row, uint16_t e
         }
     }
 
-    if (!sys->page2) {
-        sys->text_page1_dirty = false;
-    } else {
-        sys->text_page2_dirty = false;
-    }
 }
 
 static void _apple2e_text_update(apple2e_t *sys, uint16_t begin_row, uint16_t end_row) {
-    if ((!sys->page2 && !sys->text_page1_dirty) || (sys->page2 && !sys->text_page2_dirty)) {
+    if (!(_apple2e_shown_page2(sys) ? sys->text_page2_dirty : sys->text_page1_dirty)) {
         return;
     }
 
@@ -1221,15 +1257,10 @@ static void _apple2e_text_update(apple2e_t *sys, uint16_t begin_row, uint16_t en
         _apple2e_render_line_monochrome(_apple2e_get_fb_addr(sys, row), words, 0, 40);
     }
 
-    if (!sys->page2) {
-        sys->text_page1_dirty = false;
-    } else {
-        sys->text_page2_dirty = false;
-    }
 }
 
 static void _apple2e_dhgr_update(apple2e_t *sys, uint16_t begin_row, uint16_t end_row) {
-    if ((!sys->page2 && !sys->hires_page1_dirty) || (sys->page2 && !sys->hires_page2_dirty)) {
+    if (!(_apple2e_shown_page2(sys) ? sys->hires_page2_dirty : sys->hires_page1_dirty)) {
         return;
     }
 
@@ -1249,15 +1280,10 @@ static void _apple2e_dhgr_update(apple2e_t *sys, uint16_t begin_row, uint16_t en
         _apple2e_render_line_color(_apple2e_get_fb_addr(sys, row), words, 0, 40, true);
     }
 
-    if (!sys->page2) {
-        sys->hires_page1_dirty = false;
-    } else {
-        sys->hires_page2_dirty = false;
-    }
 }
 
 static void _apple2e_hgr_update(apple2e_t *sys, uint16_t begin_row, uint16_t end_row) {
-    if ((!sys->page2 && !sys->hires_page1_dirty) || (sys->page2 && !sys->hires_page2_dirty)) {
+    if (!(_apple2e_shown_page2(sys) ? sys->hires_page2_dirty : sys->hires_page1_dirty)) {
         return;
     }
 
@@ -1283,11 +1309,6 @@ static void _apple2e_hgr_update(apple2e_t *sys, uint16_t begin_row, uint16_t end
         _apple2e_render_line_color(_apple2e_get_fb_addr(sys, row), words, 0, 40, false);
     }
 
-    if (!sys->page2) {
-        sys->hires_page1_dirty = false;
-    } else {
-        sys->hires_page2_dirty = false;
-    }
 }
 
 void apple2e_screen_update(apple2e_t *sys) {
@@ -1309,6 +1330,15 @@ void apple2e_screen_update(apple2e_t *sys) {
 
     if (text_start_row < 192) {
         _apple2e_text_update(sys, text_start_row, 191);
+    }
+
+    // Cleared once per frame, after every part (lores/hires + mixed text window) has used it
+    if (_apple2e_shown_page2(sys)) {
+        sys->text_page2_dirty = false;
+        sys->hires_page2_dirty = false;
+    } else {
+        sys->text_page1_dirty = false;
+        sys->hires_page1_dirty = false;
     }
 }
 
