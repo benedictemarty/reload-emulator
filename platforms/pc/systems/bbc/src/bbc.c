@@ -72,6 +72,11 @@
 #include "systems/bbc.h"
 #include "systems/bbc_keys.h"
 
+// Disc images through neo_storage, as on the board (paths as given, or "net:" with a network volume)
+#define NEO_STORAGE_IMPL
+#include "devices/neo_storage.h"
+#include "../../../neo_storage_posix.h"
+
 typedef struct {
     bbc_t bbc;
     uint32_t frame_time_us;
@@ -198,15 +203,11 @@ static char disc_path[1024];
 // With write=1 the disc in the drive is written back to its file when it is replaced and at exit
 static void write_back_disc(void) {
     if (!disc_size || !sargs_exists("write") || !sargs_boolean("write")) return;
-    FILE* f = fopen(disc_path, "wb");
-    if (f) {
-        const bool ok = fwrite(disc_data, 1, disc_size, f) == disc_size;
-        if (fclose(f) != 0 || !ok) {
-            fprintf(stderr, "Disc NOT written: %s\n", disc_path);
-            return;
-        }
-        printf("Disc written: %s\n", disc_path);
+    if (!neo_file_save(NEO_VOL_USB, disc_path, disc_data, (uint32_t)disc_size)) {
+        fprintf(stderr, "Disc NOT written: %s\n", disc_path);
+        return;
     }
+    printf("Disc written: %s\n", disc_path);
 }
 
 static bool has_ext_nocase(const char* path, const char* ext) {
@@ -220,14 +221,19 @@ static bool has_ext_nocase(const char* path, const char* ext) {
 }
 
 static bool load_disc(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) {
-        perror(path);
+    static uint8_t probe[sizeof(disc_data) + 1];
+    neo_file_t f;
+    if (!neo_file_open(&f, NEO_VOL_USB, path, NEO_READ)) {
+        fprintf(stderr, "%s: cannot open\n", path);
         return false;
     }
-    static uint8_t probe[sizeof(disc_data) + 1];
-    size_t n = fread(probe, 1, sizeof(probe), f);
-    fclose(f);
+    size_t n = f.size < sizeof(probe) ? f.size : sizeof(probe);
+    const bool read_ok = neo_file_read(&f, 0, probe, (uint32_t)n);
+    neo_file_close(&f);
+    if (!read_ok) {
+        fprintf(stderr, "%s: read error\n", path);
+        return false;
+    }
     if (n == 0 || n > sizeof(disc_data) || (n % 256) != 0) {
         // Empty, too big (it would be cut) or not whole sectors: not an .ssd/.dsd
         fprintf(stderr, "%s: not a disc image (%u bytes: expected 256-byte sectors, at most %u bytes)\n", path,
@@ -246,6 +252,7 @@ static bool load_disc(const char* path) {
 }
 
 void app_init(void) {
+    neo_storage_set(NEO_VOL_USB, "Fichiers", &neo_storage_posix_ops, "");
     saudio_setup(&(saudio_desc){
         .logger.func = slog_func,
     });

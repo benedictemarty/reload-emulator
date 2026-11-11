@@ -87,6 +87,11 @@
 #include "systems/bbc_keys.h"
 #include "systems/bbc_state.h"
 
+// Files through neo_storage, as on the board (volume 0: paths as given, or "net:" with a volume set)
+#define NEO_STORAGE_IMPL
+#include "devices/neo_storage.h"
+#include "../../../neo_storage_posix.h"
+
 static bbc_t bbc;
 
 // -1: every cycle through bbc_tick() instead of bbc_exec()/bbc_tick4() (the two
@@ -104,21 +109,36 @@ static void run_frame(void) {
 
 /*-- Snapshots (-S, -L, -K) -------------------------------------------------*/
 
-static bool file_write(void* ctx, const void* data, uint32_t len) { return fwrite(data, 1, len, (FILE*)ctx) == len; }
-static bool file_read(void* ctx, void* data, uint32_t len) { return fread(data, 1, len, (FILE*)ctx) == len; }
+typedef struct {
+    neo_file_t f;
+    uint32_t offset;
+} snap_io_t;
+
+static bool file_write(void* ctx, const void* data, uint32_t len) {
+    snap_io_t* io = (snap_io_t*)ctx;
+    if (!neo_file_write(&io->f, io->offset, (const uint8_t*)data, len)) return false;
+    io->offset += len;
+    return true;
+}
+static bool file_read(void* ctx, void* data, uint32_t len) {
+    snap_io_t* io = (snap_io_t*)ctx;
+    if (!neo_file_read(&io->f, io->offset, (uint8_t*)data, len)) return false;
+    io->offset += len;
+    return true;
+}
 
 static bool snapshot_save(const char* path) {
-    FILE* f = fopen(path, "wb");
-    if (!f) return false;
-    bool ok = bbc_state_save(&bbc, file_write, f);
-    return (fclose(f) == 0) && ok;
+    snap_io_t io = {0};
+    if (!neo_file_open_path(&io.f, path, NEO_WRITE | NEO_CREATE)) return false;
+    bool ok = bbc_state_save(&bbc, file_write, &io);
+    return neo_file_close(&io.f) && ok;
 }
 
 static bool snapshot_load(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return false;
-    bool ok = bbc_state_load(&bbc, file_read, f);
-    fclose(f);
+    snap_io_t io = {0};
+    if (!neo_file_open_path(&io.f, path, NEO_READ)) return false;
+    bool ok = bbc_state_load(&bbc, file_read, &io);
+    neo_file_close(&io.f);
     return ok;
 }
 
@@ -323,6 +343,7 @@ static void print_mode7(void) {
 }
 
 int main(int argc, char** argv) {
+    neo_storage_set(NEO_VOL_USB, "Fichiers", &neo_storage_posix_ops, "");
     int frames = 100;
     const char* text = NULL;
     const char* ppm = NULL;
@@ -442,13 +463,17 @@ int main(int argc, char** argv) {
     static uint8_t disc_data[2 * 80 * 10 * 256];
     size_t disc_size = 0;
     if (disc) {
-        FILE* f = fopen(disc, "rb");
-        if (!f) {
-            perror(disc);
+        neo_file_t df;
+        if (!neo_file_open_path(&df, disc, NEO_READ)) {
+            fprintf(stderr, "%s: cannot open\n", disc);
             return 1;
         }
-        size_t n = fread(disc_data, 1, sizeof(disc_data), f);
-        fclose(f);
+        size_t n = df.size < sizeof(disc_data) ? df.size : sizeof(disc_data);
+        if (!neo_file_read(&df, 0, disc_data, (uint32_t)n)) {
+            fprintf(stderr, "%s: read error\n", disc);
+            return 1;
+        }
+        neo_file_close(&df);
         disc_size = n;
         size_t len = strlen(disc);
         int sides = (len > 4 && !strcmp(disc + len - 4, ".dsd")) ? 2 : 1;
@@ -513,11 +538,9 @@ int main(int argc, char** argv) {
     }
 
     if (disc_out && disc_size) {
-        FILE* f = fopen(disc_out, "wb");
-        if (f) {
-            fwrite(disc_data, 1, disc_size, f);
-            fclose(f);
-        }
+        int ovol;
+        const char* opath = neo_storage_split(disc_out, &ovol);
+        if (!neo_file_save(ovol, opath, disc_data, (uint32_t)disc_size)) fprintf(stderr, "%s: disc NOT written\n", disc_out);
     }
     if (wav) {
         wav_header(wav, wav_samples);
